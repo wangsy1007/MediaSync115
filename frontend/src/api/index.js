@@ -1,9 +1,19 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { BEIJING_TIMEZONE } from '@/utils/timezone'
 
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000
+})
+
+api.interceptors.request.use((config) => {
+  const nextConfig = { ...config }
+  nextConfig.headers = {
+    ...(config.headers || {}),
+    'X-Client-Timezone': BEIJING_TIMEZONE
+  }
+  return nextConfig
 })
 
 api.interceptors.response.use(

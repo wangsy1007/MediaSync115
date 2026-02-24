@@ -130,7 +130,7 @@ const fetchSubscriptions = async () => {
   const token = ++activeFetchToken
   loading.value = true
   try {
-    const params = {}
+    const params = { exclude_transferred_success: true }
     if (filterType.value !== 'all') {
       params.media_type = filterType.value
     }
@@ -205,7 +205,7 @@ onMounted(() => {
 
     h2 {
       margin: 0;
-      color: #e0e0e0;
+      color: var(--ms-text-primary);
     }
   }
 
@@ -237,7 +237,7 @@ onMounted(() => {
         width: 100%;
         height: 100%;
         object-fit: cover;
-        background: #1f1f1f;
+        background: var(--ms-bg-elevated);
       }
 
       .poster-skeleton {
@@ -246,9 +246,9 @@ onMounted(() => {
         z-index: 1;
         background: linear-gradient(
           110deg,
-          rgba(70, 79, 96, 0.44) 18%,
-          rgba(115, 128, 152, 0.5) 34%,
-          rgba(70, 79, 96, 0.44) 52%
+          rgba(78, 145, 221, 0.2) 18%,
+          rgba(142, 199, 255, 0.36) 34%,
+          rgba(78, 145, 221, 0.2) 52%
         );
         background-size: 220% 100%;
         animation: poster-shimmer 1.2s ease-in-out infinite;
@@ -261,7 +261,7 @@ onMounted(() => {
 
         &.static {
           animation: none;
-          background: linear-gradient(145deg, rgba(45, 53, 67, 0.82), rgba(33, 39, 50, 0.92));
+          background: var(--ms-gradient-card);
         }
       }
 
@@ -284,9 +284,9 @@ onMounted(() => {
         padding: 4px 10px;
         border-radius: 999px;
         font-size: 12px;
-        color: rgba(222, 230, 245, 0.9);
-        background: rgba(14, 19, 29, 0.48);
-        border: 1px solid rgba(198, 212, 242, 0.22);
+        color: var(--ms-text-secondary);
+        background: var(--ms-glass-bg);
+        border: 1px solid var(--ms-border-color);
       }
 
       .poster-hover {
@@ -296,7 +296,7 @@ onMounted(() => {
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgba(0, 0, 0, 0.42);
+        background: rgba(6, 16, 33, 0.38);
         opacity: 0;
         transition: opacity 0.18s ease;
       }
@@ -316,7 +316,7 @@ onMounted(() => {
           margin: 0;
           font-size: 15px;
           line-height: 1.4;
-          color: #e0e0e0;
+          color: var(--ms-text-primary);
           display: -webkit-box;
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
@@ -329,11 +329,11 @@ onMounted(() => {
         align-items: center;
         gap: 14px;
         margin-bottom: 10px;
-        color: #808080;
+        color: var(--ms-text-muted);
         font-size: 12px;
 
         .el-icon {
-          color: #ffd700;
+          color: var(--ms-accent-warning);
         }
       }
 

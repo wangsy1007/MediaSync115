@@ -247,7 +247,7 @@
             </template>
           </el-table-column>
         </el-table>
-        <div style="margin-top: 10px; color: #808080; font-size: 13px;">
+        <div style="margin-top: 10px; color: var(--ms-text-muted); font-size: 13px;">
           已自动过滤非视频文件，共选中 {{ selectedFiles.length }} 个文件
         </div>
       </div>
@@ -573,10 +573,10 @@ const handleSaveToPan115 = async (item) => {
   // 获取默认转存文件夹
   let defaultFolderId = '0'
   try {
-    const { data } = await pan115Api.getOfflineDefaultFolder()
+    const { data } = await pan115Api.getDefaultFolder()
     defaultFolderId = data.folder_id || '0'
   } catch (error) {
-    console.error('Failed to get offline default folder:', error)
+    console.error('Failed to get default folder:', error)
   }
 
   const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
@@ -620,10 +620,10 @@ const handleSelectSave = async (item) => {
 
   let defaultFolderId = '0'
   try {
-    const { data } = await pan115Api.getOfflineDefaultFolder()
+    const { data } = await pan115Api.getDefaultFolder()
     defaultFolderId = data.folder_id || '0'
   } catch (error) {
-    console.error('Failed to get offline default folder:', error)
+    console.error('Failed to get default folder:', error)
   }
 
   const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
@@ -709,10 +709,10 @@ const handleSaveMagnet = async (item) => {
 
   let defaultFolderId = '0'
   try {
-    const { data } = await pan115Api.getDefaultFolder()
+    const { data } = await pan115Api.getOfflineDefaultFolder()
     defaultFolderId = data.folder_id || '0'
   } catch (error) {
-    console.error('Failed to get default folder:', error)
+    console.error('Failed to get offline default folder:', error)
   }
 
   const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
@@ -734,10 +734,10 @@ const handleSaveEd2k = async (item) => {
 
   let defaultFolderId = '0'
   try {
-    const { data } = await pan115Api.getDefaultFolder()
+    const { data } = await pan115Api.getOfflineDefaultFolder()
     defaultFolderId = data.folder_id || '0'
   } catch (error) {
-    console.error('Failed to get default folder:', error)
+    console.error('Failed to get offline default folder:', error)
   }
 
   const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
@@ -789,8 +789,8 @@ onMounted(() => {
     gap: 32px;
     margin-bottom: 32px;
     padding: 28px;
-    background: linear-gradient(145deg, rgba(22, 22, 42, 0.8) 0%, rgba(16, 16, 30, 0.9) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--ms-gradient-card);
+    border: 1px solid var(--ms-glass-border);
     border-radius: 20px;
     position: relative;
     overflow: hidden;
@@ -803,7 +803,7 @@ onMounted(() => {
       left: 0;
       right: 0;
       height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.5), transparent);
+      background: linear-gradient(90deg, transparent, rgba(45, 153, 255, 0.5), transparent);
     }
 
     .poster {
@@ -813,12 +813,12 @@ onMounted(() => {
       img {
         width: 100%;
         border-radius: 12px;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+        box-shadow: var(--ms-shadow-md), 0 0 0 1px var(--ms-border-color);
         transition: transform 0.3s ease, box-shadow 0.3s ease;
         
         &:hover {
           transform: scale(1.02);
-          box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 0 30px rgba(99, 102, 241, 0.15);
+          box-shadow: var(--ms-shadow-lg), 0 0 30px rgba(45, 153, 255, 0.22);
         }
       }
     }
@@ -832,7 +832,7 @@ onMounted(() => {
         margin: 0 0 8px;
         font-size: 32px;
         font-weight: 700;
-        background: linear-gradient(135deg, #f0f0f5 0%, #c8c8d8 100%);
+        background: linear-gradient(135deg, var(--ms-text-primary) 0%, var(--ms-text-secondary) 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
@@ -842,7 +842,7 @@ onMounted(() => {
       .original-title {
         margin: 0 0 16px;
         font-size: 14px;
-        color: #6a6a7a;
+        color: var(--ms-text-muted);
         font-weight: 500;
       }
 
@@ -851,7 +851,7 @@ onMounted(() => {
         align-items: center;
         gap: 20px;
         margin-bottom: 16px;
-        color: #a8a8b8;
+        color: var(--ms-text-secondary);
         font-size: 14px;
 
         .rating {
@@ -859,9 +859,9 @@ onMounted(() => {
           align-items: center;
           gap: 6px;
           padding: 6px 12px;
-          background: rgba(245, 158, 11, 0.12);
+          background: rgba(245, 181, 68, 0.16);
           border-radius: 8px;
-          color: #f59e0b;
+          color: var(--ms-accent-warning);
           font-weight: 600;
           
           .el-icon {
@@ -871,9 +871,9 @@ onMounted(() => {
         
         .year, .seasons {
           padding: 6px 12px;
-          background: rgba(99, 102, 241, 0.1);
+          background: rgba(45, 153, 255, 0.12);
           border-radius: 8px;
-          color: #a8a8b8;
+          color: var(--ms-text-secondary);
           font-weight: 500;
         }
       }
@@ -891,7 +891,7 @@ onMounted(() => {
       }
 
       .overview {
-        color: #8a8a9a;
+        color: var(--ms-text-secondary);
         line-height: 1.75;
         margin-bottom: 24px;
         font-size: 14px;
@@ -923,8 +923,8 @@ onMounted(() => {
   }
 
   .resource-tabs {
-    background: linear-gradient(145deg, rgba(22, 22, 42, 0.6) 0%, rgba(16, 16, 30, 0.7) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    background: var(--ms-gradient-card);
+    border: 1px solid var(--ms-glass-border);
     border-radius: 16px;
     padding: 20px;
     
@@ -951,39 +951,39 @@ onMounted(() => {
     
     :deep(.el-table__header) {
       th {
-        background: rgba(37, 37, 56, 0.8);
+        background: rgba(67, 123, 198, 0.2);
         color: var(--ms-text-primary);
         font-weight: 600;
         font-size: 12px;
         text-transform: uppercase;
         letter-spacing: 0.5px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        border-bottom: 1px solid var(--ms-border-color);
         padding: 14px 0;
       }
     }
     
     :deep(.el-table__body) {
       tr {
-        background: rgba(22, 22, 42, 0.5);
+        background: rgba(17, 37, 72, 0.34);
         transition: all 0.2s ease;
         
         &:hover > td {
-          background: rgba(99, 102, 241, 0.08) !important;
+          background: rgba(45, 153, 255, 0.12) !important;
         }
         
         &.el-table__row--striped td {
-          background: rgba(26, 26, 46, 0.5);
+          background: rgba(15, 30, 58, 0.38);
         }
       }
       
       td {
-        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        border-bottom: 1px solid var(--ms-border-color);
         padding: 14px 0;
       }
     }
     
     :deep(.el-table__empty-block) {
-      background: rgba(22, 22, 42, 0.5);
+      background: rgba(17, 37, 72, 0.34);
     }
   }
 

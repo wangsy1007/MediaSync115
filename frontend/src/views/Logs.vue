@@ -22,7 +22,7 @@
 
     <el-card>
       <el-table :data="logs" v-loading="loading" size="small" stripe>
-        <el-table-column prop="created_at" label="时间" min-width="170" />
+        <el-table-column prop="created_at" label="时间" min-width="170" :formatter="formatBeijingTableCell" />
         <el-table-column prop="channel" label="渠道" width="90" />
         <el-table-column prop="run_id" label="Run ID" min-width="230" />
         <el-table-column prop="subscription_title" label="影视" min-width="180" />
@@ -42,6 +42,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { subscriptionApi } from '@/api'
+import { formatBeijingTableCell } from '@/utils/timezone'
 
 const loading = ref(false)
 const logs = ref([])
@@ -116,7 +117,7 @@ onMounted(() => {
 
     h2 {
       margin: 0;
-      color: #e0e0e0;
+      color: var(--ms-text-primary);
     }
 
     .filters {

@@ -12,7 +12,7 @@
       <el-table :data="jobs" v-loading="loading" size="small">
         <el-table-column prop="id" label="任务ID" min-width="180" />
         <el-table-column prop="kind" label="类型" width="100" />
-        <el-table-column prop="next_run_time" label="下次运行" min-width="180" />
+        <el-table-column prop="next_run_time" label="下次运行" min-width="180" :formatter="formatBeijingTableCell" />
         <el-table-column label="操作" width="120">
           <template #default="{ row }">
             <el-button type="primary" text @click="runJob(row.id)">立即执行</el-button>
@@ -46,6 +46,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { schedulerApi } from '@/api'
+import { formatBeijingTableCell } from '@/utils/timezone'
 
 const loading = ref(false)
 const jobs = ref([])
@@ -128,7 +129,7 @@ onMounted(refreshAll)
   .section-card {
     .card-title {
       font-weight: 600;
-      color: #e5e7eb;
+      color: var(--ms-text-primary);
     }
   }
 }

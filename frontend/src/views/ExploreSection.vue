@@ -709,7 +709,7 @@ onBeforeUnmount(() => {
 
       .count {
         font-size: 12px;
-        color: #94a2b8;
+        color: var(--ms-text-muted);
       }
     }
   }
@@ -723,13 +723,13 @@ onBeforeUnmount(() => {
   .movie-card {
     border-radius: 12px;
     cursor: pointer;
-    border: 1px solid #2b3342;
-    background: rgba(15, 18, 28, 0.78);
+    border: 1px solid var(--ms-border-color);
+    background: var(--ms-glass-bg);
     transition: transform 0.2s, box-shadow 0.2s;
 
     &:hover {
       transform: translateY(-4px);
-      box-shadow: 0 10px 28px rgba(3, 9, 21, 0.35);
+      box-shadow: var(--ms-shadow-md);
     }
 
     &.just-saved {
@@ -741,7 +741,7 @@ onBeforeUnmount(() => {
     .poster-wrap {
       position: relative;
       aspect-ratio: 2 / 3;
-      background: #222b3d;
+      background: var(--ms-bg-elevated);
 
       img {
         width: 100%;
@@ -784,8 +784,8 @@ onBeforeUnmount(() => {
         left: 8px;
         padding: 3px 8px;
         border-radius: 999px;
-        background: rgba(5, 10, 18, 0.84);
-        color: #ffd36e;
+        background: rgba(8, 20, 40, 0.7);
+        color: var(--ms-accent-warning);
         font-size: 12px;
         font-weight: 700;
       }
@@ -796,7 +796,7 @@ onBeforeUnmount(() => {
 
       h4 {
         margin: 0;
-        color: #eff4ff;
+        color: var(--ms-text-primary);
         font-size: 14px;
         font-weight: 600;
         line-height: 1.35;
@@ -814,11 +814,11 @@ onBeforeUnmount(() => {
     align-items: center;
     padding: 18px 0 8px;
     font-size: 13px;
-    color: #94a2b8;
+    color: var(--ms-text-muted);
   }
 
   .load-anchor.done {
-    color: #7f8ea7;
+    color: var(--ms-text-muted);
   }
 }
 

@@ -330,7 +330,7 @@
       </template>
 
       <el-table :data="subscriptionLogs" size="small" v-loading="loadingSubscriptionLogs">
-        <el-table-column prop="started_at" label="开始时间" min-width="170" />
+        <el-table-column prop="started_at" label="开始时间" min-width="170" :formatter="formatBeijingTableCell" />
         <el-table-column prop="channel" label="渠道" width="100" />
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
@@ -369,6 +369,7 @@
 import { ref, onMounted, reactive, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { pan115Api, pansouApi, settingsApi, subscriptionApi } from '@/api'
+import { formatBeijingTableCell } from '@/utils/timezone'
 
 const settingsForm = ref({
   cookie: ''
@@ -991,7 +992,7 @@ onMounted(() => {
 .settings-page {
   h2 {
     margin: 0 0 24px;
-    color: #e0e0e0;
+    color: var(--ms-text-primary);
   }
 
   .settings-card {
@@ -1010,7 +1011,7 @@ onMounted(() => {
 
     .cookie-status {
       .not-configured {
-        color: #909399;
+        color: var(--ms-text-muted);
       }
     }
 
@@ -1021,14 +1022,14 @@ onMounted(() => {
     .user-info {
       h4 {
         margin: 0 0 12px;
-        color: #e0e0e0;
+        color: var(--ms-text-primary);
       }
     }
 
     .default-folder-section {
       h4 {
         margin: 0 0 12px;
-        color: #e0e0e0;
+        color: var(--ms-text-primary);
       }
 
       .folder-selector {
@@ -1048,7 +1049,7 @@ onMounted(() => {
     .offline-folder-section {
       h4 {
         margin: 0 0 12px;
-        color: #e0e0e0;
+        color: var(--ms-text-primary);
       }
 
       .folder-action {
@@ -1065,11 +1066,11 @@ onMounted(() => {
     }
 
     .about-info {
-      color: #a0a0a0;
+      color: var(--ms-text-secondary);
       line-height: 1.8;
 
       strong {
-        color: #e0e0e0;
+        color: var(--ms-text-primary);
         font-size: 16px;
       }
     }

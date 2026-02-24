@@ -172,7 +172,6 @@
       class="search-results"
       v-loading="loading"
       element-loading-text="搜索中..."
-      element-loading-background="rgba(9, 14, 24, 0.62)"
     >
       <div class="results-header" v-if="searched">
         <h3>搜索结果</h3>
@@ -1527,9 +1526,9 @@ onBeforeUnmount(() => {
   .explore-section {
     margin-bottom: 28px;
     padding: 24px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--ms-glass-border);
     border-radius: 20px;
-    background: linear-gradient(145deg, rgba(22, 22, 42, 0.7) 0%, rgba(16, 16, 30, 0.85) 100%);
+    background: var(--ms-gradient-card);
     position: relative;
     overflow: hidden;
     
@@ -1541,7 +1540,7 @@ onBeforeUnmount(() => {
       left: 0;
       right: 0;
       height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.4), transparent);
+      background: linear-gradient(90deg, transparent, rgba(45, 153, 255, 0.4), transparent);
     }
 
     .section-header {
@@ -1556,7 +1555,7 @@ onBeforeUnmount(() => {
           margin: 0;
           font-size: 22px;
           font-weight: 700;
-          background: linear-gradient(135deg, #f0f0f5 0%, #c8c8d8 100%);
+          background: linear-gradient(135deg, var(--ms-text-primary) 0%, var(--ms-text-secondary) 100%);
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
           background-clip: text;
@@ -1565,7 +1564,7 @@ onBeforeUnmount(() => {
 
       p {
         margin: 10px 0 0;
-        color: #6a6a7a;
+        color: var(--ms-text-muted);
         font-size: 13px;
       }
     }
@@ -1575,7 +1574,7 @@ onBeforeUnmount(() => {
 
       &:not(:first-child) {
         margin-top: 12px;
-        border-top: 1px solid rgba(255, 255, 255, 0.06);
+        border-top: 1px solid var(--ms-border-color);
       }
 
       .group-header {
@@ -1591,7 +1590,7 @@ onBeforeUnmount(() => {
         }
 
         .group-sub {
-          color: #6a6a7a;
+          color: var(--ms-text-muted);
           font-size: 12px;
           font-weight: 500;
         }
@@ -1623,12 +1622,12 @@ onBeforeUnmount(() => {
 
         .edge-mask.left {
           left: 0;
-          background: linear-gradient(to right, rgba(16, 16, 30, 0.95), transparent);
+          background: linear-gradient(to right, rgba(10, 25, 51, 0.9), transparent);
         }
 
         .edge-mask.right {
           right: 0;
-          background: linear-gradient(to left, rgba(16, 16, 30, 0.95), transparent);
+          background: linear-gradient(to left, rgba(10, 25, 51, 0.9), transparent);
         }
 
         .side-scroll-btn {
@@ -1636,15 +1635,15 @@ onBeforeUnmount(() => {
           top: 50%;
           transform: translateY(-50%);
           z-index: 3;
-          border-color: rgba(99, 102, 241, 0.3);
-          background: rgba(22, 22, 42, 0.9);
+          border-color: rgba(45, 153, 255, 0.34);
+          background: rgba(13, 35, 69, 0.85);
           color: var(--ms-text-primary);
           backdrop-filter: blur(8px);
           transition: all 0.2s ease;
           
           &:hover {
-            border-color: rgba(99, 102, 241, 0.5);
-            background: rgba(99, 102, 241, 0.15);
+            border-color: rgba(45, 153, 255, 0.5);
+            background: rgba(45, 153, 255, 0.18);
           }
         }
 
@@ -1688,15 +1687,15 @@ onBeforeUnmount(() => {
         min-width: var(--recommend-card-width, 188px);
         border-radius: 14px;
         cursor: pointer;
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        background: linear-gradient(145deg, rgba(26, 26, 46, 0.9) 0%, rgba(18, 18, 32, 0.95) 100%);
+        border: 1px solid var(--ms-border-color);
+        background: var(--ms-glass-bg);
         transition: all 0.3s ease;
         overflow: hidden;
 
         &:hover {
           transform: translateY(-6px);
-          border-color: rgba(99, 102, 241, 0.3);
-          box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4), 0 0 20px rgba(99, 102, 241, 0.1);
+          border-color: rgba(45, 153, 255, 0.35);
+          box-shadow: var(--ms-shadow-md), 0 0 20px rgba(45, 153, 255, 0.2);
         }
 
         &.just-saved {
@@ -1708,7 +1707,7 @@ onBeforeUnmount(() => {
         .poster-wrapper {
           position: relative;
           aspect-ratio: 2 / 3;
-          background: linear-gradient(145deg, #1a1a2e 0%, #12121f 100%);
+          background: var(--ms-bg-elevated);
           overflow: hidden;
 
           img {
@@ -1743,7 +1742,7 @@ onBeforeUnmount(() => {
               height: 38px;
               padding: 0;
               pointer-events: auto;
-              box-shadow: 0 6px 18px rgba(0, 0, 0, 0.36);
+            box-shadow: var(--ms-shadow-sm);
             }
           }
 
@@ -1760,7 +1759,7 @@ onBeforeUnmount(() => {
             padding: 4px 10px;
             border-radius: 8px;
             background: linear-gradient(135deg, rgba(245, 158, 11, 0.9) 0%, rgba(251, 191, 36, 0.9) 100%);
-            color: #0a0a14;
+            color: #062040;
             font-size: 12px;
             font-weight: 700;
             box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
@@ -1794,10 +1793,10 @@ onBeforeUnmount(() => {
 
   .search-results {
     min-height: 220px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--ms-glass-border);
     border-radius: 20px;
     padding: 20px;
-    background: linear-gradient(145deg, rgba(22, 22, 42, 0.6) 0%, rgba(16, 16, 30, 0.75) 100%);
+    background: var(--ms-gradient-card);
 
     .results-skeleton-grid {
       display: grid;
@@ -1808,17 +1807,17 @@ onBeforeUnmount(() => {
     .skeleton-card {
       border-radius: 10px;
       overflow: hidden;
-      border: 1px solid #2b3342;
-      background: rgba(15, 18, 28, 0.72);
+      border: 1px solid var(--ms-border-color);
+      background: var(--ms-glass-bg);
     }
 
     .skeleton-poster {
       aspect-ratio: 2 / 3;
       background: linear-gradient(
         90deg,
-        rgba(55, 67, 90, 0.45) 25%,
-        rgba(88, 102, 132, 0.5) 37%,
-        rgba(55, 67, 90, 0.45) 63%
+        rgba(89, 151, 226, 0.22) 25%,
+        rgba(148, 205, 255, 0.34) 37%,
+        rgba(89, 151, 226, 0.22) 63%
       );
       background-size: 300% 100%;
       animation: search-skeleton-shimmer 1.2s ease-in-out infinite;
@@ -1830,9 +1829,9 @@ onBeforeUnmount(() => {
       border-radius: 6px;
       background: linear-gradient(
         90deg,
-        rgba(55, 67, 90, 0.45) 25%,
-        rgba(88, 102, 132, 0.5) 37%,
-        rgba(55, 67, 90, 0.45) 63%
+        rgba(89, 151, 226, 0.22) 25%,
+        rgba(148, 205, 255, 0.34) 37%,
+        rgba(89, 151, 226, 0.22) 63%
       );
       background-size: 300% 100%;
       animation: search-skeleton-shimmer 1.2s ease-in-out infinite;
@@ -1868,8 +1867,8 @@ onBeforeUnmount(() => {
   .media-card {
     cursor: pointer;
     border-radius: 14px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    background: linear-gradient(145deg, rgba(26, 26, 46, 0.9) 0%, rgba(18, 18, 32, 0.95) 100%);
+    border: 1px solid var(--ms-border-color);
+    background: var(--ms-glass-bg);
     transition: all 0.3s ease;
     overflow: hidden;
 
@@ -1879,8 +1878,8 @@ onBeforeUnmount(() => {
 
     &:hover {
       transform: translateY(-6px);
-      border-color: rgba(99, 102, 241, 0.3);
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4), 0 0 20px rgba(99, 102, 241, 0.1);
+      border-color: rgba(45, 153, 255, 0.35);
+      box-shadow: var(--ms-shadow-md), 0 0 20px rgba(45, 153, 255, 0.2);
 
       .action-buttons {
         opacity: 1;
@@ -1894,7 +1893,7 @@ onBeforeUnmount(() => {
     .poster-wrapper {
       position: relative;
       aspect-ratio: 2/3;
-      background: linear-gradient(145deg, #1a1a2e 0%, #12121f 100%);
+      background: var(--ms-bg-elevated);
       overflow: hidden;
 
       img {
@@ -1915,7 +1914,7 @@ onBeforeUnmount(() => {
         top: 10px;
         right: 10px;
         background: linear-gradient(135deg, rgba(245, 158, 11, 0.9) 0%, rgba(251, 191, 36, 0.9) 100%);
-        color: #0a0a14;
+        color: #062040;
         padding: 4px 8px;
         border-radius: 6px;
         font-size: 12px;
@@ -1931,7 +1930,7 @@ onBeforeUnmount(() => {
         display: flex;
         justify-content: space-between;
         padding: 12px;
-        background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
+        background: linear-gradient(transparent, rgba(7, 18, 36, 0.84));
         opacity: 0;
         transition: opacity 0.3s ease;
 

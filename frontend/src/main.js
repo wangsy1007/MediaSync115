@@ -8,8 +8,11 @@ import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
 import './styles/main.scss'
+import { applyBeijingTimezone } from './utils/timezone'
 
 const app = createApp(App)
+
+applyBeijingTimezone()
 
 for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(key, component)

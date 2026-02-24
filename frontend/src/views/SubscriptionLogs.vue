@@ -26,7 +26,7 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="created_at" label="时间" min-width="170" />
+        <el-table-column prop="created_at" label="时间" min-width="170" :formatter="formatBeijingTableCell" />
         <el-table-column prop="channel" label="渠道" width="90" />
         <el-table-column label="Run ID" min-width="240">
           <template #default="{ row }">
@@ -51,6 +51,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { subscriptionApi } from '@/api'
+import { formatBeijingTableCell } from '@/utils/timezone'
 
 const loading = ref(false)
 const logs = ref([])
@@ -142,7 +143,7 @@ onMounted(() => {
 
     h2 {
       margin: 0;
-      color: #e0e0e0;
+      color: var(--ms-text-primary);
     }
 
     .filters {
@@ -154,20 +155,21 @@ onMounted(() => {
 
   .payload-panel {
     padding: 8px 16px;
-    background: rgba(13, 18, 28, 0.56);
+    background: var(--ms-glass-bg);
+    border: 1px solid var(--ms-border-color);
     border-radius: 8px;
 
     .payload-row {
       margin-bottom: 8px;
-      color: #b5c0d5;
+      color: var(--ms-text-secondary);
 
       span:first-child {
-        color: #8da0c2;
+        color: var(--ms-text-muted);
         margin-right: 8px;
       }
 
       code {
-        color: #d8e5ff;
+        color: var(--ms-text-primary);
       }
     }
 
@@ -177,14 +179,14 @@ onMounted(() => {
       border-radius: 8px;
       max-height: 320px;
       overflow: auto;
-      background: rgba(6, 9, 14, 0.68);
-      color: #d9e5ff;
+      background: var(--ms-bg-elevated);
+      color: var(--ms-text-primary);
       font-size: 12px;
       line-height: 1.5;
     }
 
     .payload-empty {
-      color: #7c8ba8;
+      color: var(--ms-text-muted);
       font-size: 12px;
     }
   }
