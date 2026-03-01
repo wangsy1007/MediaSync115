@@ -18,6 +18,7 @@ from app.services.douban_explore_service import (
     fetch_douban_section,
     resolve_douban_explore_item,
 )
+from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_service import nullbr_service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
@@ -451,6 +452,17 @@ def _mark_nullbr_pan115_source(items: list[dict]) -> list[dict]:
             continue
         item = dict(row)
         item["source_service"] = item.get("source_service") or "nullbr"
+        marked.append(item)
+    return marked
+
+
+def _mark_hdhive_pan115_source(items: list[dict]) -> list[dict]:
+    marked: list[dict] = []
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        item["source_service"] = item.get("source_service") or "hdhive"
         marked.append(item)
     return marked
 
@@ -1364,6 +1376,36 @@ async def get_movie_pan115_with_pansou(tmdb_id: int, page: int = Query(1, ge=1))
     return result
 
 
+@router.get("/movie/{tmdb_id}/115/hdhive")
+async def get_movie_pan115_with_hdhive(tmdb_id: int, page: int = Query(1, ge=1)):
+    cache_key = f"{tmdb_id}:{page}:hdhive"
+    cached_payload, is_fresh = _get_cached_payload(_movie_pan115_cache, cache_key)
+    if is_fresh:
+        return cached_payload
+
+    attempts: list[dict[str, Any]] = []
+    hdhive_list: list[dict] = []
+
+    try:
+        hdhive_list = _mark_hdhive_pan115_source(await hdhive_service.get_movie_pan115(tmdb_id))
+        attempts.append({"service": "hdhive", "status": "ok", "count": len(hdhive_list)})
+    except Exception as exc:
+        attempts.append({"service": "hdhive", "status": "error", "error": str(exc)})
+
+    source_counts = {"hdhive": len(hdhive_list)} if hdhive_list else {}
+    result = _build_pan115_response(
+        tmdb_id=tmdb_id,
+        media_type="movie",
+        page=page,
+        resource_list=hdhive_list,
+        search_service="hdhive",
+        source_counts=source_counts,
+        attempts=attempts,
+    )
+    _set_cached_payload(_movie_pan115_cache, cache_key, result, PAN115_CACHE_TTL_SECONDS)
+    return result
+
+
 @router.get("/movie/{tmdb_id}/magnet")
 async def get_movie_magnet(
     tmdb_id: int,
@@ -1501,6 +1543,36 @@ async def get_tv_pan115_with_pansou(tmdb_id: int, page: int = Query(1, ge=1)):
         keyword=pansou_keyword,
     )
 
+    _set_cached_payload(_tv_pan115_cache, cache_key, result, PAN115_CACHE_TTL_SECONDS)
+    return result
+
+
+@router.get("/tv/{tmdb_id}/115/hdhive")
+async def get_tv_pan115_with_hdhive(tmdb_id: int, page: int = Query(1, ge=1)):
+    cache_key = f"{tmdb_id}:{page}:hdhive"
+    cached_payload, is_fresh = _get_cached_payload(_tv_pan115_cache, cache_key)
+    if is_fresh:
+        return cached_payload
+
+    attempts: list[dict[str, Any]] = []
+    hdhive_list: list[dict] = []
+
+    try:
+        hdhive_list = _mark_hdhive_pan115_source(await hdhive_service.get_tv_pan115(tmdb_id))
+        attempts.append({"service": "hdhive", "status": "ok", "count": len(hdhive_list)})
+    except Exception as exc:
+        attempts.append({"service": "hdhive", "status": "error", "error": str(exc)})
+
+    source_counts = {"hdhive": len(hdhive_list)} if hdhive_list else {}
+    result = _build_pan115_response(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        page=page,
+        resource_list=hdhive_list,
+        search_service="hdhive",
+        source_counts=source_counts,
+        attempts=attempts,
+    )
     _set_cached_payload(_tv_pan115_cache, cache_key, result, PAN115_CACHE_TTL_SECONDS)
     return result
 

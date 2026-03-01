@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
+from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_client import nullbr_client
 from app.services.pansou_service import pansou_service
 
@@ -17,6 +18,8 @@ class RuntimeSettingsService:
             "pan115_default_folder_name": "根目录",
             "pan115_offline_folder_id": "0",
             "pan115_offline_folder_name": "根目录",
+            "hdhive_cookie": settings.HDHIVE_COOKIE or "",
+            "hdhive_base_url": settings.HDHIVE_BASE_URL,
             "pansou_base_url": settings.PANSOU_BASE_URL,
             "nullbr_app_id": settings.NULLBR_APP_ID,
             "nullbr_api_key": settings.NULLBR_API_KEY,
@@ -82,6 +85,12 @@ class RuntimeSettingsService:
 
     def get_pansou_base_url(self) -> str:
         return self._data["pansou_base_url"]
+
+    def get_hdhive_cookie(self) -> str:
+        return self._data["hdhive_cookie"]
+
+    def get_hdhive_base_url(self) -> str:
+        return self._data["hdhive_base_url"]
 
     def get_pan115_cookie(self) -> str:
         return self._data["pan115_cookie"]
@@ -222,6 +231,8 @@ class RuntimeSettingsService:
 
     def apply_runtime_overrides(self) -> None:
         settings.PAN115_COOKIE = self.get_pan115_cookie() or None
+        settings.HDHIVE_COOKIE = self.get_hdhive_cookie() or None
+        settings.HDHIVE_BASE_URL = self.get_hdhive_base_url()
         settings.PANSOU_BASE_URL = self.get_pansou_base_url()
         settings.NULLBR_APP_ID = self.get_nullbr_app_id()
         settings.NULLBR_API_KEY = self.get_nullbr_api_key()
@@ -233,6 +244,8 @@ class RuntimeSettingsService:
         settings.TMDB_LANGUAGE = self.get_tmdb_language()
         settings.TMDB_REGION = self.get_tmdb_region()
 
+        hdhive_service.set_cookie(self.get_hdhive_cookie())
+        hdhive_service.set_base_url(self.get_hdhive_base_url())
         pansou_service.set_base_url(self.get_pansou_base_url())
         nullbr_client.update_config(
             app_id=self.get_nullbr_app_id(),
@@ -246,6 +259,8 @@ class RuntimeSettingsService:
             "pan115_default_folder_name": self.get_pan115_default_folder()["folder_name"],
             "pan115_offline_folder_id": self.get_pan115_offline_folder()["folder_id"],
             "pan115_offline_folder_name": self.get_pan115_offline_folder()["folder_name"],
+            "hdhive_cookie": self.get_hdhive_cookie(),
+            "hdhive_base_url": self.get_hdhive_base_url(),
             "pansou_base_url": self.get_pansou_base_url(),
             "nullbr_app_id": self.get_nullbr_app_id(),
             "nullbr_api_key": self.get_nullbr_api_key(),

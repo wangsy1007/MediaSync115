@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 
@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     TMDB_REGION: str = "CN"
     
     PAN115_COOKIE: Optional[str] = None
+    HDHIVE_COOKIE: Optional[str] = None
+    HDHIVE_BASE_URL: str = "https://hdhive.com/"
 
     PANSOU_BASE_URL: str = "http://192.168.10.139:8088/"
     
@@ -28,9 +30,11 @@ class Settings(BaseSettings):
     
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
 
 settings = Settings()
