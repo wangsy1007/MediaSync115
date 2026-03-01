@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import re
 import time
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import quote
@@ -335,7 +336,9 @@ def _extract_result_tmdb_id(candidate: dict[str, Any]) -> Optional[int]:
 def _normalize_compare_text(value: Any) -> str:
     if not isinstance(value, str):
         return ""
-    text = value.strip().lower()
+    text = unicodedata.normalize("NFKD", value)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.strip().lower()
     if not text:
         return ""
     text = re.sub(r"[\s\-_:：·•.,，。!！?？'\"“”‘’()（）\[\]【】]", "", text)
@@ -379,6 +382,10 @@ def _build_title_variants(title: str) -> list[str]:
 
     add_variant(normalized)
     add_variant(_strip_season_suffix(normalized))
+    folded = unicodedata.normalize("NFKD", normalized)
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch)).strip()
+    add_variant(folded)
+    add_variant(_strip_season_suffix(folded))
     return variants
 
 
@@ -415,6 +422,7 @@ def _score_candidate(
         "media_type": candidate_type,
         "title": candidate_title,
         "year": candidate_year,
+        "vote_average": float(candidate.get("vote_average") or 0.0),
         "title_similarity": round(best_similarity, 4),
         "matched_source_title": best_source_title,
     }
@@ -460,8 +468,9 @@ def _pick_best_tmdb_match(
     media_type: str,
     year: Optional[str],
     items: list[dict[str, Any]],
+    title_variants_override: Optional[list[str]] = None,
 ) -> tuple[Optional[dict[str, Any]], list[dict[str, Any]]]:
-    title_variants = _build_title_variants(title)
+    title_variants = title_variants_override or _build_title_variants(title)
     if not title_variants:
         return None, []
 
@@ -479,7 +488,32 @@ def _pick_best_tmdb_match(
         scored.append(meta)
 
     accepted = [item for item in scored if item.get("accepted")]
-    accepted.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+    # Keep one best candidate per TMDB ID to avoid duplicate rows from multi-query aggregation.
+    dedup_by_tmdb: dict[int, dict[str, Any]] = {}
+    for item in accepted:
+        tmdb_id = item.get("tmdb_id")
+        if not isinstance(tmdb_id, int):
+            continue
+        existing = dedup_by_tmdb.get(tmdb_id)
+        if not existing:
+            dedup_by_tmdb[tmdb_id] = item
+            continue
+        old_score = float(existing.get("score") or 0.0)
+        new_score = float(item.get("score") or 0.0)
+        if new_score > old_score:
+            dedup_by_tmdb[tmdb_id] = item
+            continue
+        if new_score == old_score and float(item.get("vote_average") or 0.0) > float(existing.get("vote_average") or 0.0):
+            dedup_by_tmdb[tmdb_id] = item
+
+    accepted = list(dedup_by_tmdb.values())
+    accepted.sort(
+        key=lambda item: (
+            float(item.get("score") or 0.0),
+            float(item.get("vote_average") or 0.0),
+        ),
+        reverse=True,
+    )
     if not accepted:
         return None, scored[:5]
 
@@ -492,7 +526,10 @@ def _pick_best_tmdb_match(
     if len(accepted) > 1:
         second_score = float(accepted[1].get("score") or 0.0)
         if best_score - second_score < 0.03:
-            return None, scored[:5]
+            best_vote = float(accepted[0].get("vote_average") or 0.0)
+            second_vote = float(accepted[1].get("vote_average") or 0.0)
+            if best_vote - second_vote < 0.3:
+                return None, scored[:5]
 
     return best, scored[:5]
 
@@ -593,11 +630,38 @@ async def resolve_douban_explore_item(
     media_type: str,
     year: Optional[str],
     tmdb_id: Optional[int] = None,
+    alternative_titles: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     normalized_type = "tv" if media_type == "tv" else "movie"
     normalized_douban_id = str(douban_id or "").strip()
     normalized_title = str(title or "").strip()
     had_negative_subject_cache = False
+    all_titles: list[str] = []
+    if normalized_title:
+        all_titles.append(normalized_title)
+    if isinstance(alternative_titles, list):
+        for item in alternative_titles:
+            alt = str(item or "").strip()
+            if alt:
+                all_titles.append(alt)
+    dedup_titles: list[str] = []
+    seen_titles: set[str] = set()
+    for item in all_titles:
+        key = item.casefold()
+        if key in seen_titles:
+            continue
+        seen_titles.add(key)
+        dedup_titles.append(item)
+
+    all_title_variants: list[str] = []
+    seen_variants: set[str] = set()
+    for base in dedup_titles:
+        for variant in _build_title_variants(base):
+            key = variant.casefold()
+            if key in seen_variants:
+                continue
+            seen_variants.add(key)
+            all_title_variants.append(variant)
 
     if tmdb_id:
         tmdb_value = int(tmdb_id)
@@ -628,7 +692,7 @@ async def resolve_douban_explore_item(
                 }
             had_negative_subject_cache = True
 
-    if not normalized_title:
+    if not all_title_variants:
         return {
             "resolved": False,
             "media_type": normalized_type,
@@ -640,10 +704,9 @@ async def resolve_douban_explore_item(
 
     candidates: list[dict[str, Any]] = []
     nullbr_failed = False
-    title_variants = _build_title_variants(normalized_title)
     nullbr_rows: list[dict[str, Any]] = []
     nullbr_success_count = 0
-    for query in title_variants:
+    for query in all_title_variants:
         try:
             nullbr_result = nullbr_service.search(query, 1)
             nullbr_success_count += 1
@@ -666,6 +729,7 @@ async def resolve_douban_explore_item(
             media_type=normalized_type,
             year=year,
             items=nullbr_rows,
+            title_variants_override=all_title_variants,
         )
         if best:
             tmdb_value = int(best["tmdb_id"])
@@ -683,11 +747,16 @@ async def resolve_douban_explore_item(
                 "candidates": candidates,
             }
 
-    tmdb_value, tmdb_failed = await _resolve_tmdb_id_by_tmdb_with_status(
-        normalized_title,
-        normalized_type,
-        year,
-    )
+    tmdb_value: Optional[int] = None
+    tmdb_failed = True
+    for base_title in dedup_titles:
+        tmdb_value, tmdb_failed = await _resolve_tmdb_id_by_tmdb_with_status(
+            base_title,
+            normalized_type,
+            year,
+        )
+        if tmdb_value:
+            break
     if tmdb_value:
         title_cache_key = _build_tmdb_cache_key(normalized_title, year, normalized_type)
         _set_tmdb_id_cache(title_cache_key, tmdb_value)
@@ -954,7 +1023,21 @@ async def fetch_douban_subject_detail(
         poster_url = poster_url.replace("http://", "https://", 1)
 
     intro = str(payload.get("intro") or payload.get("summary") or payload.get("description") or "").strip()
-    original_title = str(payload.get("original_title") or payload.get("aka") or "").strip()
+    aliases: list[str] = []
+    aka_value = payload.get("aka")
+    if isinstance(aka_value, list):
+        for item in aka_value:
+            text = str(item or "").strip()
+            if text:
+                aliases.append(text)
+    elif isinstance(aka_value, str):
+        raw = aka_value.strip()
+        if raw:
+            aliases.extend([part.strip() for part in re.split(r"[\\/｜|；;、]", raw) if part.strip()])
+
+    original_title = str(payload.get("original_title") or "").strip()
+    if not original_title and aliases:
+        original_title = aliases[0]
 
     rating_value: Optional[float] = None
     rating = payload.get("rating")
@@ -994,6 +1077,7 @@ async def fetch_douban_subject_detail(
         media_type=normalized_type,
         year=year,
         tmdb_id=None,
+        alternative_titles=[original_title, *aliases],
     )
     resolved_tmdb_id = resolved.get("tmdb_id")
     tmdb_id = int(resolved_tmdb_id) if isinstance(resolved_tmdb_id, int) and resolved_tmdb_id > 0 else None
@@ -1003,6 +1087,7 @@ async def fetch_douban_subject_detail(
         "media_type": normalized_type,
         "title": title,
         "original_title": original_title,
+        "aliases": aliases,
         "year": year,
         "poster_url": poster_url,
         "intro": intro,

@@ -1025,6 +1025,13 @@ async def resolve_explore_item(payload: dict[str, Any] = Body(default={})):
         }
 
     title = str(payload.get("title") or payload.get("name") or "").strip()
+    original_title = str(payload.get("original_title") or payload.get("original_name") or "").strip()
+    aliases_payload = payload.get("aliases")
+    aliases: list[str] = []
+    if isinstance(aliases_payload, list):
+        aliases = [str(item or "").strip() for item in aliases_payload if str(item or "").strip()]
+    elif isinstance(aliases_payload, str) and aliases_payload.strip():
+        aliases = [aliases_payload.strip()]
     year_value = str(payload.get("year") or "").strip()[:4]
     if year_value and not year_value.isdigit():
         year_value = ""
@@ -1037,6 +1044,7 @@ async def resolve_explore_item(payload: dict[str, Any] = Body(default={})):
         media_type=media_type,
         year=year,
         tmdb_id=tmdb_id,
+        alternative_titles=[original_title, *aliases],
     )
     result["source"] = "douban"
     result["douban_id"] = douban_id

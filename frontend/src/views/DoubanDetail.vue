@@ -473,6 +473,16 @@ const resolvePan115ShareLink = (row) => {
   return String(row?.share_link || row?.share_url || row?.pan115_share_link || row?.url || '').trim()
 }
 
+const normalizeKeywordFingerprint = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  return text
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\s\-_·:：,.，。!！?？/\\'"`()\[\]]+/g, '')
+    .toLowerCase()
+}
+
 const isHdhiveResourceLocked = (row) => {
   if (!row || row.source_service !== 'hdhive') return false
   if (row.hdhive_locked === true) return true
@@ -555,23 +565,54 @@ const ensureHdhiveShareLink = async (row, actionLabel = '转存', options = {}) 
 
 const buildPansouKeywords = () => {
   const title = String(detail.value?.title || '').trim()
+  const originalTitle = String(detail.value?.original_title || '').trim()
+  const aliases = Array.isArray(detail.value?.aliases) ? detail.value.aliases : []
   const year = String(detail.value?.year || '').trim()
   const candidates = []
-  if (title && year) candidates.push(`${title} ${year}`)
-  if (title) candidates.push(title)
+  const seen = new Set()
+  const add = (keyword) => {
+    const raw = String(keyword || '').trim()
+    if (!raw) return
+    const key = normalizeKeywordFingerprint(raw)
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    candidates.push(raw)
+  }
+  add(title)
+  if (title && year) add(`${title} ${year}`)
+  add(originalTitle)
+  if (originalTitle && year) add(`${originalTitle} ${year}`)
+  for (const alias of aliases) {
+    add(alias)
+    if (year) add(`${alias} ${year}`)
+  }
   return candidates
 }
 
 const buildHdhiveKeywords = () => {
   const title = String(detail.value?.title || '').trim()
   const originalTitle = String(detail.value?.original_title || '').trim()
+  const aliases = Array.isArray(detail.value?.aliases) ? detail.value.aliases : []
   const year = String(detail.value?.year || '').trim()
   const candidates = []
-  if (title && year) candidates.push(`${title} ${year}`)
-  if (title) candidates.push(title)
-  if (originalTitle && originalTitle !== title && year) candidates.push(`${originalTitle} ${year}`)
-  if (originalTitle && originalTitle !== title) candidates.push(originalTitle)
-  return Array.from(new Set(candidates.filter(Boolean)))
+  const seen = new Set()
+  const add = (keyword) => {
+    const raw = String(keyword || '').trim()
+    if (!raw) return
+    const key = normalizeKeywordFingerprint(raw)
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    candidates.push(raw)
+  }
+  add(title)
+  if (title && year) add(`${title} ${year}`)
+  add(originalTitle)
+  if (originalTitle && year) add(`${originalTitle} ${year}`)
+  for (const alias of aliases) {
+    add(alias)
+    if (year) add(`${alias} ${year}`)
+  }
+  return candidates
 }
 
 const fetchPan115Nullbr = async () => {
@@ -1163,6 +1204,8 @@ const handleRematchTmdb = async () => {
       id: detail.value.douban_id,
       douban_id: detail.value.douban_id,
       title: detail.value.title,
+      original_title: detail.value.original_title,
+      aliases: Array.isArray(detail.value.aliases) ? detail.value.aliases : [],
       year: detail.value.year || '',
       media_type: mediaType.value,
       tmdb_id: null

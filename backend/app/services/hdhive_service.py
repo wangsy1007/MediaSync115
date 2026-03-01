@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import unicodedata
 from typing import Any
 from urllib.parse import quote_plus, unquote, urlencode
 from time import monotonic
@@ -494,7 +495,9 @@ class HDHiveService:
 
     @staticmethod
     def _normalize_keyword(text: str) -> str:
-        return re.sub(r"[\s\-_·:：,.，。!！?？/\\\\'\"`()\\[\\]]+", "", str(text or "").strip().lower())
+        raw = unicodedata.normalize("NFKD", str(text or ""))
+        raw = "".join(ch for ch in raw if not unicodedata.combining(ch))
+        return re.sub(r"[\s\-_·:：,.，。!！?？/\\\\'\"`()\\[\\]]+", "", raw.strip().lower())
 
     def _search_media_candidates(self, raw: str, keyword: str, media_type: str) -> list[dict[str, Any]]:
         rows = self._extract_json_like_array(raw, field_name="data")
