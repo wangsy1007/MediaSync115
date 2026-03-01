@@ -1279,7 +1279,7 @@ onBeforeUnmount(() => {
         }
         
         &.el-table__row--striped td {
-          background: rgba(15, 30, 58, 0.38);
+          background: rgba(17, 37, 72, 0.34);
         }
       }
       

@@ -1133,10 +1133,37 @@ onBeforeUnmount(async () => {
   }
 
   :deep(.resource-table) {
-    --el-table-tr-bg-color: transparent;
-    --el-table-row-hover-bg-color: rgba(61, 119, 188, 0.12);
-    --el-table-header-bg-color: rgba(79, 145, 226, 0.12);
+    --el-table-row-hover-bg-color: rgba(45, 153, 255, 0.12);
+    --el-table-header-bg-color: rgba(67, 123, 198, 0.2);
     --el-table-border-color: rgba(79, 145, 226, 0.18);
+
+    .el-table__inner-wrapper::before {
+      display: none;
+    }
+
+    .el-table__header th {
+      background: rgba(67, 123, 198, 0.2);
+      color: var(--ms-text-primary);
+      border-bottom: 1px solid var(--ms-border-color);
+      font-weight: 600;
+    }
+
+    .el-table__body tr > td {
+      background: rgba(17, 37, 72, 0.34);
+      border-bottom: 1px solid var(--ms-border-color);
+    }
+
+    .el-table__body tr.el-table__row--striped > td {
+      background: rgba(17, 37, 72, 0.34);
+    }
+
+    .el-table__body tr:hover > td {
+      background: rgba(45, 153, 255, 0.12) !important;
+    }
+
+    .el-table__empty-block {
+      background: rgba(17, 37, 72, 0.34);
+    }
   }
 
   .resource-name {
