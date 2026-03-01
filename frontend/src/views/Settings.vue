@@ -300,6 +300,44 @@
           </template>
 
           <el-form :model="schedulerForm" label-width="120px">
+            <el-divider content-position="left">资源查找优先级</el-divider>
+            <el-form-item label="来源顺序">
+              <div class="priority-list">
+                <div
+                  v-for="(source, index) in resourcePriority"
+                  :key="source"
+                  class="priority-item"
+                >
+                  <div class="priority-item-left">
+                    <span class="priority-order">{{ index + 1 }}</span>
+                    <span class="priority-name">{{ sourceLabelMap[source] || source }}</span>
+                    <el-tag
+                      size="small"
+                      :type="sourceConfigStatus[source]?.ok ? 'success' : 'warning'"
+                    >
+                      {{ sourceConfigStatus[source]?.text || '待检查' }}
+                    </el-tag>
+                  </div>
+                  <div class="priority-actions">
+                    <el-button size="small" text :disabled="index === 0" @click="movePriority(source, -1)">上移</el-button>
+                    <el-button
+                      size="small"
+                      text
+                      :disabled="index === resourcePriority.length - 1"
+                      @click="movePriority(source, 1)"
+                    >
+                      下移
+                    </el-button>
+                  </div>
+                </div>
+              </div>
+              <div class="priority-tips">
+                <el-text size="small" type="info">
+                  保存后，订阅资源会按以上顺序依次查找；保存时会校验所选来源的必要配置和连通性。
+                </el-text>
+              </div>
+            </el-form-item>
+
             <el-divider content-position="left">Nullbr 渠道</el-divider>
             <el-form-item label="启用任务">
               <el-switch v-model="schedulerForm.nullbr.enabled" />
@@ -483,6 +521,12 @@ const schedulerForm = ref({
     runTime: '03:30'
   }
 })
+const sourceLabelMap = {
+  nullbr: 'Nullbr',
+  hdhive: 'HDHive',
+  pansou: 'Pansou',
+}
+const resourcePriority = ref(['nullbr', 'hdhive', 'pansou'])
 
 const pansouForm = ref({
   baseUrl: ''
@@ -560,6 +604,21 @@ const riskHealthAlertType = computed(() => {
   if (riskHealth.status === 'rate_limited') return 'warning'
   if (riskHealth.status === 'auth_invalid') return 'error'
   return 'info'
+})
+
+const sourceConfigStatus = computed(() => {
+  const nullbrOk = Boolean(
+    String(nullbrForm.value.appId || '').trim() &&
+    String(nullbrForm.value.apiKey || '').trim() &&
+    String(nullbrForm.value.baseUrl || '').trim()
+  )
+  const hdhiveOk = Boolean(String(hdhiveForm.value.cookie || '').trim())
+  const pansouOk = Boolean(String(pansouForm.value.baseUrl || '').trim())
+  return {
+    nullbr: { ok: nullbrOk, text: nullbrOk ? '配置完整' : '缺少配置' },
+    hdhive: { ok: hdhiveOk, text: hdhiveOk ? '配置完整' : '缺少 Cookie' },
+    pansou: { ok: pansouOk, text: pansouOk ? '配置完整' : '缺少地址' },
+  }
 })
 
 // 默认转存文件夹相关
@@ -945,9 +1004,33 @@ const fetchRuntimeSettings = async () => {
     schedulerForm.value.pansou.enabled = !!data.subscription_pansou_enabled
     schedulerForm.value.pansou.intervalHours = Number(data.subscription_pansou_interval_hours || 24)
     schedulerForm.value.pansou.runTime = data.subscription_pansou_run_time || '03:30'
+
+    const priority = Array.isArray(data.subscription_resource_priority)
+      ? data.subscription_resource_priority.map(item => String(item || '').trim().toLowerCase())
+      : []
+    const deduped = []
+    for (const source of priority) {
+      if (!sourceLabelMap[source]) continue
+      if (!deduped.includes(source)) deduped.push(source)
+    }
+    for (const source of ['nullbr', 'hdhive', 'pansou']) {
+      if (!deduped.includes(source)) deduped.push(source)
+    }
+    resourcePriority.value = deduped
   } catch (error) {
     console.error('Failed to fetch runtime settings:', error)
   }
+}
+
+const movePriority = (source, direction) => {
+  const current = [...resourcePriority.value]
+  const index = current.indexOf(source)
+  if (index < 0) return
+  const target = index + direction
+  if (target < 0 || target >= current.length) return
+  const [item] = current.splice(index, 1)
+  current.splice(target, 0, item)
+  resourcePriority.value = current
 }
 
 const handleSaveScheduler = async () => {
@@ -959,9 +1042,10 @@ const handleSaveScheduler = async () => {
       subscription_nullbr_run_time: schedulerForm.value.nullbr.runTime || '03:00',
       subscription_pansou_enabled: schedulerForm.value.pansou.enabled,
       subscription_pansou_interval_hours: Number(schedulerForm.value.pansou.intervalHours || 24),
-      subscription_pansou_run_time: schedulerForm.value.pansou.runTime || '03:30'
+      subscription_pansou_run_time: schedulerForm.value.pansou.runTime || '03:30',
+      subscription_resource_priority: resourcePriority.value
     })
-    ElMessage.success('订阅定时任务配置已保存')
+    ElMessage.success('订阅任务与资源优先级配置已保存')
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '保存失败')
   } finally {
@@ -1320,6 +1404,57 @@ onMounted(() => {
         color: var(--ms-text-primary);
         font-size: 16px;
       }
+    }
+
+    .priority-list {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .priority-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border: 1px solid rgba(61, 119, 188, 0.22);
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: rgba(61, 119, 188, 0.08);
+    }
+
+    .priority-item-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .priority-order {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: rgba(79, 145, 226, 0.2);
+      color: var(--ms-text-primary);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .priority-name {
+      color: var(--ms-text-primary);
+      font-weight: 600;
+    }
+
+    .priority-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .priority-tips {
+      margin-top: 8px;
     }
   }
 }

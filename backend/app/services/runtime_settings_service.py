@@ -35,6 +35,7 @@ class RuntimeSettingsService:
             "subscription_pansou_enabled": False,
             "subscription_pansou_interval_hours": 24,
             "subscription_pansou_run_time": "03:30",
+            "subscription_resource_priority": ["nullbr", "hdhive", "pansou"],
         }
         self._data = dict(self._defaults)
         self._load()
@@ -187,6 +188,24 @@ class RuntimeSettingsService:
     def get_tmdb_region(self) -> str:
         return self._data["tmdb_region"]
 
+    def get_subscription_resource_priority(self) -> list[str]:
+        value = self._data.get("subscription_resource_priority")
+        if not isinstance(value, list):
+            return list(self._defaults["subscription_resource_priority"])
+
+        allowed = {"nullbr", "hdhive", "pansou"}
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            source = str(item or "").strip().lower()
+            if source in allowed and source not in seen:
+                normalized.append(source)
+                seen.add(source)
+
+        if normalized:
+            return normalized
+        return list(self._defaults["subscription_resource_priority"])
+
     def update_bulk(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise ValueError("配置数据格式无效")
@@ -221,6 +240,25 @@ class RuntimeSettingsService:
                     normalized[key] = int(str(value))
                 except Exception:
                     continue
+            elif isinstance(default_value, list):
+                source_items: list[str] = []
+                if isinstance(value, str):
+                    source_items = [part.strip() for part in value.split(",")]
+                elif isinstance(value, list):
+                    source_items = [str(part or "").strip() for part in value]
+                else:
+                    continue
+
+                allowed = {"nullbr", "hdhive", "pansou"}
+                deduped: list[str] = []
+                seen: set[str] = set()
+                for item in source_items:
+                    source = str(item or "").strip().lower()
+                    if source in allowed and source not in seen:
+                        deduped.append(source)
+                        seen.add(source)
+                if deduped:
+                    normalized[key] = deduped
             else:
                 normalized[key] = value
 
@@ -276,6 +314,7 @@ class RuntimeSettingsService:
             "subscription_pansou_enabled": bool(self._data.get("subscription_pansou_enabled", False)),
             "subscription_pansou_interval_hours": int(self._data.get("subscription_pansou_interval_hours", 24) or 24),
             "subscription_pansou_run_time": str(self._data.get("subscription_pansou_run_time", "03:30") or "03:30"),
+            "subscription_resource_priority": self.get_subscription_resource_priority(),
         }
 
 

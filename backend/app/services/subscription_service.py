@@ -19,6 +19,7 @@ from app.models.models import (
     SubscriptionStepLog,
 )
 from app.api.search import _normalize_pansou_pan115_list, _search_pansou_pan115_resources
+from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_service import nullbr_service
 from app.services.pan115_service import Pan115Service
 from app.services.pansou_service import pansou_service
@@ -432,76 +433,155 @@ class SubscriptionService:
         sub: "SubscriptionSnapshot",
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         traces: list[dict[str, Any]] = []
+        source_order = self._resolve_source_order(channel)
+        traces.append(
+            {
+                "step": "fetch_source_order",
+                "status": "info",
+                "message": f"按优先级执行资源搜索: {' > '.join(source_order)}",
+                "payload": {"source_order": source_order},
+            }
+        )
+        for source in source_order:
+            source_resources: list[dict[str, Any]] = []
+            source_traces: list[dict[str, Any]] = []
+            try:
+                if source == "nullbr":
+                    source_resources, source_traces = await self._fetch_from_nullbr(sub)
+                elif source == "hdhive":
+                    source_resources, source_traces = await self._fetch_from_hdhive(sub)
+                else:
+                    source_resources, source_traces = await self._fetch_from_pansou(sub)
+            except Exception as exc:
+                source_traces.append(
+                    {
+                        "step": f"fetch_{source}_failed",
+                        "status": "warning",
+                        "message": f"{source} 抓取失败，继续尝试下一个来源",
+                        "payload": {"error": str(exc)[:300]},
+                    }
+                )
+                source_resources = []
+
+            traces.extend(source_traces)
+            if source_resources:
+                traces.append(
+                    {
+                        "step": "fetch_source_selected",
+                        "status": "success",
+                        "message": f"来源 {source} 命中资源 {len(source_resources)} 条",
+                        "payload": {"source": source, "count": len(source_resources)},
+                    }
+                )
+                return source_resources, traces
+
+        traces.append(
+            {
+                "step": "fetch_all_empty",
+                "status": "warning",
+                "message": "所有优先级来源都未命中可用资源",
+            }
+        )
+        return [], traces
+
+    def _resolve_source_order(self, channel: str) -> list[str]:
+        priority = runtime_settings_service.get_subscription_resource_priority()
+        default_priority = ["nullbr", "hdhive", "pansou"]
+        source_order = [item for item in priority if item in {"nullbr", "hdhive", "pansou"}]
+        if not source_order:
+            source_order = default_priority
+
+        if channel == "priority":
+            return source_order
+
+        if channel in {"nullbr", "hdhive", "pansou"}:
+            return [channel] + [item for item in source_order if item != channel]
+        return source_order
+
+    async def _fetch_from_nullbr(self, sub: "SubscriptionSnapshot") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        traces: list[dict[str, Any]] = []
         if sub.tmdb_id is None:
             traces.append(
                 {
-                    "step": "fetch_skip",
+                    "step": "fetch_nullbr_skip",
                     "status": "warning",
-                    "message": "缺少 tmdb_id，跳过资源抓取",
+                    "message": "Nullbr 依赖 tmdb_id，当前订阅缺少 tmdb_id，已跳过",
                 }
             )
             return [], traces
 
-        if channel == "nullbr":
-            traces.append(
-                {
-                    "step": "fetch_nullbr_start",
-                    "status": "info",
-                    "message": "开始从 Nullbr 获取资源",
-                    "payload": {"tmdb_id": sub.tmdb_id, "media_type": sub.media_type.value},
-                }
-            )
-            payload = await self._fetch_nullbr(sub.tmdb_id, sub.media_type)
-            resources = self._extract_list(payload)
-            traces.append(
-                {
-                    "step": "fetch_nullbr_done",
-                    "status": "success",
-                    "message": f"Nullbr 返回 {len(resources)} 条候选资源",
-                    "payload": {"count": len(resources)},
-                }
-            )
-            return resources, traces
+        traces.append(
+            {
+                "step": "fetch_nullbr_start",
+                "status": "info",
+                "message": "开始从 Nullbr 获取资源",
+                "payload": {"tmdb_id": sub.tmdb_id, "media_type": sub.media_type.value},
+            }
+        )
+        payload = await self._fetch_nullbr(sub.tmdb_id, sub.media_type)
+        resources = self._extract_list(payload)
+        traces.append(
+            {
+                "step": "fetch_nullbr_done",
+                "status": "success" if resources else "warning",
+                "message": f"Nullbr 返回 {len(resources)} 条候选资源",
+                "payload": {"count": len(resources)},
+            }
+        )
+        return resources, traces
 
+    async def _fetch_from_pansou(self, sub: "SubscriptionSnapshot") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        traces: list[dict[str, Any]] = []
         media_type = "tv" if sub.media_type == MediaType.TV else "movie"
-        try:
-            traces.append(
-                {
-                    "step": "fetch_pansou_tmdb_start",
-                    "status": "info",
-                    "message": "开始通过 tmdb_id 调用 Pansou",
-                    "payload": {"tmdb_id": sub.tmdb_id, "media_type": media_type},
-                }
-            )
-            _, pansou_list = await _search_pansou_pan115_resources(sub.tmdb_id, media_type)
-            if pansou_list:
+
+        if sub.tmdb_id is not None:
+            try:
                 traces.append(
                     {
-                        "step": "fetch_pansou_tmdb_done",
-                        "status": "success",
-                        "message": f"Pansou(TMDB) 返回 {len(pansou_list)} 条候选资源",
-                        "payload": {"count": len(pansou_list)},
+                        "step": "fetch_pansou_tmdb_start",
+                        "status": "info",
+                        "message": "开始通过 tmdb_id 调用 Pansou",
+                        "payload": {"tmdb_id": sub.tmdb_id, "media_type": media_type},
                     }
                 )
-                return pansou_list, traces
-            traces.append(
-                {
-                    "step": "fetch_pansou_tmdb_empty",
-                    "status": "warning",
-                    "message": "Pansou(TMDB) 未命中资源，尝试关键词兜底",
-                }
-            )
-        except Exception as exc:
-            traces.append(
-                {
-                    "step": "fetch_pansou_tmdb_failed",
-                    "status": "warning",
-                    "message": "Pansou(TMDB) 请求失败，尝试关键词兜底",
-                    "payload": {"error": str(exc)[:300]},
-                }
-            )
+                _, pansou_list = await _search_pansou_pan115_resources(sub.tmdb_id, media_type)
+                if pansou_list:
+                    traces.append(
+                        {
+                            "step": "fetch_pansou_tmdb_done",
+                            "status": "success",
+                            "message": f"Pansou(TMDB) 返回 {len(pansou_list)} 条候选资源",
+                            "payload": {"count": len(pansou_list)},
+                        }
+                    )
+                    return pansou_list, traces
+                traces.append(
+                    {
+                        "step": "fetch_pansou_tmdb_empty",
+                        "status": "warning",
+                        "message": "Pansou(TMDB) 未命中资源，尝试关键词兜底",
+                    }
+                )
+            except Exception as exc:
+                traces.append(
+                    {
+                        "step": "fetch_pansou_tmdb_failed",
+                        "status": "warning",
+                        "message": "Pansou(TMDB) 请求失败，尝试关键词兜底",
+                        "payload": {"error": str(exc)[:300]},
+                    }
+                )
 
         keyword = self._build_pansou_keyword(sub)
+        if not keyword:
+            traces.append(
+                {
+                    "step": "fetch_pansou_keyword_skip",
+                    "status": "warning",
+                    "message": "缺少关键词，无法执行 Pansou 兜底搜索",
+                }
+            )
+            return [], traces
         traces.append(
             {
                 "step": "fetch_pansou_keyword_start",
@@ -521,6 +601,76 @@ class SubscriptionService:
             }
         )
         return resources, traces
+
+    async def _fetch_from_hdhive(self, sub: "SubscriptionSnapshot") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        traces: list[dict[str, Any]] = []
+        resources: list[dict[str, Any]] = []
+        if sub.tmdb_id is not None:
+            try:
+                traces.append(
+                    {
+                        "step": "fetch_hdhive_tmdb_start",
+                        "status": "info",
+                        "message": "开始通过 tmdb_id 调用 HDHive",
+                        "payload": {"tmdb_id": sub.tmdb_id, "media_type": sub.media_type.value},
+                    }
+                )
+                if sub.media_type == MediaType.TV:
+                    resources = await hdhive_service.get_tv_pan115(sub.tmdb_id)
+                else:
+                    resources = await hdhive_service.get_movie_pan115(sub.tmdb_id)
+                resources = self._normalize_hdhive_subscription_items(resources)
+                traces.append(
+                    {
+                        "step": "fetch_hdhive_tmdb_done",
+                        "status": "success" if resources else "warning",
+                        "message": f"HDHive(TMDB) 返回 {len(resources)} 条候选资源",
+                        "payload": {"count": len(resources)},
+                    }
+                )
+                if resources:
+                    return resources, traces
+            except Exception as exc:
+                traces.append(
+                    {
+                        "step": "fetch_hdhive_tmdb_failed",
+                        "status": "warning",
+                        "message": "HDHive(TMDB) 请求失败，尝试关键词兜底",
+                        "payload": {"error": str(exc)[:300]},
+                    }
+                )
+
+        keyword = self._build_hdhive_keyword(sub)
+        if not keyword:
+            traces.append(
+                {
+                    "step": "fetch_hdhive_keyword_skip",
+                    "status": "warning",
+                    "message": "缺少关键词，无法执行 HDHive 兜底搜索",
+                }
+            )
+            return [], traces
+
+        traces.append(
+            {
+                "step": "fetch_hdhive_keyword_start",
+                "status": "info",
+                "message": "开始通过关键词调用 HDHive",
+                "payload": {"keyword": keyword},
+            }
+        )
+        media_type = "tv" if sub.media_type == MediaType.TV else "movie"
+        keyword_resources = await hdhive_service.get_pan115_by_keyword(keyword, media_type=media_type)
+        keyword_resources = self._normalize_hdhive_subscription_items(keyword_resources)
+        traces.append(
+            {
+                "step": "fetch_hdhive_keyword_done",
+                "status": "success" if keyword_resources else "warning",
+                "message": f"HDHive(关键词) 返回 {len(keyword_resources)} 条候选资源",
+                "payload": {"count": len(keyword_resources)},
+            }
+        )
+        return keyword_resources, traces
 
     async def _fetch_nullbr(self, tmdb_id: int, media_type: MediaType) -> dict[str, Any]:
         if media_type == MediaType.TV:
@@ -850,6 +1000,7 @@ class SubscriptionService:
     def _extract_resource_url(item: dict[str, Any]) -> str:
         raw_url = str(
             item.get("pan115_share_link")
+            or item.get("share_link")
             or item.get("shareLink")
             or item.get("share_link")
             or item.get("share_url")
@@ -860,7 +1011,7 @@ class SubscriptionService:
 
     @staticmethod
     def _extract_resource_name(item: dict[str, Any]) -> str:
-        name = str(item.get("title") or item.get("name") or "").strip()
+        name = str(item.get("resource_name") or item.get("title") or item.get("name") or "").strip()
         return name or "未命名资源"
 
     @staticmethod
@@ -868,6 +1019,26 @@ class SubscriptionService:
         if sub.year:
             return f"{sub.title} {sub.year}".strip()
         return sub.title
+
+    @staticmethod
+    def _build_hdhive_keyword(sub: "SubscriptionSnapshot") -> str:
+        if sub.year:
+            return f"{sub.title} {sub.year}".strip()
+        return str(sub.title or "").strip()
+
+    @staticmethod
+    def _normalize_hdhive_subscription_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            row = dict(item)
+            if not row.get("pan115_share_link"):
+                row["pan115_share_link"] = str(row.get("share_link") or "").strip()
+            if not row.get("name") and row.get("resource_name"):
+                row["name"] = str(row.get("resource_name") or "").strip()
+            normalized.append(row)
+        return normalized
 
     @staticmethod
     def _build_target_folder_name(sub: "SubscriptionSnapshot") -> str:
@@ -939,7 +1110,7 @@ class SubscriptionService:
     @staticmethod
     def _normalize_channel(channel: str) -> str:
         normalized = str(channel or "").strip().lower()
-        if normalized not in {"nullbr", "pansou"}:
+        if normalized not in {"nullbr", "pansou", "hdhive", "priority"}:
             raise ValueError("unsupported channel")
         return normalized
 
