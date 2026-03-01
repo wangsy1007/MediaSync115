@@ -503,10 +503,8 @@ const isHdhiveResourceLocked = (row) => {
 const isHdhiveResourceSuspectedInvalid = (row) => {
   if (!row || row.source_service !== 'hdhive') return false
   if (row.hdhive_suspected_invalid === true) return true
-  const lockMessage = String(row.hdhive_lock_message || '').toLowerCase()
-  const lockCode = String(row.hdhive_lock_code || '').trim()
-  if (['4100018', '4100008'].includes(lockCode)) return true
-  return ['失效', '无效', '不存在', 'invalid', 'expired', 'not found', '删除'].some((token) => lockMessage.includes(token))
+  const validateStatus = String(row.hdhive_validate_status || '').trim().toLowerCase()
+  return ['invalid', 'suspected_invalid', 'suspect_invalid'].includes(validateStatus)
 }
 
 const isPan115ActionDisabled = (row) => {
