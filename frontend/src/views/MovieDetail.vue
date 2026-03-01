@@ -168,7 +168,23 @@
                 >
                   <el-table-column label="资源名称" min-width="300" show-overflow-tooltip>
                     <template #default="{ row }">
-                      <span class="resource-name">{{ row.title }}</span>
+                      <div class="resource-name-row">
+                        <div class="resource-name">{{ row.resource_name || row.title || row.name || '未命名资源' }}</div>
+                        <el-tag
+                          v-if="isHdhiveResourceSuspectedInvalid(row)"
+                          size="small"
+                          type="danger"
+                          effect="plain"
+                        >
+                          疑似失效
+                        </el-tag>
+                      </div>
+                      <div
+                        v-if="row.resource_name && row.title && row.resource_name !== row.title"
+                        class="text-muted"
+                      >
+                        {{ row.title }}
+                      </div>
                     </template>
                   </el-table-column>
                   <el-table-column label="画质" width="120" align="center">
