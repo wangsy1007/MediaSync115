@@ -485,17 +485,12 @@ class SubscriptionService:
         return [], traces
 
     def _resolve_source_order(self, channel: str) -> list[str]:
+        _ = channel
         priority = runtime_settings_service.get_subscription_resource_priority()
         default_priority = ["nullbr", "hdhive", "pansou"]
         source_order = [item for item in priority if item in {"nullbr", "hdhive", "pansou"}]
         if not source_order:
             source_order = default_priority
-
-        if channel == "priority":
-            return source_order
-
-        if channel in {"nullbr", "hdhive", "pansou"}:
-            return [channel] + [item for item in source_order if item != channel]
         return source_order
 
     async def _fetch_from_nullbr(self, sub: "SubscriptionSnapshot") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
