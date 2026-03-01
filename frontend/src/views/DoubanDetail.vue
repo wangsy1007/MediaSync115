@@ -135,8 +135,26 @@
                       <el-tag size="small" type="info">{{ row.source_service || 'hdhive' }}</el-tag>
                     </template>
                   </el-table-column>
+                  <el-table-column label="画质" width="120" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" v-if="row.quality">
+                        {{ Array.isArray(row.quality) ? row.quality.join(', ') : row.quality }}
+                      </el-tag>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="分辨率" width="110" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" type="info" v-if="row.resolution">
+                        {{ Array.isArray(row.resolution) ? row.resolution.join(', ') : row.resolution }}
+                      </el-tag>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
                   <el-table-column label="大小" width="110" align="center">
-                    <template #default="{ row }">{{ row.size || '-' }}</template>
+                    <template #default="{ row }">
+                      <span class="resource-size">{{ row.size || '-' }}</span>
+                    </template>
                   </el-table-column>
                   <el-table-column label="积分" width="80" align="center">
                     <template #default="{ row }">{{ Number(row.unlock_points || 0) }}</template>
@@ -1114,8 +1132,27 @@ onBeforeUnmount(async () => {
     margin-bottom: 10px;
   }
 
+  :deep(.resource-table) {
+    --el-table-tr-bg-color: transparent;
+    --el-table-row-hover-bg-color: rgba(61, 119, 188, 0.12);
+    --el-table-header-bg-color: rgba(79, 145, 226, 0.12);
+    --el-table-border-color: rgba(79, 145, 226, 0.18);
+  }
+
   .resource-name {
     font-weight: 500;
+  }
+
+  .resource-size {
+    color: var(--ms-text-secondary);
+    font-weight: 500;
+  }
+
+  .text-muted {
+    color: var(--ms-text-muted);
+    font-size: 12px;
+    line-height: 1.4;
+    margin-top: 2px;
   }
 }
 
