@@ -1,7 +1,9 @@
 import re
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
+from uuid import uuid4
 
 from app.core.config import settings
 
@@ -61,6 +63,8 @@ class TgService:
         self._search_days = max(1, int(settings.TG_SEARCH_DAYS or 30))
         self._max_messages = max(20, int(settings.TG_MAX_MESSAGES_PER_CHANNEL or 200))
         self._user_agent = "MediaSync115/1.0 (+https://localhost)"
+        self._qr_pending: dict[str, dict[str, Any]] = {}
+        self._qr_lock = asyncio.Lock()
 
     @staticmethod
     def _parse_channels(raw: object) -> list[str]:
@@ -148,6 +152,25 @@ class TgService:
 
     def clear_session(self) -> None:
         self._session = ""
+
+    async def _clear_expired_qr_pending(self) -> None:
+        now = datetime.now(timezone.utc)
+        expired_tokens: list[str] = []
+        async with self._qr_lock:
+            for token, item in self._qr_pending.items():
+                created_at: datetime = item.get("created_at") or now
+                if (now - created_at).total_seconds() > 240:
+                    expired_tokens.append(token)
+            expired_items = [self._qr_pending.pop(token, None) for token in expired_tokens]
+        for item in expired_items:
+            if not item:
+                continue
+            client = item.get("client")
+            try:
+                if client:
+                    await client.disconnect()
+            except Exception:
+                pass
 
     def _ensure_dependency(self) -> None:
         if not TELETHON_AVAILABLE:
@@ -313,8 +336,125 @@ class TgService:
         finally:
             await client.disconnect()
 
+    async def import_session(self, session: str) -> dict[str, Any]:
+        self._ensure_login_config()
+        raw = str(session or "").strip()
+        if not raw:
+            raise RuntimeError("会话串不能为空")
+        client = self._build_client(raw)
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                raise RuntimeError("会话串无效或已过期，请重新获取")
+            user = await client.get_me()
+            final_session = client.session.save()
+            self._session = str(final_session or "").strip()
+            return {
+                "session": self._session,
+                "user": self._serialize_user(user),
+            }
+        finally:
+            await client.disconnect()
+
+    async def start_qr_login(self) -> dict[str, Any]:
+        self._ensure_login_config()
+        await self._clear_expired_qr_pending()
+        client = self._build_client("")
+        try:
+            await client.connect()
+            qr_login = await client.qr_login()
+            token = uuid4().hex
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=240)
+            async with self._qr_lock:
+                self._qr_pending[token] = {
+                    "client": client,
+                    "qr_login": qr_login,
+                    "created_at": datetime.now(timezone.utc),
+                    "expires_at": expires_at,
+                }
+            return {
+                "token": token,
+                "url": str(getattr(qr_login, "url", "") or ""),
+                "expires_at": expires_at.isoformat(),
+                "expire_seconds": 240,
+            }
+        except Exception:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            raise
+
+    async def check_qr_login_status(self, token: str) -> dict[str, Any]:
+        self._ensure_login_config()
+        await self._clear_expired_qr_pending()
+        normalized = str(token or "").strip()
+        if not normalized:
+            raise RuntimeError("二维码会话标识不能为空")
+
+        async with self._qr_lock:
+            item = self._qr_pending.get(normalized)
+        if not item:
+            raise RuntimeError("二维码会话不存在或已过期，请重新生成")
+
+        qr_login = item.get("qr_login")
+        client = item.get("client")
+        if not qr_login or not client:
+            raise RuntimeError("二维码会话无效，请重新生成")
+
+        should_cleanup = False
+        try:
+            user = await asyncio.wait_for(qr_login.wait(), timeout=0.2)
+            final_session = client.session.save()
+            self._session = str(final_session or "").strip()
+            should_cleanup = True
+            return {
+                "authorized": True,
+                "need_password": False,
+                "session": self._session,
+                "user": self._serialize_user(user),
+            }
+        except asyncio.TimeoutError:
+            return {
+                "authorized": False,
+                "need_password": False,
+                "pending": True,
+                "message": "等待扫码确认",
+            }
+        except SessionPasswordNeededError:
+            temp_session = str(client.session.save() or "").strip()
+            should_cleanup = True
+            return {
+                "authorized": False,
+                "need_password": True,
+                "pending": False,
+                "session": temp_session,
+                "message": "账号开启了二步验证，请输入密码",
+            }
+        finally:
+            if item.get("expires_at") and datetime.now(timezone.utc) >= item["expires_at"]:
+                should_cleanup = True
+            if should_cleanup:
+                async with self._qr_lock:
+                    self._qr_pending.pop(normalized, None)
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+
     async def logout(self) -> None:
         self._ensure_login_config()
+        await self._clear_expired_qr_pending()
+        async with self._qr_lock:
+            pending_items = list(self._qr_pending.values())
+            self._qr_pending.clear()
+        for item in pending_items:
+            client = item.get("client")
+            try:
+                if client:
+                    await client.disconnect()
+            except Exception:
+                pass
         if not self._session:
             return
         client = self._build_client(self._session)

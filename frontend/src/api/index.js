@@ -118,6 +118,9 @@ export const settingsApi = {
   tgSendCode: (phone) => api.post('/settings/tg/login/send-code', { phone }),
   tgVerifyCode: (payload) => api.post('/settings/tg/login/verify-code', payload),
   tgVerifyPassword: (payload) => api.post('/settings/tg/login/verify-password', payload),
+  tgStartQrLogin: () => api.post('/settings/tg/login/qr/start'),
+  tgCheckQrLogin: (token) => api.post('/settings/tg/login/qr/status', { token }),
+  tgImportSession: (session) => api.post('/settings/tg/login/session/import', { session }),
   tgLogout: () => api.post('/settings/tg/logout')
 }
 

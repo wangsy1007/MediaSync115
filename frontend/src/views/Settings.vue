@@ -259,6 +259,50 @@
           </el-form>
 
           <el-divider content-position="left">账号登录</el-divider>
+          <el-alert
+            type="info"
+            :closable="false"
+            show-icon
+            title="国内手机号可能收不到验证码，推荐优先使用二维码登录或会话串导入。"
+            style="margin-bottom: 12px;"
+          />
+          <el-form label-width="120px">
+            <el-form-item label="二维码登录">
+              <el-button type="primary" :loading="startingTgQr || pollingTgQr" @click="handleStartTgQrLogin">
+                {{ tgQrState.active ? '重新生成二维码登录' : '生成二维码登录' }}
+              </el-button>
+              <el-link
+                v-if="tgQrState.url"
+                :href="tgQrState.url"
+                target="_blank"
+                type="primary"
+                class="tg-link"
+              >
+                打开 Telegram 登录链接
+              </el-link>
+            </el-form-item>
+            <el-form-item v-if="tgQrState.url" label="登录链接">
+              <el-input :model-value="tgQrState.url" readonly />
+            </el-form-item>
+          </el-form>
+
+          <el-form label-width="120px">
+            <el-form-item label="会话串导入">
+              <el-input
+                v-model="tgSessionImport"
+                type="textarea"
+                :rows="3"
+                placeholder="粘贴 Telegram StringSession"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="importingTgSession" @click="handleImportTgSession">
+                导入并校验会话串
+              </el-button>
+            </el-form-item>
+          </el-form>
+
+          <el-divider content-position="left">短信验证码登录（可选）</el-divider>
           <el-form :model="tgLoginForm" label-width="120px">
             <el-form-item label="验证码">
               <el-input v-model="tgLoginForm.code" placeholder="输入短信验证码" />
@@ -626,7 +670,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, reactive, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, reactive, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { pan115Api, pansouApi, settingsApi, subscriptionApi } from '@/api'
 import { formatBeijingTableCell } from '@/utils/timezone'
@@ -664,6 +708,13 @@ const tgLoginForm = ref({
   code: '',
   password: '',
   needPassword: false
+})
+const tgSessionImport = ref('')
+const tgQrState = reactive({
+  token: '',
+  url: '',
+  expiresAt: '',
+  active: false
 })
 
 const tmdbForm = ref({
@@ -724,6 +775,9 @@ const sendingTgCode = ref(false)
 const verifyingTgCode = ref(false)
 const verifyingTgPassword = ref(false)
 const loggingOutTg = ref(false)
+const startingTgQr = ref(false)
+const pollingTgQr = ref(false)
+const importingTgSession = ref(false)
 const savingTmdb = ref(false)
 const savingScheduler = ref(false)
 const runningNullbr = ref(false)
@@ -1333,9 +1387,120 @@ const handleVerifyTgPassword = async () => {
   }
 }
 
+const stopTgQrPolling = () => {
+  tgQrState.active = false
+  pollingTgQr.value = false
+}
+
+const ensureTgLoginBaseConfig = async () => {
+  if (!String(tgForm.value.apiId || '').trim()) {
+    ElMessage.warning('请先填写 Telegram API ID')
+    return false
+  }
+  if (!String(tgForm.value.apiHash || '').trim()) {
+    ElMessage.warning('请先填写 Telegram API HASH')
+    return false
+  }
+  await settingsApi.updateRuntime({
+    tg_api_id: tgForm.value.apiId,
+    tg_api_hash: tgForm.value.apiHash,
+    tg_phone: tgForm.value.phone,
+    tg_proxy: tgForm.value.proxy
+  })
+  return true
+}
+
+const pollTgQrStatus = async (token) => {
+  pollingTgQr.value = true
+  while (tgQrState.active && tgQrState.token === token) {
+    try {
+      const { data } = await settingsApi.tgCheckQrLogin(token)
+      if (data.authorized) {
+        tgForm.value.session = data.session || ''
+        stopTgQrPolling()
+        tgQrState.token = ''
+        tgQrState.url = ''
+        tgQrState.expiresAt = ''
+        await settingsApi.updateRuntime({
+          tg_phone: tgForm.value.phone,
+          tg_session: tgForm.value.session
+        })
+        await checkTg(false)
+        await refreshSourceConnectionStatus()
+        ElMessage.success('Telegram 二维码登录成功')
+        break
+      }
+      if (data.need_password) {
+        tgLoginForm.value.needPassword = true
+        tgLoginForm.value.tempSession = data.session || ''
+        stopTgQrPolling()
+        ElMessage.info('账号开启了二步验证，请输入密码')
+        break
+      }
+      if (!data.pending) {
+        stopTgQrPolling()
+        break
+      }
+    } catch (error) {
+      stopTgQrPolling()
+      ElMessage.error(error.response?.data?.detail || '二维码登录状态检测失败')
+      break
+    }
+    await wait(2000)
+  }
+  pollingTgQr.value = false
+}
+
+const handleStartTgQrLogin = async () => {
+  startingTgQr.value = true
+  try {
+    const ok = await ensureTgLoginBaseConfig()
+    if (!ok) return
+    const { data } = await settingsApi.tgStartQrLogin()
+    tgQrState.token = data.token || ''
+    tgQrState.url = data.url || ''
+    tgQrState.expiresAt = data.expires_at || ''
+    tgQrState.active = true
+    ElMessage.success('二维码登录链接已生成，请在 Telegram 中确认登录')
+    pollTgQrStatus(tgQrState.token)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '二维码登录启动失败')
+  } finally {
+    startingTgQr.value = false
+  }
+}
+
+const handleImportTgSession = async () => {
+  const session = String(tgSessionImport.value || '').trim()
+  if (!session) {
+    ElMessage.warning('请输入 StringSession')
+    return
+  }
+  importingTgSession.value = true
+  try {
+    const ok = await ensureTgLoginBaseConfig()
+    if (!ok) return
+    const { data } = await settingsApi.tgImportSession(session)
+    tgForm.value.session = data.session || ''
+    tgSessionImport.value = ''
+    await settingsApi.updateRuntime({
+      tg_phone: tgForm.value.phone,
+      tg_session: tgForm.value.session
+    })
+    await checkTg(false)
+    await refreshSourceConnectionStatus()
+    ElMessage.success('Telegram 会话串导入成功')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '会话串导入失败')
+  } finally {
+    importingTgSession.value = false
+  }
+}
+
 const handleTgLogout = async () => {
   loggingOutTg.value = true
   try {
+    stopTgQrPolling()
     await settingsApi.tgLogout()
     tgForm.value.session = ''
     tgLoginForm.value = {
@@ -1731,6 +1896,10 @@ onMounted(() => {
   fetchPansouConfig()
   fetchSubscriptionLogs()
 })
+
+onBeforeUnmount(() => {
+  stopTgQrPolling()
+})
 </script>
 
 <style lang="scss" scoped>
@@ -1768,6 +1937,10 @@ onMounted(() => {
 
     .cookie-tips {
       margin-top: 8px;
+    }
+
+    .tg-link {
+      margin-left: 12px;
     }
 
     .user-info {

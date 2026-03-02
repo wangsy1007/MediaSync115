@@ -66,6 +66,14 @@ class TgVerifyPasswordRequest(BaseModel):
     session: str
 
 
+class TgQrStatusRequest(BaseModel):
+    token: str
+
+
+class TgImportSessionRequest(BaseModel):
+    session: str
+
+
 def _normalize_subscription_priority(raw: object) -> list[str]:
     allowed = {"nullbr", "hdhive", "pansou", "tg"}
     source_items: list[str] = []
@@ -293,6 +301,62 @@ async def verify_tg_login_password(payload: TgVerifyPasswordRequest):
         return {
             "success": True,
             "need_password": False,
+            "session": final_session,
+            "user": result.get("user"),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/tg/login/qr/start")
+async def start_tg_qr_login():
+    try:
+        result = await tg_service.start_qr_login()
+        return {
+            "success": True,
+            "token": result.get("token"),
+            "url": result.get("url"),
+            "expires_at": result.get("expires_at"),
+            "expire_seconds": result.get("expire_seconds"),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/tg/login/qr/status")
+async def check_tg_qr_login_status(payload: TgQrStatusRequest):
+    token = str(payload.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="二维码会话标识不能为空")
+    try:
+        result = await tg_service.check_qr_login_status(token)
+        if result.get("authorized") and result.get("session"):
+            runtime_settings_service.update_tg_session(str(result.get("session")))
+        return {
+            "success": True,
+            "authorized": bool(result.get("authorized", False)),
+            "pending": bool(result.get("pending", False)),
+            "need_password": bool(result.get("need_password", False)),
+            "session": str(result.get("session") or ""),
+            "message": str(result.get("message") or ""),
+            "user": result.get("user"),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/tg/login/session/import")
+async def import_tg_session(payload: TgImportSessionRequest):
+    session = str(payload.session or "").strip()
+    if not session:
+        raise HTTPException(status_code=400, detail="会话串不能为空")
+    try:
+        result = await tg_service.import_session(session)
+        final_session = str(result.get("session") or "").strip()
+        if final_session:
+            runtime_settings_service.update_tg_session(final_session)
+        return {
+            "success": True,
             "session": final_session,
             "user": result.get("user"),
         }
