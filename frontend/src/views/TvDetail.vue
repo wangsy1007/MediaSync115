@@ -732,7 +732,7 @@ const isHdhiveResourceLocked = (row) => {
 }
 
 const isHdhiveResourceSuspectedInvalid = (row) => {
-  if (!row || row.source_service !== 'hdhive') return false
+  if (!row) return false
   if (row.hdhive_suspected_invalid === true) return true
   const validateStatus = String(row.hdhive_validate_status || '').trim().toLowerCase()
   return ['invalid', 'suspected_invalid', 'suspect_invalid'].includes(validateStatus)
