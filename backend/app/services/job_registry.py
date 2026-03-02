@@ -15,6 +15,7 @@ class JobRegistry:
             "system.noop": self._noop,
             "subscription.check_nullbr": self._check_subscription_nullbr,
             "subscription.check_pansou": self._check_subscription_pansou,
+            "subscription.check_tg": self._check_subscription_tg,
         }
 
     def get(self, job_key: str) -> Callable[..., Any] | None:
@@ -53,6 +54,10 @@ class JobRegistry:
     async def _check_subscription_pansou(self, **kwargs) -> dict[str, Any]:
         async with async_session_maker() as db:
             return await subscription_service.run_channel_check(db, "pansou")
+
+    async def _check_subscription_tg(self, **kwargs) -> dict[str, Any]:
+        async with async_session_maker() as db:
+            return await subscription_service.run_channel_check(db, "tg")
 
 
 job_registry = JobRegistry()

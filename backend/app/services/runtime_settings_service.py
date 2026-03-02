@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_client import nullbr_client
 from app.services.pansou_service import pansou_service
+from app.services.tg_service import tg_service
 
 
 class RuntimeSettingsService:
@@ -24,6 +25,14 @@ class RuntimeSettingsService:
             "nullbr_app_id": settings.NULLBR_APP_ID,
             "nullbr_api_key": settings.NULLBR_API_KEY,
             "nullbr_base_url": settings.NULLBR_BASE_URL,
+            "tg_api_id": settings.TG_API_ID or "",
+            "tg_api_hash": settings.TG_API_HASH or "",
+            "tg_phone": settings.TG_PHONE or "",
+            "tg_session": settings.TG_SESSION or "",
+            "tg_proxy": settings.TG_PROXY or "",
+            "tg_channel_usernames": tg_service._parse_channels(settings.TG_CHANNEL_USERNAMES),
+            "tg_search_days": int(settings.TG_SEARCH_DAYS or 30),
+            "tg_max_messages_per_channel": int(settings.TG_MAX_MESSAGES_PER_CHANNEL or 200),
             "tmdb_api_key": settings.TMDB_API_KEY or "",
             "tmdb_base_url": settings.TMDB_BASE_URL,
             "tmdb_image_base_url": settings.TMDB_IMAGE_BASE_URL,
@@ -35,7 +44,10 @@ class RuntimeSettingsService:
             "subscription_pansou_enabled": False,
             "subscription_pansou_interval_hours": 24,
             "subscription_pansou_run_time": "03:30",
-            "subscription_resource_priority": ["nullbr", "hdhive", "pansou"],
+            "subscription_tg_enabled": False,
+            "subscription_tg_interval_hours": 24,
+            "subscription_tg_run_time": "04:00",
+            "subscription_resource_priority": ["nullbr", "hdhive", "pansou", "tg"],
             "subscription_hdhive_auto_unlock_enabled": False,
             "subscription_hdhive_unlock_max_points_per_item": 10,
             "subscription_hdhive_unlock_budget_points_per_run": 30,
@@ -177,6 +189,52 @@ class RuntimeSettingsService:
     def get_nullbr_base_url(self) -> str:
         return self._data["nullbr_base_url"]
 
+    def get_tg_api_id(self) -> str:
+        return str(self._data.get("tg_api_id") or "")
+
+    def get_tg_api_hash(self) -> str:
+        return str(self._data.get("tg_api_hash") or "")
+
+    def get_tg_phone(self) -> str:
+        return str(self._data.get("tg_phone") or "")
+
+    def get_tg_session(self) -> str:
+        return str(self._data.get("tg_session") or "")
+
+    def update_tg_session(self, session: str) -> str:
+        self._data["tg_session"] = str(session or "").strip()
+        self._save()
+        self.apply_runtime_overrides()
+        return self._data["tg_session"]
+
+    def clear_tg_session(self) -> None:
+        self._data["tg_session"] = ""
+        self._save()
+        self.apply_runtime_overrides()
+
+    def get_tg_proxy(self) -> str:
+        return str(self._data.get("tg_proxy") or "")
+
+    def get_tg_channel_usernames(self) -> list[str]:
+        value = self._data.get("tg_channel_usernames")
+        if isinstance(value, list):
+            return tg_service._parse_channels(value)
+        return tg_service._parse_channels(value)
+
+    def get_tg_search_days(self) -> int:
+        value = self._data.get("tg_search_days", 30)
+        try:
+            return max(1, int(value))
+        except Exception:
+            return 30
+
+    def get_tg_max_messages_per_channel(self) -> int:
+        value = self._data.get("tg_max_messages_per_channel", 200)
+        try:
+            return max(20, int(value))
+        except Exception:
+            return 200
+
     def get_tmdb_api_key(self) -> str:
         return self._data["tmdb_api_key"]
 
@@ -197,7 +255,7 @@ class RuntimeSettingsService:
         if not isinstance(value, list):
             return list(self._defaults["subscription_resource_priority"])
 
-        allowed = {"nullbr", "hdhive", "pansou"}
+        allowed = {"nullbr", "hdhive", "pansou", "tg"}
         normalized: list[str] = []
         seen: set[str] = set()
         for item in value:
@@ -273,7 +331,11 @@ class RuntimeSettingsService:
                 else:
                     continue
 
-                allowed = {"nullbr", "hdhive", "pansou"}
+                if key == "subscription_resource_priority":
+                    allowed = {"nullbr", "hdhive", "pansou", "tg"}
+                else:
+                    normalized[key] = tg_service._parse_channels(source_items)
+                    continue
                 deduped: list[str] = []
                 seen: set[str] = set()
                 for item in source_items:
@@ -299,6 +361,14 @@ class RuntimeSettingsService:
         settings.NULLBR_APP_ID = self.get_nullbr_app_id()
         settings.NULLBR_API_KEY = self.get_nullbr_api_key()
         settings.NULLBR_BASE_URL = self.get_nullbr_base_url()
+        settings.TG_API_ID = self.get_tg_api_id() or None
+        settings.TG_API_HASH = self.get_tg_api_hash() or None
+        settings.TG_PHONE = self.get_tg_phone() or None
+        settings.TG_SESSION = self.get_tg_session() or None
+        settings.TG_PROXY = self.get_tg_proxy() or None
+        settings.TG_CHANNEL_USERNAMES = ",".join(self.get_tg_channel_usernames())
+        settings.TG_SEARCH_DAYS = self.get_tg_search_days()
+        settings.TG_MAX_MESSAGES_PER_CHANNEL = self.get_tg_max_messages_per_channel()
 
         settings.TMDB_API_KEY = self.get_tmdb_api_key() or None
         settings.TMDB_BASE_URL = self.get_tmdb_base_url()
@@ -314,6 +384,16 @@ class RuntimeSettingsService:
             api_key=self.get_nullbr_api_key(),
             base_url=self.get_nullbr_base_url(),
         )
+        tg_service.set_config(
+            api_id=self.get_tg_api_id(),
+            api_hash=self.get_tg_api_hash(),
+            phone=self.get_tg_phone(),
+            session=self.get_tg_session(),
+            proxy=self.get_tg_proxy(),
+            channels=self.get_tg_channel_usernames(),
+            search_days=self.get_tg_search_days(),
+            max_messages=self.get_tg_max_messages_per_channel(),
+        )
 
     def get_all(self) -> dict[str, Any]:
         return {
@@ -327,6 +407,14 @@ class RuntimeSettingsService:
             "nullbr_app_id": self.get_nullbr_app_id(),
             "nullbr_api_key": self.get_nullbr_api_key(),
             "nullbr_base_url": self.get_nullbr_base_url(),
+            "tg_api_id": self.get_tg_api_id(),
+            "tg_api_hash": self.get_tg_api_hash(),
+            "tg_phone": self.get_tg_phone(),
+            "tg_session": self.get_tg_session(),
+            "tg_proxy": self.get_tg_proxy(),
+            "tg_channel_usernames": self.get_tg_channel_usernames(),
+            "tg_search_days": self.get_tg_search_days(),
+            "tg_max_messages_per_channel": self.get_tg_max_messages_per_channel(),
             "tmdb_api_key": self.get_tmdb_api_key(),
             "tmdb_base_url": self.get_tmdb_base_url(),
             "tmdb_image_base_url": self.get_tmdb_image_base_url(),
@@ -338,6 +426,9 @@ class RuntimeSettingsService:
             "subscription_pansou_enabled": bool(self._data.get("subscription_pansou_enabled", False)),
             "subscription_pansou_interval_hours": int(self._data.get("subscription_pansou_interval_hours", 24) or 24),
             "subscription_pansou_run_time": str(self._data.get("subscription_pansou_run_time", "03:30") or "03:30"),
+            "subscription_tg_enabled": bool(self._data.get("subscription_tg_enabled", False)),
+            "subscription_tg_interval_hours": int(self._data.get("subscription_tg_interval_hours", 24) or 24),
+            "subscription_tg_run_time": str(self._data.get("subscription_tg_run_time", "04:00") or "04:00"),
             "subscription_resource_priority": self.get_subscription_resource_priority(),
             "subscription_hdhive_auto_unlock_enabled": self.get_subscription_hdhive_auto_unlock_enabled(),
             "subscription_hdhive_unlock_max_points_per_item": self.get_subscription_hdhive_unlock_max_points_per_item(),

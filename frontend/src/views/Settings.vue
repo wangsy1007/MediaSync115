@@ -213,6 +213,97 @@
         </el-card>
       </el-tab-pane>
 
+      <el-tab-pane label="Telegram" name="tg">
+        <el-card class="settings-card">
+          <template #header>
+            <div class="card-header">
+              <span>Telegram 渠道配置</span>
+              <el-tag v-if="tgStatus.checked" :type="tgStatus.valid ? 'success' : 'danger'" size="small">
+                {{ tgStatus.valid ? '已连接' : '未连接' }}
+              </el-tag>
+            </div>
+          </template>
+
+          <el-form :model="tgForm" label-width="120px">
+            <el-form-item label="API ID">
+              <el-input v-model="tgForm.apiId" placeholder="Telegram API ID" />
+            </el-form-item>
+            <el-form-item label="API HASH">
+              <el-input v-model="tgForm.apiHash" placeholder="Telegram API HASH" type="password" show-password />
+            </el-form-item>
+            <el-form-item label="手机号">
+              <el-input v-model="tgForm.phone" placeholder="例如: +8613812345678" />
+            </el-form-item>
+            <el-form-item label="代理">
+              <el-input v-model="tgForm.proxy" placeholder="可选，例如 socks5://127.0.0.1:1080" />
+            </el-form-item>
+            <el-form-item label="频道列表">
+              <el-input
+                v-model="tgForm.channelsText"
+                type="textarea"
+                :rows="3"
+                placeholder="每行一个频道 username（不带 @）"
+              />
+            </el-form-item>
+            <el-form-item label="搜索窗口(天)">
+              <el-input-number v-model="tgForm.searchDays" :min="1" :max="365" />
+            </el-form-item>
+            <el-form-item label="每频道消息上限">
+              <el-input-number v-model="tgForm.maxMessagesPerChannel" :min="20" :max="2000" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingTg" @click="handleSaveTg">保存</el-button>
+              <el-button :loading="testingTg" @click="handleTestTg">测试连接</el-button>
+              <el-button :loading="loggingOutTg" :disabled="!tgForm.session" @click="handleTgLogout">退出登录</el-button>
+            </el-form-item>
+          </el-form>
+
+          <el-divider content-position="left">账号登录</el-divider>
+          <el-form :model="tgLoginForm" label-width="120px">
+            <el-form-item label="验证码">
+              <el-input v-model="tgLoginForm.code" placeholder="输入短信验证码" />
+            </el-form-item>
+            <el-form-item label="二步密码">
+              <el-input v-model="tgLoginForm.password" placeholder="如开启二步验证请输入" type="password" show-password />
+            </el-form-item>
+            <el-form-item>
+              <el-button :loading="sendingTgCode" @click="handleSendTgCode">发送验证码</el-button>
+              <el-button type="primary" :loading="verifyingTgCode" @click="handleVerifyTgCode">验证验证码</el-button>
+              <el-button
+                type="warning"
+                :loading="verifyingTgPassword"
+                :disabled="!tgLoginForm.needPassword"
+                @click="handleVerifyTgPassword"
+              >
+                提交二步密码
+              </el-button>
+            </el-form-item>
+          </el-form>
+
+          <div
+            v-if="tgStatus.checked"
+            class="connection-result"
+            :class="tgStatus.valid ? 'is-success' : 'is-failed'"
+          >
+            <div class="result-title">连接检测结果</div>
+            <div class="result-message">{{ tgStatus.message }}</div>
+          </div>
+
+          <div v-if="tgStatus.valid && tgStatus.user" class="user-info">
+            <el-divider />
+            <h4>账号信息</h4>
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="用户名">
+                {{ tgStatus.user.username || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="手机号">
+                {{ tgStatus.user.phone || '-' }}
+              </el-descriptions-item>
+            </el-descriptions>
+          </div>
+        </el-card>
+      </el-tab-pane>
+
       <el-tab-pane label="TMDB" name="tmdb">
         <el-card class="settings-card">
           <template #header>
@@ -414,10 +505,33 @@
               />
             </el-form-item>
 
+            <el-divider content-position="left">Telegram 渠道</el-divider>
+            <el-form-item label="启用任务">
+              <el-switch v-model="schedulerForm.tg.enabled" />
+            </el-form-item>
+            <el-form-item label="检查间隔(小时)">
+              <el-input-number
+                v-model="schedulerForm.tg.intervalHours"
+                :min="1"
+                :max="24"
+                :disabled="!schedulerForm.tg.enabled"
+              />
+            </el-form-item>
+            <el-form-item label="执行时间">
+              <el-time-picker
+                v-model="schedulerForm.tg.runTime"
+                format="HH:mm"
+                value-format="HH:mm"
+                placeholder="选择时间"
+                :disabled="!schedulerForm.tg.enabled"
+              />
+            </el-form-item>
+
             <el-form-item>
               <el-button type="primary" :loading="savingScheduler" @click="handleSaveScheduler">保存</el-button>
               <el-button :loading="runningNullbr" :disabled="runningSubscriptionChannel !== ''" @click="handleRunSubscriptionChannel('nullbr')">立即执行 Nullbr</el-button>
               <el-button :loading="runningPansou" :disabled="runningSubscriptionChannel !== ''" @click="handleRunSubscriptionChannel('pansou')">立即执行 Pansou</el-button>
+              <el-button :loading="runningTg" :disabled="runningSubscriptionChannel !== ''" @click="handleRunSubscriptionChannel('tg')">立即执行 Telegram</el-button>
             </el-form-item>
             <el-form-item v-if="runningSubscriptionChannel">
               <el-alert
@@ -533,6 +647,25 @@ const hdhiveForm = ref({
   cookie: ''
 })
 
+const tgForm = ref({
+  apiId: '',
+  apiHash: '',
+  phone: '',
+  session: '',
+  proxy: '',
+  channelsText: '',
+  searchDays: 30,
+  maxMessagesPerChannel: 200
+})
+
+const tgLoginForm = ref({
+  phoneCodeHash: '',
+  tempSession: '',
+  code: '',
+  password: '',
+  needPassword: false
+})
+
 const tmdbForm = ref({
   apiKey: '',
   language: 'zh-CN',
@@ -552,6 +685,11 @@ const schedulerForm = ref({
     intervalHours: 24,
     runTime: '03:30'
   },
+  tg: {
+    enabled: false,
+    intervalHours: 24,
+    runTime: '04:00'
+  },
   hdhiveUnlock: {
     enabled: false,
     maxPointsPerItem: 10,
@@ -563,8 +701,9 @@ const sourceLabelMap = {
   nullbr: 'Nullbr',
   hdhive: 'HDHive',
   pansou: 'Pansou',
+  tg: 'Telegram'
 }
-const resourcePriority = ref(['nullbr', 'hdhive', 'pansou'])
+const resourcePriority = ref(['nullbr', 'hdhive', 'pansou', 'tg'])
 
 const pansouForm = ref({
   baseUrl: ''
@@ -579,10 +718,17 @@ const savingNullbr = ref(false)
 const testingNullbr = ref(false)
 const savingHdhive = ref(false)
 const testingHdhive = ref(false)
+const savingTg = ref(false)
+const testingTg = ref(false)
+const sendingTgCode = ref(false)
+const verifyingTgCode = ref(false)
+const verifyingTgPassword = ref(false)
+const loggingOutTg = ref(false)
 const savingTmdb = ref(false)
 const savingScheduler = ref(false)
 const runningNullbr = ref(false)
 const runningPansou = ref(false)
+const runningTg = ref(false)
 const runningSubscriptionChannel = ref('')
 const runningTaskId = ref('')
 const runningTaskMessage = ref('')
@@ -621,10 +767,17 @@ const hdhiveStatus = reactive({
   message: '',
   user: null
 })
+const tgStatus = reactive({
+  checked: false,
+  valid: false,
+  message: '',
+  user: null
+})
 const sourceConnectionStatus = reactive({
   nullbr: { checked: false, ok: false, text: '未检测' },
   hdhive: { checked: false, ok: false, text: '未检测' },
-  pansou: { checked: false, ok: false, text: '未检测' }
+  pansou: { checked: false, ok: false, text: '未检测' },
+  tg: { checked: false, ok: false, text: '未检测' }
 })
 
 const riskHealthTagType = computed(() => {
@@ -653,10 +806,11 @@ const riskHealthAlertType = computed(() => {
 const refreshSourceConnectionStatus = async () => {
   checkingSourceStatus.value = true
   try {
-    const [nullbrResult, hdhiveResult, pansouResult] = await Promise.allSettled([
+    const [nullbrResult, hdhiveResult, pansouResult, tgResult] = await Promise.allSettled([
       settingsApi.checkNullbr(),
       settingsApi.checkHdhive(),
-      pansouApi.health()
+      pansouApi.health(),
+      settingsApi.checkTg()
     ])
 
     if (nullbrResult.status === 'fulfilled') {
@@ -696,6 +850,19 @@ const refreshSourceConnectionStatus = async () => {
       sourceConnectionStatus.pansou.checked = true
       sourceConnectionStatus.pansou.ok = false
       sourceConnectionStatus.pansou.text = `连接失败: ${message}`
+    }
+
+    if (tgResult.status === 'fulfilled') {
+      const payload = tgResult.value?.data || {}
+      const ok = !!payload.valid
+      sourceConnectionStatus.tg.checked = true
+      sourceConnectionStatus.tg.ok = ok
+      sourceConnectionStatus.tg.text = ok ? '连接正常' : `连接失败: ${payload.message || '凭证不可用'}`
+    } else {
+      const message = tgResult.reason?.response?.data?.detail || tgResult.reason?.message || '请求失败'
+      sourceConnectionStatus.tg.checked = true
+      sourceConnectionStatus.tg.ok = false
+      sourceConnectionStatus.tg.text = `连接失败: ${message}`
     }
   } finally {
     checkingSourceStatus.value = false
@@ -1011,6 +1178,183 @@ const handleTestHdhive = async () => {
   }
 }
 
+const checkTg = async (notify = false) => {
+  try {
+    const { data } = await settingsApi.checkTg()
+    tgStatus.checked = true
+    tgStatus.valid = !!data.valid
+    tgStatus.user = data.user || null
+    tgStatus.message = data.valid ? (data.message || 'Telegram 连接成功') : (data.message || 'Telegram 未登录')
+    if (notify) {
+      if (data.valid) ElMessage.success(tgStatus.message)
+      else ElMessage.error(tgStatus.message)
+    }
+  } catch (error) {
+    tgStatus.checked = true
+    tgStatus.valid = false
+    tgStatus.user = null
+    tgStatus.message = error.response?.data?.detail || 'Telegram 连接检测失败'
+    if (notify) ElMessage.error(tgStatus.message)
+  }
+}
+
+const parseChannelsText = () => {
+  const raw = String(tgForm.value.channelsText || '')
+  return raw.split(/\r?\n/).map(item => item.trim()).filter(Boolean)
+}
+
+const handleSaveTg = async () => {
+  if (!String(tgForm.value.apiId || '').trim()) {
+    ElMessage.warning('请输入 Telegram API ID')
+    return
+  }
+  if (!String(tgForm.value.apiHash || '').trim()) {
+    ElMessage.warning('请输入 Telegram API HASH')
+    return
+  }
+  const channels = parseChannelsText()
+  if (!channels.length) {
+    ElMessage.warning('请至少配置一个频道')
+    return
+  }
+
+  savingTg.value = true
+  try {
+    await settingsApi.updateRuntime({
+      tg_api_id: tgForm.value.apiId,
+      tg_api_hash: tgForm.value.apiHash,
+      tg_phone: tgForm.value.phone,
+      tg_proxy: tgForm.value.proxy,
+      tg_channel_usernames: channels,
+      tg_search_days: Number(tgForm.value.searchDays || 30),
+      tg_max_messages_per_channel: Number(tgForm.value.maxMessagesPerChannel || 200),
+      tg_session: tgForm.value.session || ''
+    })
+    await fetchRuntimeSettings()
+    await refreshSourceConnectionStatus()
+    ElMessage.success('Telegram 配置已保存')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || 'Telegram 配置保存失败')
+  } finally {
+    savingTg.value = false
+  }
+}
+
+const handleTestTg = async () => {
+  testingTg.value = true
+  try {
+    await checkTg(true)
+  } finally {
+    testingTg.value = false
+  }
+}
+
+const handleSendTgCode = async () => {
+  if (!String(tgForm.value.phone || '').trim()) {
+    ElMessage.warning('请先填写手机号')
+    return
+  }
+  sendingTgCode.value = true
+  try {
+    const { data } = await settingsApi.tgSendCode(tgForm.value.phone)
+    tgLoginForm.value.phoneCodeHash = data.phone_code_hash || ''
+    tgLoginForm.value.tempSession = data.session || ''
+    tgLoginForm.value.needPassword = false
+    tgLoginForm.value.password = ''
+    ElMessage.success('验证码已发送')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '验证码发送失败')
+  } finally {
+    sendingTgCode.value = false
+  }
+}
+
+const handleVerifyTgCode = async () => {
+  if (!tgLoginForm.value.phoneCodeHash || !tgLoginForm.value.tempSession) {
+    ElMessage.warning('请先发送验证码')
+    return
+  }
+  if (!String(tgLoginForm.value.code || '').trim()) {
+    ElMessage.warning('请输入验证码')
+    return
+  }
+  verifyingTgCode.value = true
+  try {
+    const { data } = await settingsApi.tgVerifyCode({
+      phone: tgForm.value.phone,
+      code: tgLoginForm.value.code,
+      phone_code_hash: tgLoginForm.value.phoneCodeHash,
+      session: tgLoginForm.value.tempSession
+    })
+    tgLoginForm.value.tempSession = data.session || tgLoginForm.value.tempSession
+    tgLoginForm.value.needPassword = !!data.need_password
+    if (!data.need_password) {
+      tgForm.value.session = data.session || ''
+      await settingsApi.updateRuntime({
+        tg_phone: tgForm.value.phone,
+        tg_session: tgForm.value.session
+      })
+      await checkTg(false)
+      ElMessage.success('Telegram 登录成功')
+    } else {
+      ElMessage.info('账号开启了二步验证，请输入密码')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '验证码验证失败')
+  } finally {
+    verifyingTgCode.value = false
+  }
+}
+
+const handleVerifyTgPassword = async () => {
+  if (!tgLoginForm.value.needPassword) return
+  if (!String(tgLoginForm.value.password || '').trim()) {
+    ElMessage.warning('请输入二步验证密码')
+    return
+  }
+  verifyingTgPassword.value = true
+  try {
+    const { data } = await settingsApi.tgVerifyPassword({
+      password: tgLoginForm.value.password,
+      session: tgLoginForm.value.tempSession
+    })
+    tgLoginForm.value.needPassword = false
+    tgForm.value.session = data.session || ''
+    await settingsApi.updateRuntime({
+      tg_phone: tgForm.value.phone,
+      tg_session: tgForm.value.session
+    })
+    await checkTg(false)
+    ElMessage.success('Telegram 二步验证成功')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '二步验证失败')
+  } finally {
+    verifyingTgPassword.value = false
+  }
+}
+
+const handleTgLogout = async () => {
+  loggingOutTg.value = true
+  try {
+    await settingsApi.tgLogout()
+    tgForm.value.session = ''
+    tgLoginForm.value = {
+      phoneCodeHash: '',
+      tempSession: '',
+      code: '',
+      password: '',
+      needPassword: false
+    }
+    await checkTg(false)
+    await refreshSourceConnectionStatus()
+    ElMessage.success('Telegram 已退出登录')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || 'Telegram 退出失败')
+  } finally {
+    loggingOutTg.value = false
+  }
+}
+
 const handleTestNullbr = async () => {
   testingNullbr.value = true
   try {
@@ -1070,6 +1414,14 @@ const fetchRuntimeSettings = async () => {
   try {
     const { data } = await settingsApi.getRuntime()
     hdhiveForm.value.cookie = data.hdhive_cookie || ''
+    tgForm.value.apiId = data.tg_api_id || ''
+    tgForm.value.apiHash = data.tg_api_hash || ''
+    tgForm.value.phone = data.tg_phone || ''
+    tgForm.value.session = data.tg_session || ''
+    tgForm.value.proxy = data.tg_proxy || ''
+    tgForm.value.searchDays = Number(data.tg_search_days || 30)
+    tgForm.value.maxMessagesPerChannel = Number(data.tg_max_messages_per_channel || 200)
+    tgForm.value.channelsText = Array.isArray(data.tg_channel_usernames) ? data.tg_channel_usernames.join('\n') : ''
     nullbrForm.value.appId = data.nullbr_app_id || ''
     nullbrForm.value.apiKey = data.nullbr_api_key || ''
     nullbrForm.value.baseUrl = data.nullbr_base_url || ''
@@ -1091,6 +1443,9 @@ const fetchRuntimeSettings = async () => {
     schedulerForm.value.pansou.enabled = !!data.subscription_pansou_enabled
     schedulerForm.value.pansou.intervalHours = Number(data.subscription_pansou_interval_hours || 24)
     schedulerForm.value.pansou.runTime = data.subscription_pansou_run_time || '03:30'
+    schedulerForm.value.tg.enabled = !!data.subscription_tg_enabled
+    schedulerForm.value.tg.intervalHours = Number(data.subscription_tg_interval_hours || 24)
+    schedulerForm.value.tg.runTime = data.subscription_tg_run_time || '04:00'
     schedulerForm.value.hdhiveUnlock.enabled = !!data.subscription_hdhive_auto_unlock_enabled
     schedulerForm.value.hdhiveUnlock.maxPointsPerItem = Number(data.subscription_hdhive_unlock_max_points_per_item || 10)
     schedulerForm.value.hdhiveUnlock.budgetPointsPerRun = Number(data.subscription_hdhive_unlock_budget_points_per_run || 30)
@@ -1104,7 +1459,7 @@ const fetchRuntimeSettings = async () => {
       if (!sourceLabelMap[source]) continue
       if (!deduped.includes(source)) deduped.push(source)
     }
-    for (const source of ['nullbr', 'hdhive', 'pansou']) {
+    for (const source of ['nullbr', 'hdhive', 'pansou', 'tg']) {
       if (!deduped.includes(source)) deduped.push(source)
     }
     resourcePriority.value = deduped
@@ -1147,6 +1502,9 @@ const handleSaveScheduler = async () => {
       subscription_pansou_enabled: schedulerForm.value.pansou.enabled,
       subscription_pansou_interval_hours: Number(schedulerForm.value.pansou.intervalHours || 24),
       subscription_pansou_run_time: schedulerForm.value.pansou.runTime || '03:30',
+      subscription_tg_enabled: schedulerForm.value.tg.enabled,
+      subscription_tg_interval_hours: Number(schedulerForm.value.tg.intervalHours || 24),
+      subscription_tg_run_time: schedulerForm.value.tg.runTime || '04:00',
       subscription_resource_priority: resourcePriority.value,
       subscription_hdhive_auto_unlock_enabled: schedulerForm.value.hdhiveUnlock.enabled,
       subscription_hdhive_unlock_max_points_per_item: Number(schedulerForm.value.hdhiveUnlock.maxPointsPerItem || 10),
@@ -1207,7 +1565,11 @@ const handleRunSubscriptionChannel = async (channel) => {
   if (runningSubscriptionChannel.value) return
   runningSubscriptionChannel.value = channel
   runningTaskMessage.value = '任务已提交，等待执行...'
-  const loadingRef = channel === 'nullbr' ? runningNullbr : runningPansou
+  const loadingRef = channel === 'nullbr'
+    ? runningNullbr
+    : channel === 'pansou'
+      ? runningPansou
+      : runningTg
   loadingRef.value = true
   try {
     const { data } = await subscriptionApi.runChannelCheckBackground(channel, true)
@@ -1355,6 +1717,9 @@ onMounted(() => {
   fetchRuntimeSettings().then(() => {
     if (String(hdhiveForm.value.cookie || '').trim()) {
       checkHdhive(false)
+    }
+    if (String(tgForm.value.session || '').trim()) {
+      checkTg(false)
     }
     refreshSourceConnectionStatus()
   })

@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     HDHIVE_BASE_URL: str = "https://hdhive.com/"
 
     PANSOU_BASE_URL: str = "http://192.168.10.139:8088/"
+    TG_API_ID: Optional[str] = None
+    TG_API_HASH: Optional[str] = None
+    TG_PHONE: Optional[str] = None
+    TG_SESSION: Optional[str] = None
+    TG_PROXY: Optional[str] = None
+    TG_CHANNEL_USERNAMES: str = ""
+    TG_SEARCH_DAYS: int = 30
+    TG_MAX_MESSAGES_PER_CHANNEL: int = 200
     
     EMBY_URL: str = "http://192.168.2.139:8096/"
     EMBY_API_KEY: str = "355c5a7a4cae4966a3c0b40042bbde36"

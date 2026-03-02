@@ -24,6 +24,7 @@ from app.services.nullbr_service import nullbr_service
 from app.services.pan115_service import Pan115Service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
+from app.services.tg_service import tg_service
 
 
 class SubscriptionService:
@@ -468,6 +469,8 @@ class SubscriptionService:
                     source_resources, source_traces = await self._fetch_from_nullbr(sub)
                 elif source == "hdhive":
                     source_resources, source_traces = await self._fetch_from_hdhive(sub)
+                elif source == "tg":
+                    source_resources, source_traces = await self._fetch_from_tg(sub)
                 else:
                     source_resources, source_traces = await self._fetch_from_pansou(sub)
             except Exception as exc:
@@ -511,10 +514,18 @@ class SubscriptionService:
     def _resolve_source_order(self, channel: str) -> list[str]:
         _ = channel
         priority = runtime_settings_service.get_subscription_resource_priority()
-        default_priority = ["nullbr", "hdhive", "pansou"]
-        source_order = [item for item in priority if item in {"nullbr", "hdhive", "pansou"}]
+        default_priority = ["nullbr", "hdhive", "pansou", "tg"]
+        source_order = [item for item in priority if item in {"nullbr", "hdhive", "pansou", "tg"}]
+        tg_ready = bool(
+            runtime_settings_service.get_tg_api_id().strip()
+            and runtime_settings_service.get_tg_api_hash().strip()
+            and runtime_settings_service.get_tg_session().strip()
+            and runtime_settings_service.get_tg_channel_usernames()
+        )
+        if not tg_ready:
+            source_order = [item for item in source_order if item != "tg"]
         if not source_order:
-            source_order = default_priority
+            source_order = [item for item in default_priority if item != "tg" or tg_ready]
         return source_order
 
     async def _fetch_from_nullbr(self, sub: "SubscriptionSnapshot") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -690,6 +701,39 @@ class SubscriptionService:
             }
         )
         return keyword_resources, traces
+
+    async def _fetch_from_tg(self, sub: "SubscriptionSnapshot") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        traces: list[dict[str, Any]] = []
+        keyword = self._build_tg_keyword(sub)
+        if not keyword:
+            traces.append(
+                {
+                    "step": "fetch_tg_keyword_skip",
+                    "status": "warning",
+                    "message": "缺少关键词，无法执行 Telegram 搜索",
+                }
+            )
+            return [], traces
+
+        traces.append(
+            {
+                "step": "fetch_tg_keyword_start",
+                "status": "info",
+                "message": "开始通过关键词调用 Telegram 频道搜索",
+                "payload": {"keyword": keyword},
+            }
+        )
+        media_type = "tv" if sub.media_type == MediaType.TV else "movie"
+        resources = await tg_service.search_115_by_keyword(keyword, media_type=media_type)
+        traces.append(
+            {
+                "step": "fetch_tg_keyword_done",
+                "status": "success" if resources else "warning",
+                "message": f"Telegram 返回 {len(resources)} 条候选资源",
+                "payload": {"count": len(resources)},
+            }
+        )
+        return resources, traces
 
     async def _fetch_nullbr(self, tmdb_id: int, media_type: MediaType) -> dict[str, Any]:
         if media_type == MediaType.TV:
@@ -1320,6 +1364,10 @@ class SubscriptionService:
         return str(sub.title or "").strip()
 
     @staticmethod
+    def _build_tg_keyword(sub: "SubscriptionSnapshot") -> str:
+        return SubscriptionService._build_pansou_keyword(sub)
+
+    @staticmethod
     def _normalize_hdhive_subscription_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []
         for item in items:
@@ -1403,7 +1451,7 @@ class SubscriptionService:
     @staticmethod
     def _normalize_channel(channel: str) -> str:
         normalized = str(channel or "").strip().lower()
-        if normalized not in {"nullbr", "pansou", "hdhive", "priority"}:
+        if normalized not in {"nullbr", "pansou", "hdhive", "tg", "priority"}:
             raise ValueError("unsupported channel")
         return normalized
 

@@ -61,8 +61,11 @@ export const searchApi = {
   getMoviePan115: (tmdbId, page = 1) => api.get(`/search/movie/${tmdbId}/115`, { params: { page } }),
   getMoviePan115Pansou: (tmdbId, page = 1) => api.get(`/search/movie/${tmdbId}/115/pansou`, { params: { page } }),
   getMoviePan115Hdhive: (tmdbId, page = 1) => api.get(`/search/movie/${tmdbId}/115/hdhive`, { params: { page } }),
+  getMoviePan115Tg: (tmdbId, page = 1) => api.get(`/search/movie/${tmdbId}/115/tg`, { params: { page } }),
   getHdhivePan115ByKeyword: (keyword, mediaType = 'movie') =>
     api.get('/search/hdhive/115/by-keyword', { params: { keyword, media_type: mediaType } }),
+  getTgPan115ByKeyword: (keyword, mediaType = 'movie') =>
+    api.get('/search/tg/115/by-keyword', { params: { keyword, media_type: mediaType } }),
   unlockHdhiveResource: (slug) => api.post('/search/hdhive/resource/unlock', { slug }),
   getMovieMagnet: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`),
   getMovieMagnetSeedhub: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`, { params: { source: 'seedhub' } }),
@@ -75,6 +78,7 @@ export const searchApi = {
   getTvPan115: (tmdbId, page = 1) => api.get(`/search/tv/${tmdbId}/115`, { params: { page } }),
   getTvPan115Pansou: (tmdbId, page = 1) => api.get(`/search/tv/${tmdbId}/115/pansou`, { params: { page } }),
   getTvPan115Hdhive: (tmdbId, page = 1) => api.get(`/search/tv/${tmdbId}/115/hdhive`, { params: { page } }),
+  getTvPan115Tg: (tmdbId, page = 1) => api.get(`/search/tv/${tmdbId}/115/tg`, { params: { page } }),
 
   getTvSeason: (tmdbId, seasonNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}`),
   getTvSeasonMagnet: (tmdbId, seasonNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}/magnet`),
@@ -109,7 +113,12 @@ export const settingsApi = {
   getRuntime: () => api.get('/settings/runtime'),
   updateRuntime: (payload) => api.put('/settings/runtime', payload),
   checkNullbr: () => api.get('/settings/nullbr/check'),
-  checkHdhive: () => api.get('/settings/hdhive/check')
+  checkHdhive: () => api.get('/settings/hdhive/check'),
+  checkTg: () => api.get('/settings/tg/check'),
+  tgSendCode: (phone) => api.post('/settings/tg/login/send-code', { phone }),
+  tgVerifyCode: (payload) => api.post('/settings/tg/login/verify-code', payload),
+  tgVerifyPassword: (payload) => api.post('/settings/tg/login/verify-password', payload),
+  tgLogout: () => api.post('/settings/tg/logout')
 }
 
 export const subscriptionApi = {

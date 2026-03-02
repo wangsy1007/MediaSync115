@@ -9,4 +9,5 @@ httpx>=0.27.0
 apscheduler>=3.10.0
 nullbr>=1.0.8
 python-multipart>=0.0.9
-p115client>=1.0.0
+p115client>=0.0.8.4.6
+telethon>=1.36.0

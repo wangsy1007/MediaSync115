@@ -195,6 +195,45 @@
                 <el-empty v-else :description="hdhiveTried ? 'HDHive 暂无可用115网盘资源' : '尚未获取 HDHive 资源'" />
               </div>
             </el-tab-pane>
+
+            <el-tab-pane label="Telegram" name="tg">
+              <div class="resource-tools">
+                <el-button size="small" type="primary" plain :loading="tgLoading" @click="fetchTgPan115">
+                  {{ tgTried ? '刷新 Telegram' : '用 Telegram 获取资源' }}
+                </el-button>
+              </div>
+              <div v-loading="pan115Loading || tgLoading">
+                <el-table v-if="tgPan115Resources.length" :data="tgPan115Resources" stripe class="resource-table">
+                  <el-table-column label="资源名称" min-width="360" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span class="resource-name">{{ row.resource_name || row.title || row.name || '未命名资源' }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="频道" width="150" align="center" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span>{{ row.tg_channel || '-' }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="大小" width="110" align="center">
+                    <template #default="{ row }">{{ row.size || '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="180" align="center" fixed="right">
+                    <template #default="{ row }">
+                      <el-button type="primary" size="small" :loading="Boolean(row.saving)" @click="savePan115Resource(row)">一键转存</el-button>
+                      <el-button
+                        v-if="mediaType === 'tv'"
+                        size="small"
+                        :loading="Boolean(row.extracting)"
+                        @click="openSelectSaveDialog(row)"
+                      >
+                        选集
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <el-empty v-else :description="tgTried ? 'Telegram 暂无可用115网盘资源' : '尚未获取 Telegram 资源'" />
+              </div>
+            </el-tab-pane>
           </el-tabs>
         </el-tab-pane>
 
@@ -345,6 +384,8 @@ const pansouLoading = ref(false)
 const pansouTried = ref(false)
 const hdhiveLoading = ref(false)
 const hdhiveTried = ref(false)
+const tgLoading = ref(false)
+const tgTried = ref(false)
 const magnetLoading = ref(false)
 const seedhubMagnetLoading = ref(false)
 const seedhubMagnetTried = ref(false)
@@ -380,6 +421,9 @@ const pansouPan115Resources = computed(() =>
 )
 const hdhivePan115Resources = computed(() =>
   pan115Resources.value.filter((item) => item?.source_service === 'hdhive')
+)
+const tgPan115Resources = computed(() =>
+  pan115Resources.value.filter((item) => item?.source_service === 'tg')
 )
 const nullbrMagnetResources = computed(() =>
   magnetResources.value.filter((item) => (item?.source_service || 'nullbr') === 'nullbr')
@@ -632,6 +676,32 @@ const buildHdhiveKeywords = () => {
   return candidates
 }
 
+const buildTgKeywords = () => {
+  const title = String(detail.value?.title || '').trim()
+  const originalTitle = String(detail.value?.original_title || '').trim()
+  const aliases = Array.isArray(detail.value?.aliases) ? detail.value.aliases : []
+  const year = String(detail.value?.year || '').trim()
+  const candidates = []
+  const seen = new Set()
+  const add = (keyword) => {
+    const raw = String(keyword || '').trim()
+    if (!raw) return
+    const key = normalizeKeywordFingerprint(raw)
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    candidates.push(raw)
+  }
+  add(title)
+  if (title && year) add(`${title} ${year}`)
+  add(originalTitle)
+  if (originalTitle && year) add(`${originalTitle} ${year}`)
+  for (const alias of aliases) {
+    add(alias)
+    if (year) add(`${alias} ${year}`)
+  }
+  return candidates
+}
+
 const fetchPan115Nullbr = async () => {
   if (!mappedTmdbId.value) return
   pan115Loading.value = true
@@ -641,7 +711,10 @@ const fetchPan115Nullbr = async () => {
       : await searchApi.getMoviePan115(mappedTmdbId.value)
     const nullbrList = (Array.isArray(response.data?.list) ? response.data.list : [])
       .map((item) => ({ ...item, source_service: item.source_service || 'nullbr' }))
-    pan115Resources.value = mergePan115Resources(nullbrList, mergePan115Resources(pansouPan115Resources.value, hdhivePan115Resources.value))
+    pan115Resources.value = mergePan115Resources(
+      nullbrList,
+      mergePan115Resources(tgPan115Resources.value, mergePan115Resources(pansouPan115Resources.value, hdhivePan115Resources.value))
+    )
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || error.message || '115资源获取失败')
   } finally {
@@ -681,7 +754,10 @@ const fetchPansouPan115 = async () => {
       pansouList = Array.from(dedup.values()).slice(0, 30)
     }
     const normalized = pansouList.map((item) => ({ ...item, source_service: item.source_service || 'pansou' }))
-    pan115Resources.value = mergePan115Resources(mergePan115Resources(nullbrPan115Resources.value, hdhivePan115Resources.value), normalized)
+    pan115Resources.value = mergePan115Resources(
+      mergePan115Resources(nullbrPan115Resources.value, hdhivePan115Resources.value),
+      mergePan115Resources(tgPan115Resources.value, normalized)
+    )
     if (!normalized.length) {
       ElMessage.info('Pansou 暂未找到可用资源')
     }
@@ -724,7 +800,7 @@ const fetchHdhivePan115 = async () => {
       .map((item) => ({ ...item, source_service: item.source_service || 'hdhive' }))
     pan115Resources.value = mergePan115Resources(
       mergePan115Resources(nullbrPan115Resources.value, pansouPan115Resources.value),
-      normalizedHdhiveList
+      mergePan115Resources(tgPan115Resources.value, normalizedHdhiveList)
     )
     if (!normalizedHdhiveList.length) {
       ElMessage.info('HDHive 暂未找到可用资源')
@@ -733,6 +809,48 @@ const fetchHdhivePan115 = async () => {
     ElMessage.error(error.response?.data?.detail || error.message || 'HDHive 资源获取失败')
   } finally {
     hdhiveLoading.value = false
+  }
+}
+
+const fetchTgPan115 = async () => {
+  if (tgLoading.value) return
+  tgLoading.value = true
+  tgTried.value = true
+  try {
+    let tgList = []
+    if (mappedTmdbId.value) {
+      const response = mediaType.value === 'tv'
+        ? await searchApi.getTvPan115Tg(mappedTmdbId.value)
+        : await searchApi.getMoviePan115Tg(mappedTmdbId.value)
+      tgList = Array.isArray(response.data?.list) ? response.data.list : []
+    } else {
+      const keywords = buildTgKeywords()
+      const dedup = new Map()
+      for (const keyword of keywords) {
+        const { data } = await searchApi.getTgPan115ByKeyword(keyword, mediaType.value)
+        const rows = Array.isArray(data?.list) ? data.list : []
+        for (const row of rows) {
+          const key = `${String(row?.tg_channel || '')}|${String(row?.tg_message_id || '')}|${String(row?.share_link || row?.pan115_share_link || '')}`.toLowerCase()
+          if (!dedup.has(key)) {
+            dedup.set(key, row)
+          }
+        }
+        if (dedup.size >= 30) break
+      }
+      tgList = Array.from(dedup.values()).slice(0, 30)
+    }
+    const normalizedTgList = tgList.map((item) => ({ ...item, source_service: item.source_service || 'tg' }))
+    pan115Resources.value = mergePan115Resources(
+      mergePan115Resources(nullbrPan115Resources.value, pansouPan115Resources.value),
+      mergePan115Resources(hdhivePan115Resources.value, normalizedTgList)
+    )
+    if (!normalizedTgList.length) {
+      ElMessage.info('Telegram 暂未找到可用资源')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || 'Telegram 资源获取失败')
+  } finally {
+    tgLoading.value = false
   }
 }
 
@@ -853,6 +971,12 @@ const ensureActiveTabLoaded = async () => {
     if (pan115SourceTab.value === 'hdhive') {
       if (hdhivePan115Resources.value.length === 0 && !hdhiveLoading.value && !hdhiveTried.value) {
         await fetchHdhivePan115()
+      }
+      return
+    }
+    if (pan115SourceTab.value === 'tg') {
+      if (tgPan115Resources.value.length === 0 && !tgLoading.value && !tgTried.value) {
+        await fetchTgPan115()
       }
       return
     }
@@ -1200,6 +1324,8 @@ const resetResources = () => {
   pansouTried.value = false
   hdhiveLoading.value = false
   hdhiveTried.value = false
+  tgLoading.value = false
+  tgTried.value = false
   magnetLoading.value = false
   seedhubMagnetLoading.value = false
   seedhubMagnetTried.value = false
@@ -1268,6 +1394,10 @@ watch(pan115SourceTab, async (tab) => {
   }
   if (tab === 'hdhive' && hdhivePan115Resources.value.length === 0 && !hdhiveLoading.value && !hdhiveTried.value) {
     await fetchHdhivePan115()
+    return
+  }
+  if (tab === 'tg' && tgPan115Resources.value.length === 0 && !tgLoading.value && !tgTried.value) {
+    await fetchTgPan115()
     return
   }
   if (tab === 'nullbr' && nullbrPan115Resources.value.length === 0 && mappedTmdbId.value && !pan115Loading.value) {

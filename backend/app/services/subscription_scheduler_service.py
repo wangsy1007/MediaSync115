@@ -14,6 +14,7 @@ class SubscriptionSchedulerService:
         channels = (
             ("nullbr", "Nullbr 订阅检查"),
             ("pansou", "Pansou 订阅检查"),
+            ("tg", "Telegram 订阅检查"),
         )
 
         async with async_session_maker() as db:

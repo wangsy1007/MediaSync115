@@ -244,6 +244,58 @@
                 />
               </div>
             </el-tab-pane>
+
+            <el-tab-pane label="Telegram" name="tg">
+              <div class="resource-tools">
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :loading="tgLoading"
+                  @click="handleFetchTgPan115"
+                >
+                  {{ tgTried ? '刷新 Telegram' : '用 Telegram 获取资源' }}
+                </el-button>
+              </div>
+              <div v-loading="pan115Loading || tgLoading">
+                <el-table
+                  v-if="tgPan115Resources.length > 0"
+                  :data="tgPan115Resources"
+                  stripe
+                  class="resource-table"
+                >
+                  <el-table-column label="资源名称" min-width="300" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <div class="resource-name">{{ row.resource_name || row.title || row.name || '未命名资源' }}</div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="频道" width="150" align="center" show-overflow-tooltip>
+                    <template #default="{ row }">
+                      <span>{{ row.tg_channel || '-' }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="大小" width="100" align="center">
+                    <template #default="{ row }">
+                      <span class="resource-size">{{ row.size || '-' }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="180" align="center" fixed="right">
+                    <template #default="{ row }">
+                      <el-button type="primary" size="small" @click="handleSaveToPan115(row)">
+                        一键转存
+                      </el-button>
+                      <el-button size="small" @click="handleSelectSave(row)">
+                        选集
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <el-empty
+                  v-else
+                  :description="tgTried ? 'Telegram 暂无可用115网盘资源' : '尚未获取 Telegram 资源'"
+                />
+              </div>
+            </el-tab-pane>
           </el-tabs>
         </el-tab-pane>
 
@@ -457,6 +509,8 @@ const pansouLoading = ref(false)
 const pansouTried = ref(false)
 const hdhiveLoading = ref(false)
 const hdhiveTried = ref(false)
+const tgLoading = ref(false)
+const tgTried = ref(false)
 const magnetLoading = ref(false)
 const seedhubMagnetLoading = ref(false)
 const seedhubMagnetTried = ref(false)
@@ -532,6 +586,10 @@ const hdhivePan115Resources = computed(() =>
   pan115Resources.value.filter((item) => item?.source_service === 'hdhive')
 )
 
+const tgPan115Resources = computed(() =>
+  pan115Resources.value.filter((item) => item?.source_service === 'tg')
+)
+
 const nullbrMagnetResources = computed(() =>
   magnetResources.value.filter((item) => (item?.source_service || 'nullbr') === 'nullbr')
 )
@@ -603,6 +661,7 @@ const formatSize = (bytes) => {
 const getResourceSourceLabel = (service) => {
   if (service === 'pansou') return 'Pansou'
   if (service === 'hdhive') return 'HDHive'
+  if (service === 'tg') return 'Telegram'
   if (service === 'nullbr') return 'Nullbr'
   return service || '未知'
 }
@@ -730,10 +789,12 @@ const fetchPan115 = async () => {
     pan115Resources.value = cachedList
     pansouTried.value = cachedList.some((item) => item?.source_service === 'pansou')
     hdhiveTried.value = cachedList.some((item) => item?.source_service === 'hdhive')
+    tgTried.value = cachedList.some((item) => item?.source_service === 'tg')
     pan115Loading.value = false
   } else {
     pansouTried.value = false
     hdhiveTried.value = false
+    tgTried.value = false
     pan115Loading.value = true
   }
 
@@ -742,7 +803,11 @@ const fetchPan115 = async () => {
     const nullbrList = Array.isArray(data.list) ? data.list : []
     const cachedPansouList = pan115Resources.value.filter((item) => item?.source_service === 'pansou')
     const cachedHdhiveList = pan115Resources.value.filter((item) => item?.source_service === 'hdhive')
-    const mergedList = mergePan115Resources(nullbrList, mergePan115Resources(cachedPansouList, cachedHdhiveList))
+    const cachedTgList = pan115Resources.value.filter((item) => item?.source_service === 'tg')
+    const mergedList = mergePan115Resources(
+      nullbrList,
+      mergePan115Resources(cachedTgList, mergePan115Resources(cachedPansouList, cachedHdhiveList))
+    )
     pan115Resources.value = mergedList
     writePan115Cache(mergedList)
   } catch (error) {
@@ -791,6 +856,26 @@ const handleFetchHdhivePan115 = async () => {
     console.error('Failed to fetch hdhive pan115:', error)
   } finally {
     hdhiveLoading.value = false
+  }
+}
+
+const handleFetchTgPan115 = async () => {
+  if (tgLoading.value) return
+  tgLoading.value = true
+  tgTried.value = true
+  try {
+    const { data } = await searchApi.getTvPan115Tg(route.params.id)
+    const tgList = Array.isArray(data.list) ? data.list : []
+    const mergedList = mergePan115Resources(pan115Resources.value, tgList)
+    pan115Resources.value = mergedList
+    writePan115Cache(mergedList)
+    if (tgList.length === 0) {
+      ElMessage.info('Telegram 暂未找到可用资源')
+    }
+  } catch (error) {
+    console.error('Failed to fetch tg pan115:', error)
+  } finally {
+    tgLoading.value = false
   }
 }
 
@@ -1254,6 +1339,8 @@ watch(pan115SourceTab, (tab) => {
     handleFetchPansouPan115()
   } else if (tab === 'hdhive' && hdhivePan115Resources.value.length === 0 && !hdhiveLoading.value && !hdhiveTried.value) {
     handleFetchHdhivePan115()
+  } else if (tab === 'tg' && tgPan115Resources.value.length === 0 && !tgLoading.value && !tgTried.value) {
+    handleFetchTgPan115()
   }
 })
 
@@ -1266,6 +1353,8 @@ watch(() => route.params.id, () => {
   pansouLoading.value = false
   hdhiveTried.value = false
   hdhiveLoading.value = false
+  tgTried.value = false
+  tgLoading.value = false
   seedhubMagnetTried.value = false
   seedhubMagnetLoading.value = false
   magnetResources.value = []
