@@ -9,6 +9,7 @@ from time import monotonic
 import httpx
 
 from app.core.config import settings
+from app.utils.proxy import proxy_manager
 
 
 class HDHiveService:
@@ -38,6 +39,15 @@ class HDHiveService:
     def set_cookie(self, cookie: str | None) -> None:
         self._cookie = str(cookie or "").strip()
 
+    def _create_client(self, **kwargs) -> httpx.AsyncClient:
+        """创建配置了代理的 httpx 客户端"""
+        client_kwargs = {
+            "timeout": self._timeout,
+            "follow_redirects": True,
+            **kwargs
+        }
+        return proxy_manager.create_httpx_client(**client_kwargs)
+
     async def _fetch_text(self, path: str) -> str:
         headers = {
             "user-agent": self._user_agent,
@@ -47,10 +57,13 @@ class HDHiveService:
             headers["cookie"] = self._cookie
 
         url = path if path.startswith("http") else f"{self._base_url}{path}"
-        async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
+        client = self._create_client()
+        try:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
             return response.text
+        finally:
+            await client.aclose()
 
     @staticmethod
     def _extract_bracket_payload(raw: str, token: str) -> str:
@@ -385,12 +398,15 @@ class HDHiveService:
         if self._cookie:
             headers["cookie"] = self._cookie
 
-        async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
+        client = self._create_client()
+        try:
             response = await client.post(resource_url, headers=headers, content=json.dumps([slug]))
             response.raise_for_status()
             parsed = self._parse_next_action_response(response.text)
             parsed["raw"] = response.text[:2000]
             return parsed
+        finally:
+            await client.aclose()
 
     async def unlock_resource(self, slug: str) -> dict[str, Any]:
         slug = str(slug or "").strip()

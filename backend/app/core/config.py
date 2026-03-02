@@ -6,7 +6,14 @@ class Settings(BaseSettings):
     APP_NAME: str = "MediaSync115"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
-    
+
+    # Proxy Configuration
+    HTTP_PROXY: Optional[str] = None
+    HTTPS_PROXY: Optional[str] = None
+    ALL_PROXY: Optional[str] = None
+    # SOCKS_PROXY can be used for services that specifically need SOCKS proxy
+    SOCKS_PROXY: Optional[str] = None
+
     NULLBR_APP_ID: str = "ZWGOwxIrh"
     NULLBR_API_KEY: str = "rIxTz7XHDEHBcP9lGpeVAgs0I7Evg6wc"
     NULLBR_BASE_URL: str = "https://api.nullbr.com/"
@@ -16,7 +23,7 @@ class Settings(BaseSettings):
     TMDB_IMAGE_BASE_URL: str = "https://image.tmdb.org/t/p/w500"
     TMDB_LANGUAGE: str = "zh-CN"
     TMDB_REGION: str = "CN"
-    
+
     PAN115_COOKIE: Optional[str] = None
     HDHIVE_COOKIE: Optional[str] = None
     HDHIVE_BASE_URL: str = "https://hdhive.com/"
@@ -30,14 +37,14 @@ class Settings(BaseSettings):
     TG_CHANNEL_USERNAMES: str = ""
     TG_SEARCH_DAYS: int = 30
     TG_MAX_MESSAGES_PER_CHANNEL: int = 200
-    
+
     EMBY_URL: str = "http://192.168.2.139:8096/"
     EMBY_API_KEY: str = "355c5a7a4cae4966a3c0b40042bbde36"
-    
+
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/mediasync.db"
-    
+
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
-    
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True,

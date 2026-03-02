@@ -9,9 +9,12 @@ from pydantic import BaseModel
 
 from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_service import nullbr_service
+from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.subscription_scheduler_service import subscription_scheduler_service
 from app.services.tg_service import tg_service
+from app.services.tmdb_service import tmdb_service
+from app.utils.proxy import proxy_manager
 
 try:
     import qrcode
@@ -273,6 +276,169 @@ async def check_tg_credentials():
             "user": None,
             "channels": [],
         }
+
+
+@router.get("/tmdb/check")
+async def check_tmdb_credentials():
+    """检查 TMDB API 配置是否有效"""
+    try:
+        # 尝试搜索一个常见电影来验证 API 密钥
+        result = await tmdb_service.search_multi("Inception", page=1)
+        items = result.get("items", [])
+        return {
+            "valid": True,
+            "message": "TMDB API 配置可用",
+            "search_results_count": len(items),
+            "sample_result": items[0] if items else None,
+        }
+    except Exception as exc:
+        return {
+            "valid": False,
+            "message": str(exc),
+            "search_results_count": 0,
+            "sample_result": None,
+        }
+
+
+@router.get("/pansou/check")
+async def check_pansou_credentials():
+    """检查 Pansou 服务是否可用"""
+    try:
+        health = await pansou_service.health_check()
+        is_healthy = health.get("status") == "healthy"
+        return {
+            "valid": is_healthy,
+            "message": "Pansou 服务可用" if is_healthy else f"Pansou 服务异常: {health.get('error', '未知错误')}",
+            "health": health,
+        }
+    except Exception as exc:
+        return {
+            "valid": False,
+            "message": str(exc),
+            "health": None,
+        }
+
+
+@router.get("/proxy")
+async def get_proxy_config():
+    """获取当前代理配置（隐藏敏感信息）"""
+    config = proxy_manager.get_current_config()
+    return {
+        "http_proxy": "***" if config.get("http_proxy") else None,
+        "https_proxy": "***" if config.get("https_proxy") else None,
+        "all_proxy": "***" if config.get("all_proxy") else None,
+        "socks_proxy": "***" if config.get("socks_proxy") else None,
+        "has_proxy": any([
+            config.get("http_proxy"),
+            config.get("https_proxy"),
+            config.get("all_proxy"),
+            config.get("socks_proxy"),
+        ]),
+    }
+
+
+@router.get("/health/all")
+async def check_all_services_health():
+    """统一检查所有服务的健康状态"""
+    results = {
+        "nullbr": {"checking": True},
+        "hdhive": {"checking": True},
+        "tg": {"checking": True},
+        "tmdb": {"checking": True},
+        "pansou": {"checking": True},
+    }
+
+    # 检查 Nullbr
+    try:
+        nullbr_info = await asyncio.to_thread(nullbr_service.get_user_info)
+        results["nullbr"] = {
+            "valid": True,
+            "message": "Nullbr 凭证可用",
+            "user": nullbr_info,
+        }
+    except Exception as exc:
+        results["nullbr"] = {
+            "valid": False,
+            "message": str(exc),
+            "user": None,
+        }
+
+    # 检查 HDHive
+    try:
+        hdhive_info = await hdhive_service.get_user_info()
+        results["hdhive"] = {
+            "valid": True,
+            "message": "HDHive 凭证可用",
+            "user": hdhive_info,
+        }
+    except Exception as exc:
+        results["hdhive"] = {
+            "valid": False,
+            "message": str(exc),
+            "user": None,
+        }
+
+    # 检查 Telegram
+    try:
+        tg_payload = await tg_service.check_connection()
+        tg_authorized = bool(tg_payload.get("authorized"))
+        results["tg"] = {
+            "valid": tg_authorized,
+            "message": str(tg_payload.get("message") or ("Telegram 凭证可用" if tg_authorized else "Telegram 未登录")),
+            "user": tg_payload.get("user"),
+            "channels": tg_payload.get("channels") or [],
+        }
+    except Exception as exc:
+        results["tg"] = {
+            "valid": False,
+            "message": str(exc),
+            "user": None,
+            "channels": [],
+        }
+
+    # 检查 TMDB
+    try:
+        tmdb_result = await tmdb_service.search_multi("Inception", page=1)
+        tmdb_items = tmdb_result.get("items", [])
+        results["tmdb"] = {
+            "valid": True,
+            "message": "TMDB API 配置可用",
+            "search_results_count": len(tmdb_items),
+        }
+    except Exception as exc:
+        results["tmdb"] = {
+            "valid": False,
+            "message": str(exc),
+            "search_results_count": 0,
+        }
+
+    # 检查 Pansou
+    try:
+        pansou_health = await pansou_service.health_check()
+        pansou_healthy = pansou_health.get("status") == "healthy"
+        results["pansou"] = {
+            "valid": pansou_healthy,
+            "message": "Pansou 服务可用" if pansou_healthy else f"Pansou 服务异常",
+            "health": pansou_health,
+        }
+    except Exception as exc:
+        results["pansou"] = {
+            "valid": False,
+            "message": str(exc),
+            "health": None,
+        }
+
+    # 计算整体状态
+    all_valid = all(r.get("valid") for r in results.values())
+    valid_count = sum(1 for r in results.values() if r.get("valid"))
+
+    return {
+        "all_valid": all_valid,
+        "valid_count": valid_count,
+        "total_count": len(results),
+        "services": results,
+        "proxy": await get_proxy_config(),
+    }
 
 
 @router.post("/tg/login/send-code")

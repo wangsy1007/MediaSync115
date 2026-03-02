@@ -7,6 +7,7 @@ import httpx
 from typing import Any, Optional
 from app.core.config import settings
 from app.services.nullbr_api_config import API_CONFIG, AuthType
+from app.utils.proxy import proxy_manager
 
 
 class NullbrClient:
@@ -21,10 +22,17 @@ class NullbrClient:
         self.app_id = app_id or settings.NULLBR_APP_ID
         self.api_key = api_key or settings.NULLBR_API_KEY
         self.base_url = base_url or settings.NULLBR_BASE_URL
-        self._client = httpx.Client(timeout=30.0)
+        self._client: Optional[httpx.Client] = None
+        self._timeout = 30.0
 
         # 为每个 API 配置生成对应的方法
         self._generate_methods()
+
+    def _get_client(self) -> httpx.Client:
+        """获取或创建配置了代理的 httpx 客户端"""
+        if self._client is None:
+            self._client = proxy_manager.create_httpx_client(timeout=self._timeout)
+        return self._client
 
     def _generate_methods(self):
         """根据 API 配置自动生成方法"""
@@ -101,7 +109,8 @@ class NullbrClient:
         # 发送请求
         url = f"{self.base_url}{path.lstrip('/')}"
 
-        response = self._client.request(
+        client = self._get_client()
+        response = client.request(
             method=config["method"],
             url=url,
             params=query if query else None,
@@ -131,7 +140,9 @@ class NullbrClient:
 
     def close(self):
         """关闭客户端"""
-        self._client.close()
+        if self._client is not None:
+            self._client.close()
+            self._client = None
 
     def update_config(
         self,
@@ -152,6 +163,8 @@ class NullbrClient:
             cleaned_base_url = str(base_url).strip()
             if cleaned_base_url:
                 self.base_url = cleaned_base_url
+        # 关闭旧客户端，下次请求时会使用新配置创建
+        self.close()
 
     def __enter__(self):
         return self

@@ -8,6 +8,7 @@ import httpx
 import json
 from typing import List, Union
 from app.core.config import settings
+from app.utils.proxy import proxy_manager
 
 
 class PansouService:
@@ -27,7 +28,7 @@ class PansouService:
         return cleaned
 
     def _build_client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        return proxy_manager.create_httpx_client(
             base_url=self.base_url,
             timeout=30.0,
             follow_redirects=True

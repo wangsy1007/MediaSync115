@@ -3,6 +3,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.utils.proxy import proxy_manager
 
 
 class TmdbService:
@@ -21,23 +22,29 @@ class TmdbService:
 
     async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         url = f"{settings.TMDB_BASE_URL}{path}"
+        client = proxy_manager.create_httpx_client(timeout=15.0, http2=True)
         try:
-            async with httpx.AsyncClient(timeout=15.0, http2=True) as client:
-                response = await client.get(url, params=params)
-                response.raise_for_status()
-                payload = response.json()
-                return payload if isinstance(payload, dict) else {}
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, dict) else {}
         except Exception as exc:
             # Some environments/proxies present a mismatched certificate for TMDB.
             # Fallback once with verify=False to keep subscription/detail flows available.
             if not self._is_tls_hostname_error(exc):
                 raise
+        finally:
+            await client.aclose()
 
-        async with httpx.AsyncClient(timeout=15.0, http2=True, verify=False) as insecure_client:
+        # Fallback without verification
+        insecure_client = proxy_manager.create_httpx_client(timeout=15.0, http2=True, verify=False)
+        try:
             response = await insecure_client.get(url, params=params)
             response.raise_for_status()
             payload = response.json()
             return payload if isinstance(payload, dict) else {}
+        finally:
+            await insecure_client.aclose()
 
     @staticmethod
     def _is_tls_hostname_error(exc: Exception) -> bool:
