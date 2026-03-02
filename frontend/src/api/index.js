@@ -66,6 +66,14 @@ export const searchApi = {
     api.get('/search/hdhive/115/by-keyword', { params: { keyword, media_type: mediaType } }),
   getTgPan115ByKeyword: (keyword, mediaType = 'movie') =>
     api.get('/search/tg/115/by-keyword', { params: { keyword, media_type: mediaType } }),
+  getNullbrPan115ByKeyword: (keyword, mediaType = 'movie', page = 1) =>
+    api.get(`/search/nullbr/${mediaType}/115/by-keyword`, { params: { keyword, page } }),
+  getNullbrMagnetByKeyword: (keyword, mediaType = 'movie', season, episode) =>
+    api.get(`/search/nullbr/${mediaType}/magnet/by-keyword`, { params: { keyword, season, episode } }),
+  getNullbrEd2kByKeyword: (keyword, mediaType = 'movie', season, episode) =>
+    api.get(`/search/nullbr/${mediaType}/ed2k/by-keyword`, { params: { keyword, season, episode } }),
+  getSeedhubMagnetByKeyword: (keyword, mediaType = 'movie') =>
+    api.get(`/search/seedhub/${mediaType}/magnet/by-keyword`, { params: { keyword } }),
   unlockHdhiveResource: (slug) => api.post('/search/hdhive/resource/unlock', { slug }),
   getMovieMagnet: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`),
   getMovieMagnetSeedhub: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`, { params: { source: 'seedhub' } }),

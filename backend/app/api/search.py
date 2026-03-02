@@ -1226,6 +1226,174 @@ def _call_nullbr_resource(fetcher, fallback_payload: dict[str, Any]) -> dict[str
         return fallback_payload
 
 
+def _normalize_keyword_fingerprint(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    return re.sub(r"[\s\-_:：·•.,，。!！?？'\"“”‘’()（）\[\]【】/\\]+", "", text)
+
+
+def _pick_nullbr_tmdb_candidates(keyword: str, media_type: str, max_candidates: int = 8) -> list[int]:
+    normalized_media_type = "tv" if media_type == "tv" else "movie"
+    normalized_keyword = str(keyword or "").strip()
+    if not normalized_keyword:
+        return []
+
+    try:
+        payload = nullbr_service.search(normalized_keyword, 1)
+    except Exception:
+        return []
+
+    rows = payload.get("items") or payload.get("results") or []
+    if not isinstance(rows, list):
+        return []
+
+    keyword_fp = _normalize_keyword_fingerprint(normalized_keyword)
+    scored: list[tuple[int, float]] = []
+    seen: set[int] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_media_type = str(row.get("media_type") or "").strip().lower()
+        if row_media_type != normalized_media_type:
+            continue
+        raw_tmdb_id = row.get("tmdbid") or row.get("tmdb_id") or row.get("id")
+        try:
+            tmdb_id = int(raw_tmdb_id)
+        except Exception:
+            continue
+        if tmdb_id <= 0 or tmdb_id in seen:
+            continue
+        seen.add(tmdb_id)
+
+        title = str(row.get("title") or row.get("name") or "").strip()
+        title_fp = _normalize_keyword_fingerprint(title)
+        score = 0.0
+        if keyword_fp and title_fp:
+            if keyword_fp == title_fp:
+                score = 1.0
+            elif keyword_fp in title_fp or title_fp in keyword_fp:
+                score = 0.9
+            else:
+                overlap = len(set(keyword_fp) & set(title_fp))
+                score = overlap / max(len(set(keyword_fp)), 1)
+        scored.append((tmdb_id, score))
+
+    scored.sort(key=lambda item: item[1], reverse=True)
+    return [tmdb_id for tmdb_id, _ in scored[:max_candidates]]
+
+
+def _build_keyword_resource_payload(
+    *,
+    keyword: str,
+    media_type: str,
+    resource_list: list[dict],
+    search_service: str,
+    attempts: list[dict[str, Any]],
+    matched_tmdb_id: Optional[int] = None,
+) -> dict[str, Any]:
+    return {
+        "keyword": str(keyword or "").strip(),
+        "media_type": "tv" if media_type == "tv" else "movie",
+        "matched_tmdb_id": matched_tmdb_id,
+        "list": resource_list,
+        "search_service": search_service,
+        "attempts": attempts,
+    }
+
+
+async def _search_nullbr_resource_by_keyword(
+    *,
+    keyword: str,
+    media_type: str,
+    resource_kind: str,
+    page: int = 1,
+    season: Optional[int] = None,
+    episode: Optional[int] = None,
+) -> dict[str, Any]:
+    normalized_keyword = str(keyword or "").strip()
+    normalized_media_type = "tv" if media_type == "tv" else "movie"
+    attempts: list[dict[str, Any]] = []
+    if not normalized_keyword:
+        return _build_keyword_resource_payload(
+            keyword=normalized_keyword,
+            media_type=normalized_media_type,
+            resource_list=[],
+            search_service="nullbr",
+            attempts=attempts,
+        )
+
+    candidate_tmdb_ids = await asyncio.to_thread(
+        _pick_nullbr_tmdb_candidates,
+        normalized_keyword,
+        normalized_media_type,
+    )
+    if not candidate_tmdb_ids:
+        attempts.append({"service": "nullbr-search", "status": "empty", "keyword": normalized_keyword})
+        return _build_keyword_resource_payload(
+            keyword=normalized_keyword,
+            media_type=normalized_media_type,
+            resource_list=[],
+            search_service="nullbr",
+            attempts=attempts,
+        )
+
+    for candidate_tmdb_id in candidate_tmdb_ids:
+        attempts.append({"service": "nullbr-search", "status": "candidate", "tmdb_id": candidate_tmdb_id})
+        fallback = _resource_fallback_payload(
+            tmdb_id=candidate_tmdb_id,
+            media_type=normalized_media_type,
+            season_number=season,
+            episode_number=episode,
+            error="",
+        )
+
+        def fetcher():
+            if resource_kind == "pan115":
+                if normalized_media_type == "tv":
+                    return nullbr_service.get_tv_pan115(candidate_tmdb_id, page)
+                return nullbr_service.get_movie_pan115(candidate_tmdb_id, page)
+            if resource_kind == "magnet":
+                if normalized_media_type == "tv":
+                    return nullbr_service.get_tv_magnet(candidate_tmdb_id, season, episode)
+                return nullbr_service.get_movie_magnet(candidate_tmdb_id)
+            if resource_kind == "ed2k":
+                if normalized_media_type == "tv":
+                    return nullbr_service.get_tv_ed2k(candidate_tmdb_id, season, episode)
+                return nullbr_service.get_movie_ed2k(candidate_tmdb_id)
+            raise ValueError(f"unsupported resource kind: {resource_kind}")
+
+        result = await asyncio.to_thread(_call_nullbr_resource, fetcher, fallback)
+        resource_list = list(result.get("list") or []) if isinstance(result, dict) else []
+        if resource_list:
+            attempts.append(
+                {
+                    "service": "nullbr",
+                    "status": "ok",
+                    "tmdb_id": candidate_tmdb_id,
+                    "count": len(resource_list),
+                }
+            )
+            return _build_keyword_resource_payload(
+                keyword=normalized_keyword,
+                media_type=normalized_media_type,
+                resource_list=resource_list,
+                search_service="nullbr",
+                attempts=attempts,
+                matched_tmdb_id=candidate_tmdb_id,
+            )
+
+        attempts.append({"service": "nullbr", "status": "empty", "tmdb_id": candidate_tmdb_id})
+
+    return _build_keyword_resource_payload(
+        keyword=normalized_keyword,
+        media_type=normalized_media_type,
+        resource_list=[],
+        search_service="nullbr",
+        attempts=attempts,
+    )
+
+
 async def _load_media_payload(tmdb_id: int, media_type: str) -> dict:
     try:
         if media_type == "tv":
@@ -1728,6 +1896,87 @@ async def get_tg_pan115_by_keyword(
         "list": tg_list,
         "attempts": attempts,
         "search_service": "tg",
+    }
+
+
+@router.get("/nullbr/{media_type}/115/by-keyword")
+async def get_nullbr_pan115_by_keyword(
+    media_type: str,
+    keyword: str = Query(..., min_length=1, description="影视名称关键词"),
+    page: int = Query(1, ge=1),
+):
+    normalized_media_type = str(media_type or "").strip().lower()
+    if normalized_media_type not in {"movie", "tv"}:
+        raise HTTPException(status_code=400, detail="media_type must be movie or tv")
+    return await _search_nullbr_resource_by_keyword(
+        keyword=keyword,
+        media_type=normalized_media_type,
+        resource_kind="pan115",
+        page=page,
+    )
+
+
+@router.get("/nullbr/{media_type}/magnet/by-keyword")
+async def get_nullbr_magnet_by_keyword(
+    media_type: str,
+    keyword: str = Query(..., min_length=1, description="影视名称关键词"),
+    season: Optional[int] = Query(None, description="Season"),
+    episode: Optional[int] = Query(None, description="Episode"),
+):
+    normalized_media_type = str(media_type or "").strip().lower()
+    if normalized_media_type not in {"movie", "tv"}:
+        raise HTTPException(status_code=400, detail="media_type must be movie or tv")
+    return await _search_nullbr_resource_by_keyword(
+        keyword=keyword,
+        media_type=normalized_media_type,
+        resource_kind="magnet",
+        season=season,
+        episode=episode,
+    )
+
+
+@router.get("/nullbr/{media_type}/ed2k/by-keyword")
+async def get_nullbr_ed2k_by_keyword(
+    media_type: str,
+    keyword: str = Query(..., min_length=1, description="影视名称关键词"),
+    season: Optional[int] = Query(None, description="Season"),
+    episode: Optional[int] = Query(None, description="Episode"),
+):
+    normalized_media_type = str(media_type or "").strip().lower()
+    if normalized_media_type not in {"movie", "tv"}:
+        raise HTTPException(status_code=400, detail="media_type must be movie or tv")
+    return await _search_nullbr_resource_by_keyword(
+        keyword=keyword,
+        media_type=normalized_media_type,
+        resource_kind="ed2k",
+        season=season,
+        episode=episode,
+    )
+
+
+@router.get("/seedhub/{media_type}/magnet/by-keyword")
+async def get_seedhub_magnet_by_keyword(
+    media_type: str,
+    keyword: str = Query(..., min_length=1, description="影视名称关键词"),
+):
+    normalized_media_type = str(media_type or "").strip().lower()
+    if normalized_media_type not in {"movie", "tv"}:
+        raise HTTPException(status_code=400, detail="media_type must be movie or tv")
+
+    normalized_keyword = str(keyword or "").strip()
+    items: list[dict] = []
+    attempts: list[dict[str, Any]] = []
+    try:
+        items = await seedhub_service.search_magnets_by_keyword(normalized_keyword, limit=40)
+        attempts.append({"service": "seedhub", "status": "ok", "count": len(items), "keyword": normalized_keyword})
+    except Exception as exc:
+        attempts.append({"service": "seedhub", "status": "error", "error": str(exc), "keyword": normalized_keyword})
+    return {
+        "keyword": normalized_keyword,
+        "media_type": normalized_media_type,
+        "list": items,
+        "attempts": attempts,
+        "search_service": "seedhub",
     }
 
 

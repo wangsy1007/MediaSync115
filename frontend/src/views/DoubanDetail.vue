@@ -30,7 +30,7 @@
           </div>
           <p class="mapping-tip">
             <span v-if="mappedTmdbId">已匹配 TMDB：{{ mappedTmdbId }}</span>
-            <span v-else>未匹配 TMDB，115 资源使用豆瓣关键词方案；磁链/ED2K 需先匹配 TMDB。</span>
+            <span v-else>未匹配 TMDB，当前页面会自动使用豆瓣名称关键词检索 115/磁链/ED2K 资源。</span>
           </p>
         </div>
       </div>
@@ -78,7 +78,7 @@
                     @current-change="(page) => (pan115Pager.nullbr = page)"
                   />
                 </div>
-                <el-empty v-else :description="mappedTmdbId ? 'Nullbr 暂无115网盘资源' : '请先匹配 TMDB 后查看 Nullbr 资源'" />
+                <el-empty v-else :description="nullbrTried ? 'Nullbr 暂无115网盘资源' : '尚未获取 Nullbr 资源'" />
               </div>
             </el-tab-pane>
 
@@ -281,7 +281,7 @@
           <el-tabs v-model="magnetSourceTab" class="source-tabs">
             <el-tab-pane label="Nullbr" name="nullbr">
               <div v-loading="magnetLoading">
-                <el-table v-if="mappedTmdbId && nullbrMagnetResources.length" :data="nullbrMagnetResources" stripe class="resource-table">
+                <el-table v-if="nullbrMagnetResources.length" :data="nullbrMagnetResources" stripe class="resource-table">
                   <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
                     <template #default="{ row }">{{ row.name || '-' }}</template>
                   </el-table-column>
@@ -295,7 +295,7 @@
                     </template>
                   </el-table-column>
                 </el-table>
-                <el-empty v-else :description="mappedTmdbId ? 'Nullbr 暂无磁力资源' : '请先匹配 TMDB 后再查看磁力资源'" />
+                <el-empty v-else :description="nullbrMagnetTried ? 'Nullbr 暂无磁力资源' : '尚未获取 Nullbr 磁力资源'" />
               </div>
             </el-tab-pane>
 
@@ -306,7 +306,7 @@
                 </el-button>
               </div>
               <div v-loading="seedhubMagnetLoading">
-                <el-table v-if="mappedTmdbId && seedhubMagnetResources.length" :data="seedhubMagnetResources" stripe class="resource-table">
+                <el-table v-if="seedhubMagnetResources.length" :data="seedhubMagnetResources" stripe class="resource-table">
                   <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
                     <template #default="{ row }">{{ row.name || '-' }}</template>
                   </el-table-column>
@@ -328,7 +328,7 @@
 
         <el-tab-pane label="ED2K" name="ed2k">
           <div v-loading="ed2kLoading">
-            <el-table v-if="mappedTmdbId && ed2kResources.length" :data="ed2kResources" stripe class="resource-table">
+            <el-table v-if="ed2kResources.length" :data="ed2kResources" stripe class="resource-table">
               <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
                 <template #default="{ row }">{{ row.title || row.name || '-' }}</template>
               </el-table-column>
@@ -339,7 +339,7 @@
                 </template>
               </el-table-column>
             </el-table>
-            <el-empty v-else :description="mappedTmdbId ? '暂无 ED2K 资源' : '请先匹配 TMDB 后再查看 ED2K 资源'" />
+            <el-empty v-else :description="ed2kTried ? '暂无 ED2K 资源' : '尚未获取 ED2K 资源'" />
           </div>
         </el-tab-pane>
       </el-tabs>
@@ -426,10 +426,13 @@ const hdhiveLoading = ref(false)
 const hdhiveTried = ref(false)
 const tgLoading = ref(false)
 const tgTried = ref(false)
+const nullbrTried = ref(false)
 const magnetLoading = ref(false)
+const nullbrMagnetTried = ref(false)
 const seedhubMagnetLoading = ref(false)
 const seedhubMagnetTried = ref(false)
 const ed2kLoading = ref(false)
+const ed2kTried = ref(false)
 const seedhubMagnetTaskId = ref('')
 const selectSaveDialogVisible = ref(false)
 const extractingFiles = ref(false)
@@ -759,18 +762,42 @@ const buildTgKeywords = () => {
 }
 
 const fetchPan115Nullbr = async () => {
-  if (!mappedTmdbId.value) return
+  if (!detail.value) return
+  nullbrTried.value = true
   pan115Loading.value = true
   try {
-    const response = mediaType.value === 'tv'
-      ? await searchApi.getTvPan115(mappedTmdbId.value)
-      : await searchApi.getMoviePan115(mappedTmdbId.value)
-    const nullbrList = (Array.isArray(response.data?.list) ? response.data.list : [])
-      .map((item) => ({ ...item, source_service: item.source_service || 'nullbr' }))
+    let nullbrList = []
+    if (mappedTmdbId.value) {
+      const response = mediaType.value === 'tv'
+        ? await searchApi.getTvPan115(mappedTmdbId.value)
+        : await searchApi.getMoviePan115(mappedTmdbId.value)
+      nullbrList = Array.isArray(response.data?.list) ? response.data.list : []
+    } else {
+      const keywords = buildPansouKeywords()
+      const dedup = new Map()
+      for (const keyword of keywords) {
+        const { data } = await searchApi.getNullbrPan115ByKeyword(keyword, mediaType.value)
+        const rows = Array.isArray(data?.list) ? data.list : []
+        for (const row of rows) {
+          const link = resolvePan115ShareLink(row)
+          const key = `${String(row?.id || '')}|${String(link || row?.title || row?.name || '').toLowerCase()}`
+          if (!dedup.has(key)) {
+            dedup.set(key, row)
+          }
+        }
+        if (dedup.size >= 30) break
+      }
+      nullbrList = Array.from(dedup.values()).slice(0, 30)
+    }
+
+    const normalized = nullbrList.map((item) => ({ ...item, source_service: item.source_service || 'nullbr' }))
     pan115Resources.value = mergePan115Resources(
-      nullbrList,
+      normalized,
       mergePan115Resources(tgPan115Resources.value, mergePan115Resources(pansouPan115Resources.value, hdhivePan115Resources.value))
     )
+    if (!normalized.length) {
+      ElMessage.info('Nullbr 暂未找到可用115资源')
+    }
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || error.message || '115资源获取失败')
   } finally {
@@ -911,14 +938,32 @@ const fetchTgPan115 = async () => {
 }
 
 const fetchMagnetNullbr = async () => {
-  if (!mappedTmdbId.value) return
+  if (!detail.value) return
+  nullbrMagnetTried.value = true
   magnetLoading.value = true
   try {
-    const magnetResp = mediaType.value === 'tv'
-      ? await searchApi.getTvMagnet(mappedTmdbId.value)
-      : await searchApi.getMovieMagnet(mappedTmdbId.value)
-    const nullbrList = (Array.isArray(magnetResp.data?.list) ? magnetResp.data.list : [])
-      .map((item) => ({ ...item, source_service: item?.source_service || 'nullbr' }))
+    let nullbrList = []
+    if (mappedTmdbId.value) {
+      const magnetResp = mediaType.value === 'tv'
+        ? await searchApi.getTvMagnet(mappedTmdbId.value)
+        : await searchApi.getMovieMagnet(mappedTmdbId.value)
+      nullbrList = Array.isArray(magnetResp.data?.list) ? magnetResp.data.list : []
+    } else {
+      const keywords = buildPansouKeywords()
+      const dedup = new Map()
+      for (const keyword of keywords) {
+        const { data } = await searchApi.getNullbrMagnetByKeyword(keyword, mediaType.value)
+        const rows = Array.isArray(data?.list) ? data.list : []
+        for (const row of rows) {
+          const magnet = String(row?.magnet || '').trim().toLowerCase()
+          if (!magnet || dedup.has(magnet)) continue
+          dedup.set(magnet, row)
+        }
+        if (dedup.size >= 40) break
+      }
+      nullbrList = Array.from(dedup.values())
+    }
+    nullbrList = nullbrList.map((item) => ({ ...item, source_service: item?.source_service || 'nullbr' }))
     magnetResources.value = mergeMagnetResources(nullbrList, seedhubMagnetResources.value)
   } catch {
     magnetResources.value = seedhubMagnetResources.value.slice()
@@ -980,19 +1025,36 @@ const pollSeedhubMagnetTask = async (taskId) => {
 }
 
 const fetchSeedhubMagnet = async () => {
-  if (!mappedTmdbId.value || seedhubMagnetLoading.value) return
+  if (!detail.value || seedhubMagnetLoading.value) return
   seedhubMagnetLoading.value = true
   seedhubMagnetTried.value = true
   stopSeedhubTaskPolling()
   try {
-    const request = mediaType.value === 'tv'
-      ? searchApi.createTvSeedhubMagnetTask(mappedTmdbId.value)
-      : searchApi.createMovieSeedhubMagnetTask(mappedTmdbId.value)
-    const { data } = await request
-    const taskId = String(data?.task_id || '')
-    if (!taskId) throw new Error('未获取到任务ID')
-    seedhubMagnetTaskId.value = taskId
-    await pollSeedhubMagnetTask(taskId)
+    if (mappedTmdbId.value) {
+      const request = mediaType.value === 'tv'
+        ? searchApi.createTvSeedhubMagnetTask(mappedTmdbId.value)
+        : searchApi.createMovieSeedhubMagnetTask(mappedTmdbId.value)
+      const { data } = await request
+      const taskId = String(data?.task_id || '')
+      if (!taskId) throw new Error('未获取到任务ID')
+      seedhubMagnetTaskId.value = taskId
+      await pollSeedhubMagnetTask(taskId)
+      return
+    }
+
+    const keywords = buildPansouKeywords()
+    let merged = magnetResources.value.slice()
+    for (const keyword of keywords) {
+      const { data } = await searchApi.getSeedhubMagnetByKeyword(keyword, mediaType.value)
+      const rows = Array.isArray(data?.list) ? data.list : []
+      const normalizedRows = rows.map((item) => ({ ...item, source_service: item?.source_service || 'seedhub' }))
+      merged = mergeMagnetResources(merged, normalizedRows)
+      if (merged.filter((item) => item?.source_service === 'seedhub').length >= 40) break
+    }
+    magnetResources.value = merged
+    if (seedhubMagnetResources.value.length === 0) {
+      ElMessage.info('SeedHub 暂未找到可用磁链')
+    }
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || error.message || 'SeedHub 磁链获取失败')
     seedhubMagnetLoading.value = false
@@ -1001,13 +1063,31 @@ const fetchSeedhubMagnet = async () => {
 }
 
 const fetchEd2kResources = async () => {
-  if (!mappedTmdbId.value) return
+  if (!detail.value) return
+  ed2kTried.value = true
   ed2kLoading.value = true
   try {
-    const ed2kResp = mediaType.value === 'tv'
-      ? await searchApi.getTvEd2k(mappedTmdbId.value)
-      : await searchApi.getMovieEd2k(mappedTmdbId.value)
-    ed2kResources.value = Array.isArray(ed2kResp.data?.list) ? ed2kResp.data.list : []
+    if (mappedTmdbId.value) {
+      const ed2kResp = mediaType.value === 'tv'
+        ? await searchApi.getTvEd2k(mappedTmdbId.value)
+        : await searchApi.getMovieEd2k(mappedTmdbId.value)
+      ed2kResources.value = Array.isArray(ed2kResp.data?.list) ? ed2kResp.data.list : []
+      return
+    }
+
+    const keywords = buildPansouKeywords()
+    const dedup = new Map()
+    for (const keyword of keywords) {
+      const { data } = await searchApi.getNullbrEd2kByKeyword(keyword, mediaType.value)
+      const rows = Array.isArray(data?.list) ? data.list : []
+      for (const row of rows) {
+        const link = String(row?.ed2k || row?.url || '').trim().toLowerCase()
+        if (!link || dedup.has(link)) continue
+        dedup.set(link, row)
+      }
+      if (dedup.size >= 40) break
+    }
+    ed2kResources.value = Array.from(dedup.values())
   } catch {
     ed2kResources.value = []
   } finally {
@@ -1036,27 +1116,26 @@ const ensureActiveTabLoaded = async () => {
       }
       return
     }
-    if (nullbrPan115Resources.value.length === 0 && !pan115Loading.value && mappedTmdbId.value) {
+    if (nullbrPan115Resources.value.length === 0 && !pan115Loading.value && !nullbrTried.value) {
       await fetchPan115Nullbr()
     }
     return
   }
 
   if (activeTab.value === 'magnet') {
-    if (!mappedTmdbId.value) return
     if (magnetSourceTab.value === 'seedhub') {
       if (seedhubMagnetResources.value.length === 0 && !seedhubMagnetLoading.value && !seedhubMagnetTried.value) {
         await fetchSeedhubMagnet()
       }
       return
     }
-    if (nullbrMagnetResources.value.length === 0 && !magnetLoading.value) {
+    if (nullbrMagnetResources.value.length === 0 && !magnetLoading.value && !nullbrMagnetTried.value) {
       await fetchMagnetNullbr()
     }
     return
   }
 
-  if (activeTab.value === 'ed2k' && mappedTmdbId.value && ed2kResources.value.length === 0 && !ed2kLoading.value) {
+  if (activeTab.value === 'ed2k' && ed2kResources.value.length === 0 && !ed2kLoading.value && !ed2kTried.value) {
     await fetchEd2kResources()
   }
 }
@@ -1377,6 +1456,7 @@ const resetResources = () => {
   magnetResources.value = []
   ed2kResources.value = []
   pan115Loading.value = false
+  nullbrTried.value = false
   pansouLoading.value = false
   pansouTried.value = false
   hdhiveLoading.value = false
@@ -1384,9 +1464,11 @@ const resetResources = () => {
   tgLoading.value = false
   tgTried.value = false
   magnetLoading.value = false
+  nullbrMagnetTried.value = false
   seedhubMagnetLoading.value = false
   seedhubMagnetTried.value = false
   ed2kLoading.value = false
+  ed2kTried.value = false
   selectSaveDialogVisible.value = false
   extractingFiles.value = false
   selectSaving.value = false
@@ -1461,17 +1543,17 @@ watch(pan115SourceTab, async (tab) => {
     await fetchTgPan115()
     return
   }
-  if (tab === 'nullbr' && nullbrPan115Resources.value.length === 0 && mappedTmdbId.value && !pan115Loading.value) {
+  if (tab === 'nullbr' && nullbrPan115Resources.value.length === 0 && !pan115Loading.value && !nullbrTried.value) {
     await fetchPan115Nullbr()
   }
 })
 
 watch(magnetSourceTab, async (tab) => {
-  if (tab === 'seedhub' && seedhubMagnetResources.value.length === 0 && mappedTmdbId.value && !seedhubMagnetLoading.value && !seedhubMagnetTried.value) {
+  if (tab === 'seedhub' && seedhubMagnetResources.value.length === 0 && !seedhubMagnetLoading.value && !seedhubMagnetTried.value) {
     await fetchSeedhubMagnet()
     return
   }
-  if (tab === 'nullbr' && nullbrMagnetResources.value.length === 0 && mappedTmdbId.value && !magnetLoading.value) {
+  if (tab === 'nullbr' && nullbrMagnetResources.value.length === 0 && !magnetLoading.value && !nullbrMagnetTried.value) {
     await fetchMagnetNullbr()
   }
 })
