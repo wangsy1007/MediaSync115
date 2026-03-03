@@ -33,6 +33,14 @@ class TvMissingService:
                 "counts": {"aired": 0, "existing": 0, "missing": 0},
             }
 
+        existing_pairs_all = {
+            (int(pair[0]), int(pair[1]))
+            for pair in (emby_result.get("episodes") or [])
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        }
+        if not include_specials:
+            existing_pairs_all = {pair for pair in existing_pairs_all if pair[0] > 0}
+
         try:
             aired_pairs = await self._collect_aired_episodes(normalized_tmdb_id, include_specials=include_specials)
         except Exception as exc:
@@ -40,13 +48,14 @@ class TvMissingService:
                 "status": "tmdb_error",
                 "message": f"TMDB 查询失败: {str(exc)}",
                 "aired_episodes": [],
-                "existing_episodes": sorted(emby_result["episodes"]),
+                "existing_episodes": self._sorted_pairs(existing_pairs_all),
                 "missing_episodes": [],
                 "missing_by_season": {},
-                "counts": {"aired": 0, "existing": len(emby_result["episodes"]), "missing": 0},
+                "counts": {"aired": 0, "existing": len(existing_pairs_all), "missing": 0},
             }
 
-        existing_pairs = set(emby_result["episodes"])
+        # “已入库集数”只统计已播出范围内，避免未播出/特别篇干扰统计。
+        existing_pairs = existing_pairs_all & aired_pairs
         missing_pairs = aired_pairs - existing_pairs
 
         return {

@@ -28,31 +28,42 @@ class EmbyService:
                 "episodes": set(),
             }
 
-        url = f"{self.base_url}/emby/Items"
-        params = {
-            "api_key": self.api_key,
-            "ProviderIds.Tmdb": tmdb_id,
-            "IncludeItemTypes": "Episode",
-            "Recursive": "true",
-            "Fields": "ProviderIds"
-        }
-
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.get(url, params=params, timeout=10.0)
-                response.raise_for_status()
-                data = response.json()
-                
-                existing_episodes = set()
-                for item in data.get("Items", []):
-                    # ParentIndexNumber 通常是季号，IndexNumber 是集号
-                    season_num = item.get("ParentIndexNumber")
-                    episode_num = item.get("IndexNumber")
-                    
-                    if episode_num is not None:
-                        # Emby中如果是特别篇等，可能没有正常的season，我们默认给季号为1如果缺失
-                        season = season_num if season_num is not None else 1
-                        existing_episodes.add((int(season), int(episode_num)))
+                series_ids = await self._find_series_ids_by_tmdb(client, tmdb_id)
+                if not series_ids:
+                    return {
+                        "status": "ok",
+                        "message": "Emby 中未匹配到该 TMDB 剧集",
+                        "episodes": set(),
+                    }
+
+                existing_episodes: set[tuple[int, int]] = set()
+                for series_id in series_ids:
+                    episodes = await self._fetch_items(
+                        client,
+                        {
+                            "ParentId": series_id,
+                            "IncludeItemTypes": "Episode",
+                            "Recursive": "true",
+                            "Fields": "ParentIndexNumber,IndexNumber,IndexNumberEnd,SeriesId",
+                        },
+                    )
+                    for item in episodes:
+                        if not isinstance(item, dict):
+                            continue
+                        episode_start = self._safe_int(item.get("IndexNumber"))
+                        if episode_start is None or episode_start <= 0:
+                            continue
+
+                        season = self._safe_int(item.get("ParentIndexNumber"), default=1)
+                        season_number = season if season is not None and season >= 0 else 1
+                        episode_end = self._safe_int(item.get("IndexNumberEnd"), default=episode_start)
+                        if episode_end is None or episode_end < episode_start:
+                            episode_end = episode_start
+
+                        for episode_number in range(episode_start, episode_end + 1):
+                            existing_episodes.add((season_number, episode_number))
                 return {
                     "status": "ok",
                     "message": "查询成功",
@@ -65,6 +76,82 @@ class EmbyService:
                     "message": str(e),
                     "episodes": set(),
                 }
+
+    async def _find_series_ids_by_tmdb(self, client: httpx.AsyncClient, tmdb_id: int) -> list[str]:
+        target = str(int(tmdb_id))
+        series_items = await self._fetch_items(
+            client,
+            {
+                "IncludeItemTypes": "Series",
+                "Recursive": "true",
+                "Fields": "ProviderIds",
+                "AnyProviderIdEquals": f"Tmdb.{target}",
+            },
+        )
+        if not series_items:
+            # 兼容部分 Emby/Jellyfin 服务端对 AnyProviderIdEquals 支持不完整的情况
+            series_items = await self._fetch_items(
+                client,
+                {
+                    "IncludeItemTypes": "Series",
+                    "Recursive": "true",
+                    "Fields": "ProviderIds",
+                    "ProviderIds.Tmdb": target,
+                },
+            )
+
+        series_ids: list[str] = []
+        seen: set[str] = set()
+        for item in series_items:
+            if not isinstance(item, dict):
+                continue
+            series_id = str(item.get("Id") or "").strip()
+            if not series_id or series_id in seen:
+                continue
+            seen.add(series_id)
+            series_ids.append(series_id)
+        return series_ids
+
+    async def _fetch_items(self, client: httpx.AsyncClient, params: dict[str, Any]) -> list[dict[str, Any]]:
+        if not self.base_url or not self.api_key:
+            return []
+
+        url = f"{self.base_url}/emby/Items"
+        start_index = 0
+        limit = 200
+        merged: list[dict[str, Any]] = []
+        while True:
+            query = dict(params)
+            query["api_key"] = self.api_key
+            query["StartIndex"] = start_index
+            query["Limit"] = limit
+            response = await client.get(url, params=query, timeout=15.0)
+            response.raise_for_status()
+            payload = response.json() if response.content else {}
+            if not isinstance(payload, dict):
+                break
+            rows = payload.get("Items")
+            if not isinstance(rows, list):
+                rows = []
+            dict_rows = [row for row in rows if isinstance(row, dict)]
+            merged.extend(dict_rows)
+
+            total = self._safe_int(payload.get("TotalRecordCount"), default=0) or 0
+            if not dict_rows:
+                break
+            start_index += len(dict_rows)
+            if total > 0 and start_index >= total:
+                break
+            if len(dict_rows) < limit:
+                break
+        return merged
+
+    @staticmethod
+    def _safe_int(value: Any, default: int | None = None) -> int | None:
+        try:
+            return int(value)
+        except Exception:
+            return default
 
     async def get_downloaded_episodes(self, tmdb_id: int) -> Set[Tuple[int, int]]:
         result = await self.get_downloaded_episodes_with_status(tmdb_id)
