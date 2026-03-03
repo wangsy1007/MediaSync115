@@ -67,17 +67,6 @@ class RuntimeSettingsRequest(BaseModel):
     subscription_hdhive_unlock_threshold_inclusive: Optional[bool] = None
 
 
-class TgSendCodeRequest(BaseModel):
-    phone: Optional[str] = None
-
-
-class TgVerifyCodeRequest(BaseModel):
-    phone: str
-    code: str
-    phone_code_hash: str
-    session: str
-
-
 class TgVerifyPasswordRequest(BaseModel):
     password: str
     session: str
@@ -472,52 +461,6 @@ async def check_all_services_health():
         "services": results,
         "proxy": await get_proxy_config(),
     }
-
-
-@router.post("/tg/login/send-code")
-async def send_tg_login_code(payload: TgSendCodeRequest):
-    phone = str(payload.phone or runtime_settings_service.get_tg_phone() or "").strip()
-    if not phone:
-        raise HTTPException(status_code=400, detail="请先配置手机号")
-    try:
-        result = await tg_service.send_login_code(phone)
-        return {
-            "success": True,
-            "phone": result.get("phone"),
-            "phone_code_hash": result.get("phone_code_hash"),
-            "session": result.get("session"),
-        }
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-
-@router.post("/tg/login/verify-code")
-async def verify_tg_login_code(payload: TgVerifyCodeRequest):
-    phone = str(payload.phone or "").strip()
-    code = str(payload.code or "").strip()
-    phone_code_hash = str(payload.phone_code_hash or "").strip()
-    session = str(payload.session or "").strip()
-    if not phone or not code or not phone_code_hash or not session:
-        raise HTTPException(status_code=400, detail="手机号、验证码、会话信息不能为空")
-
-    try:
-        result = await tg_service.verify_login_code(
-            phone=phone,
-            code=code,
-            phone_code_hash=phone_code_hash,
-            session=session,
-        )
-        response = {
-            "success": True,
-            "need_password": bool(result.get("need_password", False)),
-            "session": str(result.get("session") or ""),
-            "user": result.get("user"),
-        }
-        if not response["need_password"] and response["session"]:
-            runtime_settings_service.update_tg_session(response["session"])
-        return response
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/tg/login/verify-password")

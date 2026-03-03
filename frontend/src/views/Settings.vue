@@ -368,21 +368,14 @@
             </el-form-item>
           </el-form>
 
-          <el-divider content-position="left">短信验证码登录（可选）</el-divider>
-          <el-form :model="tgLoginForm" label-width="120px">
-            <el-form-item label="验证码">
-              <el-input v-model="tgLoginForm.code" placeholder="输入短信验证码" />
-            </el-form-item>
+          <el-form v-if="tgLoginForm.needPassword" :model="tgLoginForm" label-width="120px">
             <el-form-item label="二步密码">
-              <el-input v-model="tgLoginForm.password" placeholder="如开启二步验证请输入" type="password" show-password />
+              <el-input v-model="tgLoginForm.password" placeholder="请输入 Telegram 二步验证密码" type="password" show-password />
             </el-form-item>
             <el-form-item>
-              <el-button :loading="sendingTgCode" @click="handleSendTgCode">发送验证码</el-button>
-              <el-button type="primary" :loading="verifyingTgCode" @click="handleVerifyTgCode">验证验证码</el-button>
               <el-button
                 type="warning"
                 :loading="verifyingTgPassword"
-                :disabled="!tgLoginForm.needPassword"
                 @click="handleVerifyTgPassword"
               >
                 提交二步密码
@@ -859,9 +852,7 @@ const tgForm = ref({
 })
 
 const tgLoginForm = ref({
-  phoneCodeHash: '',
   tempSession: '',
-  code: '',
   password: '',
   needPassword: false
 })
@@ -960,8 +951,6 @@ const savingEmby = ref(false)
 const testingEmby = ref(false)
 const savingTg = ref(false)
 const testingTg = ref(false)
-const sendingTgCode = ref(false)
-const verifyingTgCode = ref(false)
 const verifyingTgPassword = ref(false)
 const loggingOutTg = ref(false)
 const startingTgQr = ref(false)
@@ -1630,63 +1619,6 @@ const handleTestTg = async () => {
   }
 }
 
-const handleSendTgCode = async () => {
-  if (!String(tgForm.value.phone || '').trim()) {
-    ElMessage.warning('请先填写手机号')
-    return
-  }
-  sendingTgCode.value = true
-  try {
-    const { data } = await settingsApi.tgSendCode(tgForm.value.phone)
-    tgLoginForm.value.phoneCodeHash = data.phone_code_hash || ''
-    tgLoginForm.value.tempSession = data.session || ''
-    tgLoginForm.value.needPassword = false
-    tgLoginForm.value.password = ''
-    ElMessage.success('验证码已发送')
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '验证码发送失败')
-  } finally {
-    sendingTgCode.value = false
-  }
-}
-
-const handleVerifyTgCode = async () => {
-  if (!tgLoginForm.value.phoneCodeHash || !tgLoginForm.value.tempSession) {
-    ElMessage.warning('请先发送验证码')
-    return
-  }
-  if (!String(tgLoginForm.value.code || '').trim()) {
-    ElMessage.warning('请输入验证码')
-    return
-  }
-  verifyingTgCode.value = true
-  try {
-    const { data } = await settingsApi.tgVerifyCode({
-      phone: tgForm.value.phone,
-      code: tgLoginForm.value.code,
-      phone_code_hash: tgLoginForm.value.phoneCodeHash,
-      session: tgLoginForm.value.tempSession
-    })
-    tgLoginForm.value.tempSession = data.session || tgLoginForm.value.tempSession
-    tgLoginForm.value.needPassword = !!data.need_password
-    if (!data.need_password) {
-      tgForm.value.session = data.session || ''
-      await settingsApi.updateRuntime({
-        tg_phone: tgForm.value.phone,
-        tg_session: tgForm.value.session
-      })
-      await checkTg(false)
-      ElMessage.success('Telegram 登录成功')
-    } else {
-      ElMessage.info('账号开启了二步验证，请输入密码')
-    }
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '验证码验证失败')
-  } finally {
-    verifyingTgCode.value = false
-  }
-}
-
 const handleVerifyTgPassword = async () => {
   if (!tgLoginForm.value.needPassword) return
   if (!String(tgLoginForm.value.password || '').trim()) {
@@ -1847,9 +1779,7 @@ const handleTgLogout = async () => {
     await settingsApi.tgLogout()
     tgForm.value.session = ''
     tgLoginForm.value = {
-      phoneCodeHash: '',
       tempSession: '',
-      code: '',
       password: '',
       needPassword: false
     }
