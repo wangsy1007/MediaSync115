@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from app.services.emby_service import emby_service
+from app.services.tmdb_service import tmdb_service
 
 
 class TvMissingService:
@@ -39,7 +40,7 @@ class TvMissingService:
 
         emby_result = await emby_service.get_tv_episode_status_by_tmdb(normalized_tmdb_id)
         status_text = str(emby_result.get("status") or "")
-        if status_text not in {"ok", "partial"}:
+        if status_text != "ok":
             result = {
                 "status": status_text or "emby_error",
                 "message": str(emby_result.get("message") or "Emby 查询失败"),
@@ -52,36 +53,69 @@ class TvMissingService:
             await self._set_cached_status(cache_key, result)
             return result
 
+        tmdb_pairs = await self._collect_tmdb_episode_pairs(normalized_tmdb_id, include_specials=include_specials)
+        if not tmdb_pairs:
+            result = {
+                "status": "tmdb_error",
+                "message": "TMDB 未返回有效总集信息",
+                "aired_episodes": [],
+                "existing_episodes": [],
+                "missing_episodes": [],
+                "missing_by_season": {},
+                "counts": {"aired": 0, "total": 0, "existing": 0, "missing": 0},
+            }
+            await self._set_cached_status(cache_key, result)
+            return result
+
         existing_pairs_all = {
             (int(pair[0]), int(pair[1]))
             for pair in (emby_result.get("existing_episodes") or [])
             if isinstance(pair, (list, tuple)) and len(pair) == 2
         }
-        missing_pairs_all = {
-            (int(pair[0]), int(pair[1]))
-            for pair in (emby_result.get("missing_episodes") or [])
-            if isinstance(pair, (list, tuple)) and len(pair) == 2
-        }
         if not include_specials:
             existing_pairs_all = {pair for pair in existing_pairs_all if pair[0] > 0}
-            missing_pairs_all = {pair for pair in missing_pairs_all if pair[0] > 0}
-        aired_pairs = existing_pairs_all | missing_pairs_all
+        existing_pairs = existing_pairs_all & tmdb_pairs
+        missing_pairs = tmdb_pairs - existing_pairs
 
         result = {
-            "status": status_text,
-            "message": str(emby_result.get("message") or "缺集状态计算完成"),
-            "aired_episodes": self._sorted_pairs(aired_pairs),
-            "existing_episodes": self._sorted_pairs(existing_pairs_all),
-            "missing_episodes": self._sorted_pairs(missing_pairs_all),
-            "missing_by_season": self._to_season_map(missing_pairs_all),
+            "status": "ok",
+            "message": "缺集状态计算完成",
+            "aired_episodes": self._sorted_pairs(tmdb_pairs),
+            "existing_episodes": self._sorted_pairs(existing_pairs),
+            "missing_episodes": self._sorted_pairs(missing_pairs),
+            "missing_by_season": self._to_season_map(missing_pairs),
             "counts": {
-                "aired": len(aired_pairs),
-                "existing": len(existing_pairs_all),
-                "missing": len(missing_pairs_all),
+                "aired": len(tmdb_pairs),
+                "total": len(tmdb_pairs),
+                "existing": len(existing_pairs),
+                "missing": len(missing_pairs),
             },
         }
         await self._set_cached_status(cache_key, result)
         return result
+
+    async def _collect_tmdb_episode_pairs(self, tmdb_id: int, include_specials: bool = False) -> set[tuple[int, int]]:
+        detail = await tmdb_service.get_tv_detail(tmdb_id)
+        seasons = detail.get("seasons") if isinstance(detail, dict) else []
+        if not isinstance(seasons, list):
+            seasons = []
+
+        pairs: set[tuple[int, int]] = set()
+        for season in seasons:
+            if not isinstance(season, dict):
+                continue
+            season_number = self._to_non_negative_int(season.get("season_number"))
+            if season_number is None:
+                continue
+            if season_number == 0 and not include_specials:
+                continue
+
+            episode_count = self._to_non_negative_int(season.get("episode_count")) or 0
+            if episode_count <= 0:
+                continue
+            for episode_number in range(1, episode_count + 1):
+                pairs.add((season_number, episode_number))
+        return pairs
 
     async def _get_cached_status(self, key: str) -> dict[str, Any] | None:
         now_ts = datetime.utcnow().timestamp()
@@ -118,6 +152,16 @@ class TvMissingService:
             output.setdefault(key, [])
             output[key].append(episode)
         return output
+
+    @staticmethod
+    def _to_non_negative_int(value: Any) -> int | None:
+        try:
+            number = int(value)
+        except Exception:
+            return None
+        if number < 0:
+            return None
+        return number
 
 
 tv_missing_service = TvMissingService()

@@ -79,14 +79,13 @@ class EmbyService:
 
     async def get_tv_episode_status_by_tmdb(self, tmdb_id: int) -> dict[str, Any]:
         """
-        基于 Emby API 直接获取剧集已入库/缺失集信息。
+        基于 Emby API 直接获取剧集已入库集信息。
         """
         if not self.base_url or not self.api_key:
             return {
                 "status": "not_configured",
                 "message": "Emby 未配置",
                 "existing_episodes": set(),
-                "missing_episodes": set(),
             }
 
         async with httpx.AsyncClient() as client:
@@ -97,10 +96,8 @@ class EmbyService:
                         "status": "ok",
                         "message": "Emby 中未匹配到该 TMDB 剧集",
                         "existing_episodes": set(),
-                        "missing_episodes": set(),
                     }
 
-                series_id_set = set(series_ids)
                 existing_episodes: set[tuple[int, int]] = set()
                 for series_id in series_ids:
                     episodes = await self._fetch_items(
@@ -115,45 +112,10 @@ class EmbyService:
                     for pair in self._extract_episode_pairs(episodes):
                         existing_episodes.add(pair)
 
-                # Emby 缺集接口；若服务端不支持则返回 partial，避免误报。
-                missing_episodes: set[tuple[int, int]] = set()
-                partial_message = ""
-                try:
-                    for series_id in series_ids:
-                        missing_items = await self._fetch_items_by_endpoint(
-                            client,
-                            "/emby/Shows/Missing",
-                            {
-                                "ParentId": series_id,
-                                "Recursive": "true",
-                                "Fields": "ParentIndexNumber,IndexNumber,IndexNumberEnd,SeriesId",
-                            },
-                            timeout=2.5,
-                        )
-                        for item in missing_items:
-                            if not isinstance(item, dict):
-                                continue
-                            item_series_id = str(item.get("SeriesId") or "").strip()
-                            if item_series_id and item_series_id not in series_id_set:
-                                continue
-                            for pair in self._extract_episode_pairs([item]):
-                                missing_episodes.add(pair)
-                except Exception as exc:
-                    partial_message = f"Emby 缺集接口不可用: {exc.__class__.__name__}: {str(exc)}"
-
-                if partial_message:
-                    return {
-                        "status": "partial",
-                        "message": partial_message,
-                        "existing_episodes": existing_episodes,
-                        "missing_episodes": set(),
-                    }
-
                 return {
                     "status": "ok",
                     "message": "查询成功",
                     "existing_episodes": existing_episodes,
-                    "missing_episodes": missing_episodes,
                 }
             except Exception as e:
                 print(f"Error fetching tv status from Emby: {e}")
@@ -161,7 +123,6 @@ class EmbyService:
                     "status": "request_failed",
                     "message": str(e),
                     "existing_episodes": set(),
-                    "missing_episodes": set(),
                 }
 
     async def _find_series_ids_by_tmdb(self, client: httpx.AsyncClient, tmdb_id: int) -> list[str]:

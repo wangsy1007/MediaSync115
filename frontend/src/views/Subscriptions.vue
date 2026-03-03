@@ -87,8 +87,8 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="已播出" width="90" align="center">
-              <template #default="{ row }">{{ row.aired_count || 0 }}</template>
+            <el-table-column label="总集数" width="90" align="center">
+              <template #default="{ row }">{{ row.total_count || 0 }}</template>
             </el-table-column>
             <el-table-column label="已入库" width="90" align="center">
               <template #default="{ row }">{{ row.existing_count || 0 }}</template>
@@ -311,6 +311,7 @@ const refreshMissingRow = async (row) => {
       poster_path: data?.poster_path,
       status: data?.status,
       message: data?.message,
+      total_count: Number(counts.total || counts.aired || 0),
       aired_count: Number(counts.aired || 0),
       existing_count: Number(counts.existing || 0),
       missing_count: Number(counts.missing || 0),

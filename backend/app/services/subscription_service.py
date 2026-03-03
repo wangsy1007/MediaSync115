@@ -1260,8 +1260,8 @@ class SubscriptionService:
                     all_files = await pan_service.get_share_all_files_recursive(share_code, receive_code)
                     matched_fids: list[str] = []
                     matched_pairs: set[tuple[int, int]] = set()
-                    unmatched_video_fids: list[str] = []
                     parsed_count = 0
+                    unparsed_video_count = 0
 
                     for item in all_files:
                         if not isinstance(item, dict):
@@ -1279,7 +1279,7 @@ class SubscriptionService:
                                 matched_pairs.add(pair)
                             continue
                         if self._is_video_filename(filename):
-                            unmatched_video_fids.append(fid)
+                            unparsed_video_count += 1
 
                     await self._create_step_log(
                         db,
@@ -1295,30 +1295,13 @@ class SubscriptionService:
                             "total_files": len(all_files),
                             "parsed_count": parsed_count,
                             "matched_missing_count": len(matched_fids),
-                            "unparsed_video_count": len(unmatched_video_fids),
+                            "unparsed_video_count": unparsed_video_count,
                             "remaining_missing_count": len(missing_episodes),
                         },
                     )
 
                     selected_file_ids = list(dict.fromkeys(matched_fids))
                     selected_mode = "missing"
-                    if not selected_file_ids and unmatched_video_fids:
-                        selected_file_ids = list(dict.fromkeys(unmatched_video_fids))
-                        selected_mode = "unparsed_fallback"
-                        await self._create_step_log(
-                            db,
-                            run_id=run_id,
-                            channel=channel,
-                            subscription_id=sub.id,
-                            subscription_title=sub.title,
-                            step="tv_record_unparsed_fallback",
-                            status="warning",
-                            message=f"[{source}] 未匹配到缺集，按保守策略转存未解析视频",
-                            payload={
-                                "record_id": record.id,
-                                "selected_count": len(selected_file_ids),
-                            },
-                        )
 
                     if not selected_file_ids:
                         record.status = MediaStatus.PENDING
