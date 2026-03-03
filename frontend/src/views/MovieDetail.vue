@@ -25,7 +25,7 @@
           </div>
           <p class="overview">{{ movie.overview }}</p>
           <div class="actions">
-            <el-button :type="isSubscribed ? 'success' : 'primary'" @click="handleSubscribe">
+            <el-button :type="isSubscribed ? 'success' : 'primary'" :loading="subscribing" :disabled="subscribing" @click="handleSubscribe">
               <el-icon><Plus /></el-icon>
               {{ isSubscribed ? '已订阅（点击取消）' : '添加订阅' }}
             </el-button>
@@ -470,6 +470,7 @@ let seedhubPollTimer = null
 const ed2kLoading = ref(false)
 const isSubscribed = ref(false)
 const subscriptionId = ref(null)
+const subscribing = ref(false)
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
 const PAN115_CACHE_TTL_MS = 30 * 60 * 1000
@@ -984,6 +985,10 @@ const fetchEd2k = async () => {
 }
 
 const handleSubscribe = async () => {
+  if (subscribing.value) return
+  subscribing.value = true
+  const previousSubscribed = Boolean(isSubscribed.value)
+  const previousSubscriptionId = subscriptionId.value
   try {
     if (isSubscribed.value) {
       if (!subscriptionId.value) {
@@ -993,13 +998,15 @@ const handleSubscribe = async () => {
         ElMessage.warning('未找到订阅记录，请刷新后重试')
         return
       }
-      await subscriptionApi.delete(subscriptionId.value)
+      const targetId = subscriptionId.value
       isSubscribed.value = false
       subscriptionId.value = null
+      await subscriptionApi.delete(targetId)
       ElMessage.success('已取消订阅')
       return
     }
 
+    isSubscribed.value = true
     const { data } = await subscriptionApi.create({
       tmdb_id: movie.value.id,
       title: movie.value.title,
@@ -1009,16 +1016,20 @@ const handleSubscribe = async () => {
       year: movie.value.release_date?.split('-')[0],
       rating: movie.value.vote_average
     })
-    isSubscribed.value = true
     subscriptionId.value = Number(data?.id || 0) || null
     ElMessage.success('订阅成功')
   } catch (error) {
     if (error.response?.status === 400) {
-      await checkSubscribed()
-      ElMessage.info(isSubscribed.value ? '该影视已在订阅列表中' : '订阅状态已更新，请重试')
+      isSubscribed.value = true
+      checkSubscribed()
+      ElMessage.info('该影视已在订阅列表中')
       return
     }
+    isSubscribed.value = previousSubscribed
+    subscriptionId.value = previousSubscriptionId
     ElMessage.error(error.response?.data?.detail || error.message || '订阅操作失败')
+  } finally {
+    subscribing.value = false
   }
 }
 

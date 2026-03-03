@@ -418,6 +418,7 @@ const pan115Resources = ref([])
 const magnetResources = ref([])
 const ed2kResources = ref([])
 const isSubscribed = ref(false)
+const subscriptionId = ref(null)
 
 const pan115Loading = ref(false)
 const pansouLoading = ref(false)
@@ -1399,14 +1400,18 @@ const saveEd2k = async (row) => {
 const refreshSubscribeState = async () => {
   if (!mappedTmdbId.value) {
     isSubscribed.value = false
+    subscriptionId.value = null
     return
   }
   try {
     const { data } = await subscriptionApi.list({ media_type: mediaType.value, is_active: true })
     const list = Array.isArray(data) ? data : []
-    isSubscribed.value = list.some((item) => Number(item.tmdb_id) === mappedTmdbId.value && item.media_type === mediaType.value)
+    const matched = list.find((item) => Number(item.tmdb_id) === mappedTmdbId.value && item.media_type === mediaType.value) || null
+    isSubscribed.value = Boolean(matched)
+    subscriptionId.value = Number(matched?.id || 0) || null
   } catch {
     isSubscribed.value = false
+    subscriptionId.value = null
   }
 }
 
@@ -1416,22 +1421,27 @@ const handleSubscribe = async () => {
     return
   }
   subscribing.value = true
+  const previousSubscribed = Boolean(isSubscribed.value)
+  const previousSubscriptionId = subscriptionId.value
   try {
     if (isSubscribed.value) {
-      const { data } = await subscriptionApi.list({ media_type: mediaType.value, is_active: true })
-      const list = Array.isArray(data) ? data : []
-      const target = list.find((item) => Number(item.tmdb_id) === mappedTmdbId.value && item.media_type === mediaType.value)
-      if (!target?.id) {
+      if (!subscriptionId.value) {
+        await refreshSubscribeState()
+      }
+      if (!subscriptionId.value) {
         ElMessage.warning('未找到订阅记录')
         return
       }
-      await subscriptionApi.delete(target.id)
+      const targetId = subscriptionId.value
       isSubscribed.value = false
+      subscriptionId.value = null
+      await subscriptionApi.delete(targetId)
       ElMessage.success('已取消订阅')
       return
     }
 
-    await subscriptionApi.create({
+    isSubscribed.value = true
+    const { data } = await subscriptionApi.create({
       douban_id: detail.value.douban_id,
       tmdb_id: mappedTmdbId.value,
       title: detail.value.title,
@@ -1441,9 +1451,17 @@ const handleSubscribe = async () => {
       year: detail.value.year || '',
       rating: detail.value.rating || null
     })
-    isSubscribed.value = true
+    subscriptionId.value = Number(data?.id || 0) || null
     ElMessage.success('订阅成功')
   } catch (error) {
+    if (error.response?.status === 400) {
+      isSubscribed.value = true
+      refreshSubscribeState()
+      ElMessage.info('该影视已在订阅列表中')
+      return
+    }
+    isSubscribed.value = previousSubscribed
+    subscriptionId.value = previousSubscriptionId
     ElMessage.error(error.response?.data?.detail || error.message || '订阅失败')
   } finally {
     subscribing.value = false

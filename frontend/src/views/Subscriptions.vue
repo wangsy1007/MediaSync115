@@ -73,7 +73,7 @@
 
       <el-tab-pane label="缺集状态" name="missing">
         <div class="missing-panel" v-loading="missingLoading">
-          <el-table v-if="missingRows.length > 0" :data="missingRows" stripe>
+          <el-table v-if="missingRows.length > 0" :data="missingRows">
             <el-table-column label="剧集" min-width="220" show-overflow-tooltip>
               <template #default="{ row }">
                 <div class="missing-title">{{ row.title }}</div>
