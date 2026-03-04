@@ -16,28 +16,41 @@
             </div>
           </template>
 
-          <el-form :model="settingsForm" label-width="120px">
+          <el-form label-width="120px">
             <el-form-item label="Cookie状态">
               <div class="cookie-status">
                 <span v-if="cookieInfo.configured">{{ cookieInfo.masked_cookie }}</span>
                 <span v-else class="not-configured">未配置</span>
               </div>
             </el-form-item>
-            <el-form-item label="更新Cookie">
-              <el-input
-                v-model="settingsForm.cookie"
-                type="textarea"
-                :rows="3"
-                placeholder="请输入115网盘Cookie（格式：UID=xxx; CID=xxx; SEID=xxx）"
-              />
+            <el-form-item label="扫码登录">
+              <div class="pan115-qr-login">
+                <div class="pan115-qr-preview" v-if="pan115QrState.qrUrl">
+                  <img :src="pan115QrState.qrUrl" alt="115 Login QR" />
+                </div>
+                <div class="pan115-qr-placeholder" v-else>
+                  <span>点击“生成二维码”开始登录</span>
+                </div>
+                <div class="pan115-qr-actions">
+                  <el-button type="primary" @click="handleStartPan115QrLogin" :loading="startingPan115Qr">
+                    生成二维码
+                  </el-button>
+                  <el-button @click="handleCancelPan115QrLogin" :disabled="!pan115QrState.token" :loading="cancelingPan115Qr">
+                    取消扫码
+                  </el-button>
+                </div>
+                <div class="pan115-qr-status">
+                  <el-tag :type="pan115QrState.statusType" size="small">{{ pan115QrState.statusText || '未开始扫码登录' }}</el-tag>
+                  <el-text v-if="pan115QrState.expiresAt" size="small" type="info">过期时间：{{ pan115QrState.expiresAt }}</el-text>
+                </div>
+              </div>
               <div class="cookie-tips">
                 <el-text size="small" type="info">
-                  获取方法：登录115网盘网页版 → 按F12打开开发者工具 → Network → 刷新页面 → 点击任意请求 → Headers → 找到Cookie字段
+                  请使用 115 官方客户端扫码并确认登录，成功后会自动更新系统 Cookie。
                 </el-text>
               </div>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" @click="handleSaveCookie" :loading="saving">保存Cookie</el-button>
               <el-button @click="handleTestConnection" :loading="testing">测试连接</el-button>
               <el-button @click="handleTestRiskHealth" :loading="testingRiskHealth">检测风控</el-button>
             </el-form-item>
@@ -882,10 +895,6 @@ import { ElMessage } from 'element-plus'
 import { pan115Api, pansouApi, settingsApi, subscriptionApi } from '@/api'
 import { formatBeijingTableCell } from '@/utils/timezone'
 
-const settingsForm = ref({
-  cookie: ''
-})
-
 const activeSettingsTab = ref('pan115')
 
 const nullbrForm = ref({
@@ -1007,7 +1016,6 @@ const serviceNameMap = {
 const savingProxy = ref(false)
 const testingProxy = ref(false)
 
-const saving = ref(false)
 const testing = ref(false)
 const testingRiskHealth = ref(false)
 const savingPansou = ref(false)
@@ -1025,6 +1033,9 @@ const loggingOutTg = ref(false)
 const startingTgQr = ref(false)
 const pollingTgQr = ref(false)
 const importingTgSession = ref(false)
+const startingPan115Qr = ref(false)
+const pollingPan115Qr = ref(false)
+const cancelingPan115Qr = ref(false)
 const savingTgIndexConfig = ref(false)
 const loadingTgIndexStatus = ref(false)
 const runningTgBackfill = ref(false)
@@ -1053,6 +1064,14 @@ const cookieStatus = reactive({
   valid: false,
   checked: false,
   user_info: null
+})
+const pan115QrState = reactive({
+  token: '',
+  qrUrl: '',
+  expiresAt: '',
+  statusText: '未开始扫码登录',
+  statusType: 'info',
+  active: false
 })
 
 const connectionResult = reactive({
@@ -1304,24 +1323,100 @@ const handleTestRiskHealth = async () => {
   }
 }
 
-const handleSaveCookie = async () => {
-  if (!settingsForm.value.cookie.trim()) {
-    ElMessage.warning('请输入Cookie')
-    return
-  }
+const stopPan115QrPolling = () => {
+  pan115QrState.active = false
+  pollingPan115Qr.value = false
+}
 
-  saving.value = true
+const pollPan115QrStatus = async (token) => {
+  const normalizedToken = String(token || '').trim()
+  if (!normalizedToken) return
+  pollingPan115Qr.value = true
+  while (pan115QrState.active && pan115QrState.token === normalizedToken) {
+    try {
+      const { data } = await pan115Api.checkQrLogin(normalizedToken)
+      pan115QrState.expiresAt = data.expires_at || pan115QrState.expiresAt
+      if (data.authorized) {
+        stopPan115QrPolling()
+        pan115QrState.token = ''
+        pan115QrState.qrUrl = ''
+        pan115QrState.statusType = 'success'
+        pan115QrState.statusText = data.message || '扫码登录成功'
+        await fetchCookieInfo()
+        await checkCookie()
+        await fetchRiskHealth()
+        ElMessage.success('115 扫码登录成功')
+        break
+      }
+
+      if (!data.pending) {
+        stopPan115QrPolling()
+        pan115QrState.token = ''
+        pan115QrState.qrUrl = ''
+        pan115QrState.statusType = data.status === 'expired' ? 'warning' : 'info'
+        pan115QrState.statusText = data.message || '二维码会话已结束'
+        break
+      }
+
+      pan115QrState.statusType = data.status === 'scanned' ? 'warning' : 'info'
+      pan115QrState.statusText = data.message || '等待扫码确认'
+    } catch (error) {
+      stopPan115QrPolling()
+      pan115QrState.statusType = 'danger'
+      pan115QrState.statusText = error.response?.data?.detail || '二维码登录状态检测失败'
+      ElMessage.error(pan115QrState.statusText)
+      break
+    }
+    await wait(2000)
+  }
+  pollingPan115Qr.value = false
+}
+
+const handleStartPan115QrLogin = async () => {
+  startingPan115Qr.value = true
   try {
-    const { data } = await pan115Api.updateCookie(settingsForm.value.cookie)
-    ElMessage.success('Cookie保存成功')
-    settingsForm.value.cookie = ''
-    await fetchCookieInfo()
-    await checkCookie()
-    await fetchRiskHealth()
+    if (pan115QrState.token) {
+      try {
+        await pan115Api.cancelQrLogin(pan115QrState.token)
+      } catch {
+        // noop
+      }
+    }
+    stopPan115QrPolling()
+    const { data } = await pan115Api.startQrLogin()
+    pan115QrState.token = data.token || ''
+    pan115QrState.qrUrl = data.qr_url || ''
+    pan115QrState.expiresAt = data.expires_at || ''
+    pan115QrState.statusType = 'info'
+    pan115QrState.statusText = '二维码已生成，等待扫码确认'
+    pan115QrState.active = true
+    ElMessage.success('115 登录二维码已生成')
+    pollPan115QrStatus(pan115QrState.token)
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || 'Cookie保存失败')
+    pan115QrState.statusType = 'danger'
+    pan115QrState.statusText = error.response?.data?.detail || '二维码登录启动失败'
+    ElMessage.error(pan115QrState.statusText)
   } finally {
-    saving.value = false
+    startingPan115Qr.value = false
+  }
+}
+
+const handleCancelPan115QrLogin = async () => {
+  const token = String(pan115QrState.token || '').trim()
+  if (!token) return
+  cancelingPan115Qr.value = true
+  try {
+    stopPan115QrPolling()
+    await pan115Api.cancelQrLogin(token)
+    pan115QrState.token = ''
+    pan115QrState.qrUrl = ''
+    pan115QrState.expiresAt = ''
+    pan115QrState.statusType = 'info'
+    pan115QrState.statusText = '已取消扫码登录'
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '取消扫码会话失败')
+  } finally {
+    cancelingPan115Qr.value = false
   }
 }
 
@@ -2416,6 +2511,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  stopPan115QrPolling()
   stopTgQrPolling()
 })
 </script>
@@ -2455,6 +2551,47 @@ onBeforeUnmount(() => {
 
     .cookie-tips {
       margin-top: 8px;
+    }
+
+    .pan115-qr-login {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .pan115-qr-preview,
+    .pan115-qr-placeholder {
+      width: 220px;
+      height: 220px;
+      border: 1px solid var(--ms-border-light, #d8e2ef);
+      border-radius: 8px;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px;
+      color: var(--ms-text-muted);
+      text-align: center;
+    }
+
+    .pan115-qr-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .pan115-qr-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .pan115-qr-status {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
     }
 
     .tg-link {

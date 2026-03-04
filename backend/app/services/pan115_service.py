@@ -6,6 +6,8 @@ from p115client import P115Client, check_response
 from p115client.util import share_extract_payload
 from app.core.config import settings
 from typing import Optional, List, Dict, Any, Set
+from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 import re
 import asyncio
 import random
@@ -13,6 +15,10 @@ import random
 
 class Pan115Service:
     """115网盘服务类，封装p115client的功能"""
+
+    _QR_LOGIN_EXPIRE_SECONDS = 180
+    _QR_LOGIN_PENDING: dict[str, dict[str, Any]] = {}
+    _QR_LOGIN_LOCK = asyncio.Lock()
     
     def __init__(self, cookie: Optional[str] = None):
         """
@@ -674,6 +680,250 @@ class Pan115Service:
         return {"state": False, "error": "分享内容为空或无法获取"}
     
     # ==================== Cookie管理 ====================
+
+    async def start_qr_login(self, app: str = "alipaymini") -> Dict[str, Any]:
+        """
+        启动115扫码登录，返回二维码链接和会话token。
+        """
+        await self._clear_expired_qr_sessions()
+        normalized_app = str(app or "alipaymini").strip() or "alipaymini"
+
+        raw_token = await asyncio.wait_for(
+            P115Client.login_qrcode_token(async_=True, timeout=8),
+            timeout=8.5,
+        )
+        token_payload = self._extract_qr_data(raw_token)
+        uid = str(token_payload.get("uid") or "").strip()
+        if not uid:
+            raise RuntimeError("获取115二维码失败：响应中缺少uid")
+
+        scan_payload = {
+            "uid": uid,
+            "time": token_payload.get("time"),
+            "sign": token_payload.get("sign"),
+        }
+        qr_url = str(token_payload.get("qrcode") or "").strip()
+        if not qr_url:
+            qr_url = f"https://115.com/scan/dg-{uid}"
+
+        token = uuid4().hex
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(seconds=self._QR_LOGIN_EXPIRE_SECONDS)
+        async with self._QR_LOGIN_LOCK:
+            self._QR_LOGIN_PENDING[token] = {
+                "token": token,
+                "uid": uid,
+                "scan_payload": scan_payload,
+                "qr_url": qr_url,
+                "app": normalized_app,
+                "state": "pending",
+                "message": "等待扫码",
+                "created_at": now,
+                "expires_at": expires_at,
+                "cookie": "",
+            }
+
+        return {
+            "token": token,
+            "qr_url": qr_url,
+            "expires_at": expires_at.isoformat(),
+            "expire_seconds": self._QR_LOGIN_EXPIRE_SECONDS,
+            "app": normalized_app,
+        }
+
+    async def check_qr_login_status(self, token: str) -> Dict[str, Any]:
+        """
+        检查扫码登录状态；授权成功时返回cookie（仅服务端使用，不建议直接透传前端）。
+        """
+        await self._clear_expired_qr_sessions()
+        normalized = str(token or "").strip()
+        if not normalized:
+            raise ValueError("扫码会话标识不能为空")
+
+        async with self._QR_LOGIN_LOCK:
+            item = self._QR_LOGIN_PENDING.get(normalized)
+        if not item:
+            raise ValueError("扫码会话不存在或已过期，请重新生成二维码")
+
+        now = datetime.now(timezone.utc)
+        expires_at = item.get("expires_at")
+        if isinstance(expires_at, datetime) and now >= expires_at:
+            async with self._QR_LOGIN_LOCK:
+                self._QR_LOGIN_PENDING.pop(normalized, None)
+            return {
+                "authorized": False,
+                "pending": False,
+                "status": "expired",
+                "message": "二维码已过期，请重新生成",
+                "expires_at": expires_at.isoformat(),
+            }
+
+        current_state = str(item.get("state") or "pending")
+        if current_state in {"authorized", "canceled", "expired", "failed"}:
+            return {
+                "authorized": current_state == "authorized",
+                "pending": False,
+                "status": current_state,
+                "message": str(item.get("message") or ""),
+                "cookie": str(item.get("cookie") or ""),
+                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+            }
+
+        try:
+            status_resp = await asyncio.wait_for(
+                P115Client.login_qrcode_scan_status(
+                    item.get("scan_payload") or {},
+                    async_=True,
+                    timeout=8,
+                ),
+                timeout=8.5,
+            )
+        except Exception as exc:
+            return {
+                "authorized": False,
+                "pending": True,
+                "status": "pending",
+                "message": str(exc)[:300] or "等待扫码",
+                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+            }
+
+        status_data = self._extract_qr_data(status_resp)
+        status_code = self._safe_int(status_data.get("status"), default=None)
+        status_message = str(status_data.get("msg") or status_data.get("message") or "").strip()
+
+        if status_code == 0:
+            message = status_message or "等待扫码"
+            await self._update_qr_session(normalized, state="pending", message=message)
+            return {
+                "authorized": False,
+                "pending": True,
+                "status": "pending",
+                "message": message,
+                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+            }
+
+        if status_code == 1:
+            message = status_message or "已扫码，等待确认"
+            await self._update_qr_session(normalized, state="scanned", message=message)
+            return {
+                "authorized": False,
+                "pending": True,
+                "status": "scanned",
+                "message": message,
+                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+            }
+
+        if status_code == -2:
+            message = status_message or "已取消扫码登录"
+            await self._update_qr_session(normalized, state="canceled", message=message)
+            return {
+                "authorized": False,
+                "pending": False,
+                "status": "canceled",
+                "message": message,
+                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+            }
+
+        if status_code == -1:
+            message = status_message or "二维码已过期，请重新生成"
+            await self._update_qr_session(normalized, state="expired", message=message)
+            return {
+                "authorized": False,
+                "pending": False,
+                "status": "expired",
+                "message": message,
+                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+            }
+
+        if status_code != 2:
+            message = status_message or "等待扫码确认"
+            await self._update_qr_session(normalized, state="pending", message=message)
+            return {
+                "authorized": False,
+                "pending": True,
+                "status": "pending",
+                "message": message,
+                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+            }
+
+        result_resp = await asyncio.wait_for(
+            P115Client.login_qrcode_scan_result(
+                str(item.get("uid") or ""),
+                app=str(item.get("app") or "alipaymini"),
+                async_=True,
+                timeout=8,
+            ),
+            timeout=8.5,
+        )
+        result_data = check_response(result_resp)
+        cookie = self._normalize_qr_cookie(result_data)
+        if not cookie:
+            raise RuntimeError("扫码成功但未获取到Cookie")
+
+        await self._update_qr_session(normalized, state="authorized", message="扫码登录成功", cookie=cookie)
+        return {
+            "authorized": True,
+            "pending": False,
+            "status": "authorized",
+            "message": "扫码登录成功",
+            "cookie": cookie,
+            "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+        }
+
+    async def cancel_qr_login(self, token: str) -> Dict[str, Any]:
+        """
+        取消扫码登录会话。
+        """
+        normalized = str(token or "").strip()
+        if not normalized:
+            raise ValueError("扫码会话标识不能为空")
+        async with self._QR_LOGIN_LOCK:
+            removed = self._QR_LOGIN_PENDING.pop(normalized, None)
+        if not removed:
+            return {"canceled": False, "message": "扫码会话不存在或已结束"}
+        return {"canceled": True, "message": "扫码会话已取消"}
+
+    @classmethod
+    async def _clear_expired_qr_sessions(cls) -> None:
+        now = datetime.now(timezone.utc)
+        async with cls._QR_LOGIN_LOCK:
+            expired = []
+            for token, item in cls._QR_LOGIN_PENDING.items():
+                expires_at = item.get("expires_at")
+                if isinstance(expires_at, datetime) and now >= expires_at:
+                    expired.append(token)
+            for token in expired:
+                cls._QR_LOGIN_PENDING.pop(token, None)
+
+    @classmethod
+    async def _update_qr_session(cls, token: str, **updates: Any) -> None:
+        async with cls._QR_LOGIN_LOCK:
+            item = cls._QR_LOGIN_PENDING.get(token)
+            if not item:
+                return
+            item.update(updates)
+
+    @staticmethod
+    def _extract_qr_data(resp: Any) -> Dict[str, Any]:
+        if isinstance(resp, dict):
+            data = resp.get("data")
+            if isinstance(data, dict):
+                return data
+            return resp
+        return {}
+
+    @staticmethod
+    def _normalize_qr_cookie(resp_data: Any) -> str:
+        data = resp_data if isinstance(resp_data, dict) else {}
+        cookie_raw = data.get("cookie")
+        if cookie_raw is None and isinstance(data.get("data"), dict):
+            cookie_raw = data["data"].get("cookie")
+        if isinstance(cookie_raw, str):
+            return cookie_raw.strip().rstrip(";")
+        if isinstance(cookie_raw, dict):
+            pairs = [f"{str(k)}={str(v)}" for k, v in cookie_raw.items() if str(k).strip()]
+            return "; ".join(pairs).strip().rstrip(";")
+        return ""
     
     async def check_cookie_valid(self) -> Dict[str, Any]:
         """
@@ -763,6 +1013,13 @@ class Pan115Service:
             return share_url.strip()
         
         return None
+
+    @staticmethod
+    def _safe_int(value: Any, default: int | None = 0) -> int | None:
+        try:
+            return int(value)
+        except Exception:
+            return default
     
     # ==================== 高级功能 ====================
     

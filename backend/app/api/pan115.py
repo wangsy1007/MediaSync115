@@ -116,6 +116,16 @@ class UpdateCookieRequest(BaseModel):
     cookie: str
 
 
+class Pan115QrStatusRequest(BaseModel):
+    """115扫码状态查询请求"""
+    token: str
+
+
+class Pan115QrCancelRequest(BaseModel):
+    """115扫码取消请求"""
+    token: str
+
+
 class CreateFolderRequest(BaseModel):
     """创建文件夹请求"""
     pid: str
@@ -192,6 +202,15 @@ def get_service(cookie: Optional[str] = None) -> Pan115Service:
     return Pan115Service(cookie)
 
 
+def _mask_cookie(cookie: str) -> str:
+    text = str(cookie or "").strip()
+    if not text:
+        return ""
+    if len(text) > 20:
+        return text[:5] + "*****" + text[-5:]
+    return "*****"
+
+
 # ==================== Cookie管理 ====================
 
 @router.get("/cookie/check")
@@ -245,6 +264,104 @@ async def get_current_cookie():
             masked = "*****"
         return {"masked_cookie": masked, "configured": True}
     return {"masked_cookie": "", "configured": False}
+
+
+@router.post("/login/qr/start")
+async def start_qr_login():
+    """
+    启动115二维码登录
+    """
+    try:
+        result = await pan115_service.start_qr_login(app="alipaymini")
+        return {
+            "success": True,
+            "token": result.get("token"),
+            "qr_url": result.get("qr_url"),
+            "expires_at": result.get("expires_at"),
+            "expire_seconds": result.get("expire_seconds"),
+            "app": result.get("app"),
+        }
+    except Exception as exc:
+        if is_retryable_115_error(str(exc)):
+            raise HTTPException(status_code=429, detail="115扫码接口临时受限，请稍后重试")
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/login/qr/status")
+async def check_qr_login_status(request: Pan115QrStatusRequest):
+    """
+    查询115二维码登录状态
+    """
+    token = str(request.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="二维码会话标识不能为空")
+
+    try:
+        result = await pan115_service.check_qr_login_status(token)
+        authorized = bool(result.get("authorized"))
+        cookie = str(result.get("cookie") or "").strip()
+        status = str(result.get("status") or "pending")
+        message = str(result.get("message") or "")
+        expires_at = str(result.get("expires_at") or "")
+
+        if not authorized:
+            return {
+                "success": True,
+                "authorized": False,
+                "pending": bool(result.get("pending", True)),
+                "status": status,
+                "message": message,
+                "expires_at": expires_at,
+            }
+
+        if not cookie:
+            raise HTTPException(status_code=400, detail="扫码状态异常：已授权但未获取到Cookie")
+
+        runtime_settings_service.update_pan115_cookie(cookie)
+        verified = await get_service(cookie).check_cookie_valid()
+        if not verified.get("valid"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"扫码成功但Cookie校验失败: {verified.get('message') or '未知错误'}",
+            )
+
+        return {
+            "success": True,
+            "authorized": True,
+            "pending": False,
+            "status": "authorized",
+            "message": message or "扫码登录成功",
+            "expires_at": expires_at,
+            "configured": True,
+            "masked_cookie": _mask_cookie(cookie),
+            "user_info": verified.get("user_info"),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if is_retryable_115_error(str(exc)):
+            raise HTTPException(status_code=429, detail="115扫码状态接口临时受限，请稍后重试")
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/login/qr/cancel")
+async def cancel_qr_login(request: Pan115QrCancelRequest):
+    """
+    取消115二维码登录会话
+    """
+    token = str(request.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="二维码会话标识不能为空")
+
+    try:
+        result = await pan115_service.cancel_qr_login(token)
+        return {
+            "success": True,
+            "canceled": bool(result.get("canceled")),
+            "message": str(result.get("message") or ""),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/health/risk")
