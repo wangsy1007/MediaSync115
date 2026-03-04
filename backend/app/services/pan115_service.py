@@ -19,6 +19,30 @@ class Pan115Service:
     _QR_LOGIN_EXPIRE_SECONDS = 180
     _QR_LOGIN_PENDING: dict[str, dict[str, Any]] = {}
     _QR_LOGIN_LOCK = asyncio.Lock()
+    _QR_LOGIN_ALLOWED_APPS = {
+        "web",
+        "desktop",
+        "bios",
+        "ios",
+        "115ios",
+        "bandroid",
+        "android",
+        "115android",
+        "bipad",
+        "ipad",
+        "115ipad",
+        "tv",
+        "apple_tv",
+        "qandriod",
+        "qios",
+        "qipad",
+        "wechatmini",
+        "alipaymini",
+        "harmony",
+        "os_windows",
+        "os_mac",
+        "os_linux",
+    }
     
     def __init__(self, cookie: Optional[str] = None):
         """
@@ -687,6 +711,8 @@ class Pan115Service:
         """
         await self._clear_expired_qr_sessions()
         normalized_app = str(app or "alipaymini").strip() or "alipaymini"
+        if normalized_app not in self._QR_LOGIN_ALLOWED_APPS:
+            normalized_app = "alipaymini"
 
         raw_token = await asyncio.wait_for(
             P115Client.login_qrcode_token(async_=True, timeout=8),
@@ -730,6 +756,29 @@ class Pan115Service:
             "expire_seconds": self._QR_LOGIN_EXPIRE_SECONDS,
             "app": normalized_app,
         }
+
+    async def get_qr_login_image(self, token: str) -> bytes:
+        """
+        获取扫码二维码PNG图片，供前端直接展示。
+        """
+        await self._clear_expired_qr_sessions()
+        normalized = str(token or "").strip()
+        if not normalized:
+            raise ValueError("扫码会话标识不能为空")
+        async with self._QR_LOGIN_LOCK:
+            item = self._QR_LOGIN_PENDING.get(normalized)
+        if not item:
+            raise ValueError("扫码会话不存在或已过期，请重新生成二维码")
+        uid = str(item.get("uid") or "").strip()
+        if not uid:
+            raise RuntimeError("扫码会话缺少uid，无法获取二维码图片")
+        image_bytes = await asyncio.wait_for(
+            P115Client.login_qrcode(uid, async_=True, timeout=8),
+            timeout=8.5,
+        )
+        if not isinstance(image_bytes, (bytes, bytearray)):
+            raise RuntimeError("二维码图片响应异常")
+        return bytes(image_bytes)
 
     async def check_qr_login_status(self, token: str) -> Dict[str, Any]:
         """

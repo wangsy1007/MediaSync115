@@ -25,6 +25,17 @@
             </el-form-item>
             <el-form-item label="扫码登录">
               <div class="pan115-qr-login">
+                <div class="pan115-qr-device">
+                  <el-text size="small" type="info">登录设备</el-text>
+                  <el-select v-model="pan115QrApp" size="small" style="width: 180px">
+                    <el-option
+                      v-for="option in pan115QrAppOptions"
+                      :key="option.value"
+                      :label="option.label"
+                      :value="option.value"
+                    />
+                  </el-select>
+                </div>
                 <div class="pan115-qr-preview" v-if="pan115QrState.qrUrl">
                   <img :src="pan115QrState.qrUrl" alt="115 Login QR" />
                 </div>
@@ -1073,6 +1084,31 @@ const pan115QrState = reactive({
   statusType: 'info',
   active: false
 })
+const pan115QrApp = ref('alipaymini')
+const pan115QrAppOptions = [
+  { label: '支付宝小程序（推荐）', value: 'alipaymini' },
+  { label: '网页端', value: 'web' },
+  { label: '115浏览器', value: 'desktop' },
+  { label: 'iOS未知(bios)', value: 'bios' },
+  { label: '安卓未知(bandroid)', value: 'bandroid' },
+  { label: '安卓端', value: 'android' },
+  { label: '115安卓端', value: '115android' },
+  { label: 'iOS端', value: 'ios' },
+  { label: '115 iOS端', value: '115ios' },
+  { label: 'iPad未知(bipad)', value: 'bipad' },
+  { label: 'iPad端', value: 'ipad' },
+  { label: '115 iPad端', value: '115ipad' },
+  { label: '安卓电视端', value: 'tv' },
+  { label: '苹果电视端', value: 'apple_tv' },
+  { label: '115管理安卓端(qandriod)', value: 'qandriod' },
+  { label: '115管理iOS端(qios)', value: 'qios' },
+  { label: '115管理iPad端(qipad)', value: 'qipad' },
+  { label: '微信小程序', value: 'wechatmini' },
+  { label: '鸿蒙端', value: 'harmony' },
+  { label: 'Windows端', value: 'os_windows' },
+  { label: 'macOS端', value: 'os_mac' },
+  { label: 'Linux端', value: 'os_linux' }
+]
 
 const connectionResult = reactive({
   checked: false,
@@ -1383,9 +1419,9 @@ const handleStartPan115QrLogin = async () => {
       }
     }
     stopPan115QrPolling()
-    const { data } = await pan115Api.startQrLogin()
+    const { data } = await pan115Api.startQrLogin(pan115QrApp.value)
     pan115QrState.token = data.token || ''
-    pan115QrState.qrUrl = data.qr_url || ''
+    pan115QrState.qrUrl = data.qr_image_url || data.qr_url || ''
     pan115QrState.expiresAt = data.expires_at || ''
     pan115QrState.statusType = 'info'
     pan115QrState.statusText = '二维码已生成，等待扫码确认'
@@ -2558,6 +2594,12 @@ onBeforeUnmount(() => {
       flex-direction: column;
       gap: 10px;
       align-items: flex-start;
+    }
+
+    .pan115-qr-device {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
     .pan115-qr-preview,

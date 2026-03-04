@@ -4,7 +4,7 @@
 """
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from app.services.pan115_service import Pan115Service, pan115_service
 from app.services.runtime_settings_service import runtime_settings_service
 from pydantic import BaseModel
@@ -119,6 +119,11 @@ class UpdateCookieRequest(BaseModel):
 class Pan115QrStatusRequest(BaseModel):
     """115扫码状态查询请求"""
     token: str
+
+
+class Pan115QrStartRequest(BaseModel):
+    """115扫码启动请求"""
+    app: Optional[str] = "alipaymini"
 
 
 class Pan115QrCancelRequest(BaseModel):
@@ -267,16 +272,18 @@ async def get_current_cookie():
 
 
 @router.post("/login/qr/start")
-async def start_qr_login():
+async def start_qr_login(request: Pan115QrStartRequest):
     """
     启动115二维码登录
     """
     try:
-        result = await pan115_service.start_qr_login(app="alipaymini")
+        result = await pan115_service.start_qr_login(app=str(request.app or "alipaymini"))
+        token = str(result.get("token") or "")
         return {
             "success": True,
-            "token": result.get("token"),
+            "token": token,
             "qr_url": result.get("qr_url"),
+            "qr_image_url": f"/api/pan115/login/qr/image?token={token}" if token else "",
             "expires_at": result.get("expires_at"),
             "expire_seconds": result.get("expire_seconds"),
             "app": result.get("app"),
@@ -284,6 +291,23 @@ async def start_qr_login():
     except Exception as exc:
         if is_retryable_115_error(str(exc)):
             raise HTTPException(status_code=429, detail="115扫码接口临时受限，请稍后重试")
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/login/qr/image")
+async def get_qr_login_image(token: str = Query(..., description="二维码会话标识")):
+    """
+    获取115扫码登录二维码图片（PNG）
+    """
+    normalized = str(token or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="二维码会话标识不能为空")
+    try:
+        image_bytes = await pan115_service.get_qr_login_image(normalized)
+        return Response(content=image_bytes, media_type="image/png")
+    except Exception as exc:
+        if is_retryable_115_error(str(exc)):
+            raise HTTPException(status_code=429, detail="115二维码图片接口临时受限，请稍后重试")
         raise HTTPException(status_code=400, detail=str(exc))
 
 
