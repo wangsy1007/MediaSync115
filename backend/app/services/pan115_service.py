@@ -446,11 +446,9 @@ class Pan115Service:
 
         max_retries_per_attempt = 3
         last_error: Exception | None = None
-        method_not_allowed_error = False
-        failed_endpoint = ""
+        last_error_endpoint = ""
         data: Any | None = None
         for method_name, extra_kwargs, endpoint in attempts:
-            failed_endpoint = endpoint
             for retry in range(max_retries_per_attempt):
                 try:
                     result = await self._async_call(method_name, payload, **extra_kwargs)
@@ -458,11 +456,11 @@ class Pan115Service:
                     break
                 except Exception as exc:
                     last_error = exc
+                    last_error_endpoint = endpoint
                     error_text = str(exc)
                     if self._is_auth_related_error(error_text):
                         raise
                     if self._is_method_not_allowed_error(error_text):
-                        method_not_allowed_error = True
                         if retry < max_retries_per_attempt - 1:
                             await asyncio.sleep(0.6 * (retry + 1))
                             continue
@@ -473,10 +471,10 @@ class Pan115Service:
                 break
 
         if data is None:
-            if method_not_allowed_error:
+            if last_error and self._is_method_not_allowed_error(str(last_error)):
                 raise RuntimeError(
                     "share_api_method_not_allowed: "
-                    f"endpoint={failed_endpoint}, share_code={share_code}, cid={cid}, "
+                    f"endpoint={last_error_endpoint}, share_code={share_code}, cid={cid}, "
                     f"detail={str(last_error)[:300] if last_error else 'unknown'}"
                 )
             raise last_error or Exception("获取分享文件列表失败")
