@@ -196,7 +196,10 @@ const fetchSubscriptions = async () => {
   const token = ++activeFetchToken
   loading.value = true
   try {
-    const params = { exclude_transferred_success: true }
+    const params = {
+      is_active: true,
+      exclude_transferred_success: true
+    }
     if (filterType.value !== 'all') {
       params.media_type = filterType.value
     }

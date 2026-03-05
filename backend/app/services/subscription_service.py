@@ -67,6 +67,18 @@ class SubscriptionService:
         hdhive_unlock_context = self._build_hdhive_unlock_context()
         source_order = self._resolve_source_order(normalized_channel)
 
+        has_successful_transfer = (
+            select(DownloadRecord.id)
+            .where(
+                DownloadRecord.subscription_id == Subscription.id,
+                or_(
+                    DownloadRecord.completed_at.is_not(None),
+                    DownloadRecord.file_id.is_not(None),
+                    DownloadRecord.status == MediaStatus.COMPLETED,
+                ),
+            )
+            .exists()
+        )
         subs_result = await db.execute(
             select(
                 Subscription.id,
@@ -75,7 +87,12 @@ class SubscriptionService:
                 Subscription.media_type,
                 Subscription.year,
                 Subscription.auto_download,
-            ).order_by(Subscription.id.asc())
+            )
+            .where(
+                Subscription.is_active == True,  # noqa: E712
+                ~has_successful_transfer,
+            )
+            .order_by(Subscription.id.asc())
         )
         subscriptions = [
             SubscriptionSnapshot(
@@ -99,6 +116,10 @@ class SubscriptionService:
             payload={
                 "checked_count": len(subscriptions),
                 "source_order": source_order,
+                "scope": {
+                    "is_active": True,
+                    "exclude_transferred_success": True,
+                },
             },
         )
         if progress_callback:
