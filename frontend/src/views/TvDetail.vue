@@ -1156,7 +1156,7 @@ const checkSubscribed = async () => {
     return
   }
   try {
-    const { data } = await subscriptionApi.list({ media_type: 'tv' })
+    const { data } = await subscriptionApi.listForStatus({ media_type: 'tv' })
     const items = Array.isArray(data) ? data : []
     const matched = items.find((sub) => Number(sub.tmdb_id) === tmdbId) || null
     isSubscribed.value = Boolean(matched)

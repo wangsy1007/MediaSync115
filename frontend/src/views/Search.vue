@@ -379,7 +379,7 @@ const applySubscribedFlags = () => {
 
 const refreshSubscribedKeys = async () => {
   try {
-    const { data } = await subscriptionApi.list()
+    const { data } = await subscriptionApi.listForStatus()
     const next = new Set()
     const nextMap = new Map()
     for (const sub of Array.isArray(data) ? data : []) {
@@ -2145,5 +2145,4 @@ onBeforeUnmount(() => {
   to { opacity: 1; transform: translateY(0); }
 }
 </style>
-
 

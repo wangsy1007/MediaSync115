@@ -1,0 +1,3 @@
+*.dev.log
+*.dev.pid
+frontend/vite.config.js.timestamp-*.mjs

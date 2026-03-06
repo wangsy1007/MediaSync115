@@ -151,7 +151,7 @@ const applySubscribedFlags = () => {
 
 const refreshSubscribedMap = async () => {
   try {
-    const { data } = await subscriptionApi.list()
+    const { data } = await subscriptionApi.listForStatus()
     const nextMap = new Map()
     for (const sub of Array.isArray(data) ? data : []) {
       const key = buildSubscribedKey(sub.media_type, sub.tmdb_id)

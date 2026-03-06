@@ -1404,7 +1404,7 @@ const refreshSubscribeState = async () => {
     return
   }
   try {
-    const { data } = await subscriptionApi.list({ media_type: mediaType.value, is_active: true })
+    const { data } = await subscriptionApi.listForStatus({ media_type: mediaType.value })
     const list = Array.isArray(data) ? data : []
     const matched = list.find((item) => Number(item.tmdb_id) === mappedTmdbId.value && item.media_type === mediaType.value) || null
     isSubscribed.value = Boolean(matched)

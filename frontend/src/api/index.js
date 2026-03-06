@@ -156,6 +156,13 @@ export const logsApi = {
 
 export const subscriptionApi = {
   list: (params) => api.get('/subscriptions', { params }),
+  listForStatus: (params) => api.get('/subscriptions', {
+    params: {
+      is_active: true,
+      exclude_transferred_success: true,
+      ...(params || {})
+    }
+  }),
   get: (id) => api.get(`/subscriptions/${id}`),
   create: (data) => api.post('/subscriptions', data),
   update: (id, data) => api.put(`/subscriptions/${id}`, data),
