@@ -68,6 +68,11 @@
               <span>{{ stringifySummary(row.response_summary) }}</span>
             </template>
           </el-table-column>
+          <el-table-column label="额外信息" min-width="280" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span>{{ stringifySummary(row.extra) }}</span>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
 
@@ -292,4 +297,3 @@ onMounted(async () => {
   }
 }
 </style>
-

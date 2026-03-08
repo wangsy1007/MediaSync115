@@ -13,6 +13,7 @@ from app.core.database import async_session_maker
 from app.models.models import MediaType, Subscription
 from app.services.douban_explore_service import resolve_douban_explore_item
 from app.services.nullbr_service import nullbr_service
+from app.services.operation_log_service import operation_log_service
 from app.services.pan115_service import pan115_service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
@@ -164,6 +165,50 @@ class ExploreActionQueueService:
             "finished_at": task.get("finished_at"),
         }
 
+    @staticmethod
+    def _build_task_log_extra(task: dict[str, Any], extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        result = task.get("result") if isinstance(task.get("result"), dict) else {}
+        merged: dict[str, Any] = {
+            "task_id": str(task.get("task_id") or ""),
+            "queue_type": str(task.get("queue_type") or ""),
+            "task_status": str(task.get("status") or ""),
+            "intent": str(task.get("intent") or ""),
+            "item_key": str(task.get("item_key") or ""),
+            "item_title": str(payload.get("title") or payload.get("name") or ""),
+            "media_type": ExploreActionQueueService._normalize_media_type(payload.get("media_type")),
+            "tmdb_id": result.get("tmdb_id") or payload.get("tmdb_id"),
+            "douban_id": str(payload.get("douban_id") or payload.get("id") or ""),
+            "error": str(task.get("error") or ""),
+        }
+        if extra:
+            merged.update(extra)
+        return merged
+
+    async def _log_task_event(
+        self,
+        task: dict[str, Any],
+        *,
+        stage: str,
+        status: str,
+        message: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        queue_type = str(task.get("queue_type") or "unknown").strip() or "unknown"
+        task_id = str(task.get("task_id") or "background")
+        try:
+            await operation_log_service.log_background_event(
+                source_type="explore_queue",
+                module="explore_queue",
+                action=f"explore.queue.{queue_type}.{stage}",
+                status=status,
+                message=message,
+                trace_id=task_id,
+                extra=self._build_task_log_extra(task, extra),
+            )
+        except Exception as exc:
+            logger.exception("failed to write explore queue operation log: %s", exc)
+
     async def _ensure_workers(self) -> None:
         async with self._lock:
             if self._subscribe_worker_task is None or self._subscribe_worker_task.done():
@@ -199,6 +244,9 @@ class ExploreActionQueueService:
         normalized_intent = "unsubscribe" if str(intent or "").strip().lower() == "unsubscribe" else "subscribe"
         item_key = self._build_item_key_from_payload(payload)
         now = self._now_iso()
+        queue_size = 0
+        task: dict[str, Any] | None = None
+        duplicate_task: dict[str, Any] | None = None
 
         async with self._lock:
             await self._prune_locked()
@@ -211,35 +259,61 @@ class ExploreActionQueueService:
                     existing_task["updated_at"] = now
                     existing_task["message"] = "已更新为最后一次操作意图"
                     existing_task["expires_at"] = time.time() + self._task_ttl_seconds
-                    return self._serialize_task(existing_task)
+                    duplicate_task = dict(existing_task)
+                    queue_size = len(self._subscribe_queue)
 
-            task_id = uuid4().hex
-            task = {
-                "task_id": task_id,
-                "queue_type": "subscribe",
-                "status": "queued",
-                "item_key": item_key,
-                "intent": normalized_intent,
-                "message": "已加入订阅队列",
-                "payload": dict(payload),
-                "result": {},
-                "error": "",
-                "created_at": now,
-                "updated_at": now,
-                "started_at": None,
-                "finished_at": None,
-                "expires_at": time.time() + self._task_ttl_seconds,
-            }
-            self._tasks[task_id] = task
-            self._subscribe_queue.append(task_id)
-            self._subscribe_active_by_key[item_key] = task_id
+            if duplicate_task is None:
+                task_id = uuid4().hex
+                task = {
+                    "task_id": task_id,
+                    "queue_type": "subscribe",
+                    "status": "queued",
+                    "item_key": item_key,
+                    "intent": normalized_intent,
+                    "message": "已加入订阅队列",
+                    "payload": dict(payload),
+                    "result": {},
+                    "error": "",
+                    "created_at": now,
+                    "updated_at": now,
+                    "started_at": None,
+                    "finished_at": None,
+                    "expires_at": time.time() + self._task_ttl_seconds,
+                }
+                self._tasks[task_id] = task
+                self._subscribe_queue.append(task_id)
+                self._subscribe_active_by_key[item_key] = task_id
+                queue_size = len(self._subscribe_queue)
 
+        if duplicate_task is not None:
+            await self._log_task_event(
+                duplicate_task,
+                stage="enqueue",
+                status="queued",
+                message="订阅任务已在队列中，已更新为最后一次操作意图",
+                extra={"queue_size": queue_size},
+            )
+            return self._serialize_task(duplicate_task)
+
+        if task is None:
+            raise RuntimeError("subscribe queue enqueue failed")
+
+        await self._log_task_event(
+            task,
+            stage="enqueue",
+            status="queued",
+            message="订阅任务已加入队列",
+            extra={"queue_size": queue_size},
+        )
         return self._serialize_task(task)
 
     async def enqueue_save(self, payload: dict[str, Any]) -> dict[str, Any]:
         await self._ensure_workers()
         item_key = self._build_item_key_from_payload(payload)
         now = self._now_iso()
+        queue_size = 0
+        task: dict[str, Any] | None = None
+        duplicate_task: dict[str, Any] | None = None
 
         async with self._lock:
             await self._prune_locked()
@@ -250,29 +324,52 @@ class ExploreActionQueueService:
                     existing_task["updated_at"] = now
                     existing_task["message"] = "该条目已在转存队列中"
                     existing_task["expires_at"] = time.time() + self._task_ttl_seconds
-                    return self._serialize_task(existing_task)
+                    duplicate_task = dict(existing_task)
+                    queue_size = len(self._save_queue)
 
-            task_id = uuid4().hex
-            task = {
-                "task_id": task_id,
-                "queue_type": "save",
-                "status": "queued",
-                "item_key": item_key,
-                "intent": "save",
-                "message": "已加入转存队列",
-                "payload": dict(payload),
-                "result": {},
-                "error": "",
-                "created_at": now,
-                "updated_at": now,
-                "started_at": None,
-                "finished_at": None,
-                "expires_at": time.time() + self._task_ttl_seconds,
-            }
-            self._tasks[task_id] = task
-            self._save_queue.append(task_id)
-            self._save_active_by_key[item_key] = task_id
+            if duplicate_task is None:
+                task_id = uuid4().hex
+                task = {
+                    "task_id": task_id,
+                    "queue_type": "save",
+                    "status": "queued",
+                    "item_key": item_key,
+                    "intent": "save",
+                    "message": "已加入转存队列",
+                    "payload": dict(payload),
+                    "result": {},
+                    "error": "",
+                    "created_at": now,
+                    "updated_at": now,
+                    "started_at": None,
+                    "finished_at": None,
+                    "expires_at": time.time() + self._task_ttl_seconds,
+                }
+                self._tasks[task_id] = task
+                self._save_queue.append(task_id)
+                self._save_active_by_key[item_key] = task_id
+                queue_size = len(self._save_queue)
 
+        if duplicate_task is not None:
+            await self._log_task_event(
+                duplicate_task,
+                stage="enqueue",
+                status="queued",
+                message="转存任务已在队列中，忽略重复入队",
+                extra={"queue_size": queue_size},
+            )
+            return self._serialize_task(duplicate_task)
+
+        if task is None:
+            raise RuntimeError("save queue enqueue failed")
+
+        await self._log_task_event(
+            task,
+            stage="enqueue",
+            status="queued",
+            message="转存任务已加入队列",
+            extra={"queue_size": queue_size},
+        )
         return self._serialize_task(task)
 
     async def get(self, task_id: str) -> dict[str, Any] | None:
@@ -311,11 +408,19 @@ class ExploreActionQueueService:
             task["expires_at"] = time.time() + self._task_ttl_seconds
             return dict(task)
 
-    async def _mark_finished(self, task_id: str, *, success: bool, message: str, error: str = "", result: dict[str, Any] | None = None) -> None:
+    async def _mark_finished(
+        self,
+        task_id: str,
+        *,
+        success: bool,
+        message: str,
+        error: str = "",
+        result: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
-                return
+                return None
             now = self._now_iso()
             task["status"] = "success" if success else "failed"
             task["message"] = message
@@ -330,6 +435,7 @@ class ExploreActionQueueService:
                 self._subscribe_active_by_key.pop(item_key, None)
             if task.get("queue_type") == "save" and self._save_active_by_key.get(item_key) == task_id:
                 self._save_active_by_key.pop(item_key, None)
+            return dict(task)
 
     async def _pop_subscribe_task(self) -> str | None:
         async with self._lock:
@@ -356,22 +462,43 @@ class ExploreActionQueueService:
                 task = await self._mark_running(task_id)
                 if not task:
                     continue
+                await self._log_task_event(
+                    task,
+                    stage="start",
+                    status="running",
+                    message="订阅任务开始执行",
+                )
 
                 try:
                     result = await self._execute_subscribe(task)
-                    await self._mark_finished(
+                    finished_task = await self._mark_finished(
                         task_id,
                         success=True,
                         message=str(result.get("message") or "订阅队列任务执行完成"),
                         result=result,
                     )
+                    if finished_task:
+                        await self._log_task_event(
+                            finished_task,
+                            stage="finish",
+                            status="success",
+                            message=str(finished_task.get("message") or "订阅任务执行完成"),
+                        )
                 except Exception as exc:
-                    await self._mark_finished(
+                    finished_task = await self._mark_finished(
                         task_id,
                         success=False,
                         message="订阅队列任务执行失败",
                         error=str(exc),
                     )
+                    if finished_task:
+                        await self._log_task_event(
+                            finished_task,
+                            stage="finish",
+                            status="failed",
+                            message=f"订阅任务执行失败: {str(exc)}",
+                            extra={"error": str(exc)},
+                        )
             except Exception as exc:
                 logger.exception("subscribe worker loop error: %s", exc)
                 await asyncio.sleep(0.5)
@@ -387,22 +514,43 @@ class ExploreActionQueueService:
                 task = await self._mark_running(task_id)
                 if not task:
                     continue
+                await self._log_task_event(
+                    task,
+                    stage="start",
+                    status="running",
+                    message="转存任务开始执行",
+                )
 
                 try:
                     result = await self._execute_save(task)
-                    await self._mark_finished(
+                    finished_task = await self._mark_finished(
                         task_id,
                         success=True,
                         message=str(result.get("message") or "转存队列任务执行完成"),
                         result=result,
                     )
+                    if finished_task:
+                        await self._log_task_event(
+                            finished_task,
+                            stage="finish",
+                            status="success",
+                            message=str(finished_task.get("message") or "转存任务执行完成"),
+                        )
                 except Exception as exc:
-                    await self._mark_finished(
+                    finished_task = await self._mark_finished(
                         task_id,
                         success=False,
                         message="转存队列任务执行失败",
                         error=str(exc),
                     )
+                    if finished_task:
+                        await self._log_task_event(
+                            finished_task,
+                            stage="finish",
+                            status="failed",
+                            message=f"转存任务执行失败: {str(exc)}",
+                            extra={"error": str(exc)},
+                        )
             except Exception as exc:
                 logger.exception("save worker loop error: %s", exc)
                 await asyncio.sleep(0.5)
