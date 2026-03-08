@@ -160,14 +160,6 @@ export const subscriptionApi = {
   listForStatus: (params) => api.get('/subscriptions', {
     params: {
       is_active: true,
-      exclude_transferred_success: true,
-      ...(params || {})
-    }
-  }),
-  // 用于检查订阅状态，不排除已成功转存的订阅
-  listForCheck: (params) => api.get('/subscriptions', {
-    params: {
-      is_active: true,
       ...(params || {})
     }
   }),

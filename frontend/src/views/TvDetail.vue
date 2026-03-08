@@ -1184,7 +1184,7 @@ const checkSubscribed = async () => {
     return
   }
   try {
-    const { data } = await subscriptionApi.listForCheck({ media_type: 'tv' })
+    const { data } = await subscriptionApi.listForStatus({ media_type: 'tv' })
     // 处理新的返回格式：{ items: [], douban_id_map: {}, imdb_id_map: {} }
     const items = Array.isArray(data) ? data : (data?.items || [])
     const matched = items.find((sub) => Number(sub.tmdb_id) === tmdbId) || null

@@ -303,7 +303,6 @@ async def create_subscription(
 async def list_subscriptions(
     is_active: Optional[bool] = None,
     media_type: Optional[MediaType] = None,
-    exclude_transferred_success: bool = False,
     db: AsyncSession = Depends(get_db)
 ):
     query = select(Subscription)
@@ -311,20 +310,6 @@ async def list_subscriptions(
         query = query.where(Subscription.is_active == is_active)
     if media_type:
         query = query.where(Subscription.media_type == media_type)
-    if exclude_transferred_success:
-        has_successful_transfer = (
-            select(DownloadRecord.id)
-            .where(
-                DownloadRecord.subscription_id == Subscription.id,
-                or_(
-                    DownloadRecord.completed_at.is_not(None),
-                    DownloadRecord.file_id.is_not(None),
-                    DownloadRecord.status == MediaStatus.COMPLETED,
-                ),
-            )
-            .exists()
-        )
-        query = query.where(~has_successful_transfer)
     result = await db.execute(query.order_by(Subscription.created_at.desc()))
     subscriptions = result.scalars().all()
 

@@ -404,7 +404,7 @@ const applySubscribedFlags = () => {
 
 const refreshSubscribedKeys = async () => {
   try {
-    const { data } = await subscriptionApi.listForCheck()
+    const { data } = await subscriptionApi.listForStatus()
 
     // 处理新的返回格式：{ items: [], douban_id_map: {}, imdb_id_map: {} }
     const items = Array.isArray(data) ? data : (data.items || [])
