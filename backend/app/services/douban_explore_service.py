@@ -25,6 +25,7 @@ TMDB_ID_CACHE_TTL_SECONDS = 60 * 60 * 24
 TMDB_ID_NEGATIVE_CACHE_TTL_SECONDS = 60 * 10
 TMDB_BACKFILL_CONCURRENCY = 3
 TMDB_BACKFILL_MAX_ITEMS_PER_SECTION = 12
+TMDB_SYNC_PRIME_MAX_ITEMS_PER_SECTION = 12
 DOUBAN_SECTION_MAX_COUNT = 50
 WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 WIKIDATA_CACHE_TTL_SECONDS = 60 * 60 * 24
@@ -1435,6 +1436,19 @@ async def _backfill_tmdb_ids(candidates: list[dict[str, Any]]) -> None:
     await asyncio.gather(*[_worker(candidate) for candidate in candidates], return_exceptions=True)
 
 
+async def _prime_tmdb_ids_for_first_screen(items: list[dict[str, Any]], candidates: list[dict[str, Any]]) -> None:
+    if not items or not candidates:
+        return
+
+    prime_candidates = candidates[:TMDB_SYNC_PRIME_MAX_ITEMS_PER_SECTION]
+    if not prime_candidates:
+        return
+
+    # Resolve the first screen synchronously so subscription state can match on initial render.
+    await _backfill_tmdb_ids(prime_candidates)
+    _hydrate_tmdb_ids_from_cache(items)
+
+
 def _extract_subject_year(payload: dict[str, Any], fallback_year: Optional[str]) -> Optional[str]:
     if isinstance(fallback_year, str) and re.fullmatch(r"(?:19|20)\d{2}", fallback_year):
         return fallback_year
@@ -1697,6 +1711,9 @@ async def fetch_douban_section(
             enqueue_tmdb_backfill=True,
             rank_start=start + 1,
         )
+
+        if start == 0:
+            await _prime_tmdb_ids_for_first_screen(items, backfill_candidates)
 
         _schedule_tmdb_backfill(
             candidates=backfill_candidates,
