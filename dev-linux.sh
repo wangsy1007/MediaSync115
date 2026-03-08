@@ -10,8 +10,8 @@ BACKEND_PID_FILE="$BACKEND_DIR/backend.dev.pid"
 FRONTEND_PID_FILE="$FRONTEND_DIR/frontend.dev.pid"
 BACKEND_LOG_FILE="$BACKEND_DIR/backend.dev.log"
 FRONTEND_LOG_FILE="$FRONTEND_DIR/frontend.dev.log"
-BACKEND_PATTERN="uvicorn main:app --host 127\\.0\\.0\\.1 --port 8000"
-FRONTEND_PATTERN="vite(\\.js)? .*--host 127\\.0\\.0\\.1 --port 5173"
+BACKEND_PATTERN="uvicorn main:app .*--host 127.0.0.1 .*--port 8000"
+FRONTEND_PATTERN="vite(\\.js)? .*--host 127.0.0.1 .*--port 5173"
 
 BACKEND_CMD="./.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000"
 FRONTEND_CMD="./node_modules/.bin/vite --host 127.0.0.1 --port 5173"
@@ -41,9 +41,14 @@ is_running() {
   return 1
 }
 
+find_pids_by_pattern() {
+  local pattern="$1"
+  pgrep -f "$pattern" || true
+}
+
 find_pid_by_pattern() {
   local pattern="$1"
-  ps -eo pid=,args= | awk -v pat="$pattern" '$0 ~ pat {print $1; exit}'
+  find_pids_by_pattern "$pattern" | head -n 1
 }
 
 refresh_pid_file() {
@@ -109,19 +114,21 @@ stop_service() {
   local pid_file="$2"
   local pattern="$3"
 
-  refresh_pid_file "$pid_file" "$pattern" || true
-
-  if ! is_running "$pid_file"; then
+  local pids
+  pids="$(find_pids_by_pattern "$pattern" | xargs || true)"
+  if [[ -z "$pids" ]]; then
+    rm -f "$pid_file"
     echo "$name not running"
     return 0
   fi
 
-  local pid
-  pid="$(cat "$pid_file")"
-  kill "$pid" 2>/dev/null || true
+  echo "$name stopping: pid(s) $pids"
+  for pid in $pids; do
+    kill "$pid" 2>/dev/null || true
+  done
 
   for _ in {1..20}; do
-    if ! refresh_pid_file "$pid_file" "$pattern"; then
+    if [[ -z "$(find_pids_by_pattern "$pattern" | xargs || true)" ]]; then
       rm -f "$pid_file"
       echo "$name stopped"
       return 0
@@ -129,14 +136,10 @@ stop_service() {
     sleep 0.25
   done
 
-  while true; do
-    pid="$(find_pid_by_pattern "$pattern")"
-    if [[ -z "$pid" ]]; then
-      break
-    fi
+  for pid in $(find_pids_by_pattern "$pattern"); do
     kill -9 "$pid" 2>/dev/null || true
-    sleep 0.25
   done
+  sleep 0.25
   rm -f "$pid_file"
   echo "$name stopped with SIGKILL"
 }
