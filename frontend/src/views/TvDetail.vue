@@ -6,7 +6,12 @@
           <img :src="getPosterUrl(tv.poster_path)" :alt="tv.name" />
         </div>
         <div class="info">
-          <h1 class="title">{{ tv.name }}</h1>
+          <div class="title-row">
+            <h1 class="title">{{ tv.name }}</h1>
+            <span v-if="isInEmby" class="emby-badge-inline" title="Emby 已入库">
+              <el-icon><Check /></el-icon>
+            </span>
+          </div>
           <p class="original-title" v-if="tv.original_name !== tv.name">
             {{ tv.original_name }}
           </p>
@@ -525,7 +530,7 @@ import { ref, onBeforeUnmount, onMounted, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { searchApi, subscriptionApi, pan115Api } from '@/api'
-import { Star, Plus } from '@element-plus/icons-vue'
+import { Star, Plus, Check } from '@element-plus/icons-vue'
 
 const route = useRoute()
 
@@ -566,6 +571,7 @@ const seedhubMagnetTaskId = ref('')
 let seedhubPollTimer = null
 const ed2kLoading = ref(false)
 const isSubscribed = ref(false)
+const isInEmby = ref(false)
 const subscriptionId = ref(null)
 const subscribing = ref(false)
 const doubanLink = ref(null)
@@ -904,10 +910,26 @@ const fetchTv = async () => {
 
     // 获取 IMDB ID 和豆瓣链接
     await fetchExternalIds(tmdbId)
+    await refreshEmbyStatus()
   } catch (error) {
     ElMessage.error('获取电视剧信息失败')
   } finally {
     loading.value = false
+  }
+}
+
+const refreshEmbyStatus = async () => {
+  const tmdbId = Number(route.params.id || 0)
+  if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
+    isInEmby.value = false
+    return
+  }
+  try {
+    const { data } = await searchApi.getEmbyStatusMap([{ media_type: 'tv', tmdb_id: tmdbId }])
+    const payload = data?.items || {}
+    isInEmby.value = Boolean(payload[`tv:${tmdbId}`]?.exists_in_emby)
+  } catch {
+    isInEmby.value = false
   }
 }
 
@@ -1532,6 +1554,7 @@ watch(pan115SourceTab, (tab) => {
 
 watch(() => route.params.id, () => {
   resetSeedhubTaskState()
+  isInEmby.value = false
   pan115SourceTab.value = 'nullbr'
   magnetSourceTab.value = 'nullbr'
   pan115Resources.value = []
@@ -1609,6 +1632,25 @@ onBeforeUnmount(() => {
       flex: 1;
       display: flex;
       flex-direction: column;
+
+      .title-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .emby-badge-inline {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 999px;
+        background: rgba(52, 199, 89, 0.95);
+        color: #fff;
+        box-shadow: 0 6px 18px rgba(52, 199, 89, 0.35);
+      }
 
       .title {
         margin: 0 0 8px;

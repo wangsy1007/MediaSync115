@@ -6,7 +6,12 @@
           <img :src="getPosterUrl(detail.poster_url)" :alt="detail.title" @error="handlePosterError" />
         </div>
         <div class="info">
-          <h1 class="title">{{ detail.title }}</h1>
+          <div class="title-row">
+            <h1 class="title">{{ detail.title }}</h1>
+            <span v-if="isInEmby" class="emby-badge-inline" title="Emby 已入库">
+              <el-icon><Check /></el-icon>
+            </span>
+          </div>
           <p class="original-title" v-if="detail.original_title && detail.original_title !== detail.title">
             {{ detail.original_title }}
           </p>
@@ -412,6 +417,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { pansouApi, pan115Api, searchApi, subscriptionApi } from '@/api'
+import { Check } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const loading = ref(false)
@@ -427,6 +433,7 @@ const pan115Resources = ref([])
 const magnetResources = ref([])
 const ed2kResources = ref([])
 const isSubscribed = ref(false)
+const isInEmby = ref(false)
 const subscriptionId = ref(null)
 
 const pan115Loading = ref(false)
@@ -1162,6 +1169,7 @@ const loadDetail = async () => {
     }
     pan115SourceTab.value = mappedTmdbId.value ? 'nullbr' : 'pansou'
     await refreshSubscribeState()
+    await refreshEmbyStatus()
     await ensureActiveTabLoaded()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || error.message || '豆瓣详情获取失败')
@@ -1425,6 +1433,20 @@ const refreshSubscribeState = async () => {
   }
 }
 
+const refreshEmbyStatus = async () => {
+  if (!mappedTmdbId.value) {
+    isInEmby.value = false
+    return
+  }
+  try {
+    const { data } = await searchApi.getEmbyStatusMap([{ media_type: mediaType.value, tmdb_id: mappedTmdbId.value }])
+    const payload = data?.items || {}
+    isInEmby.value = Boolean(payload[`${mediaType.value}:${mappedTmdbId.value}`]?.exists_in_emby)
+  } catch {
+    isInEmby.value = false
+  }
+}
+
 const handleSubscribe = async () => {
   if (!mappedTmdbId.value || !detail.value) {
     ElMessage.warning('请先匹配 TMDB 后再订阅')
@@ -1554,6 +1576,10 @@ watch(activeTab, async () => {
   await ensureActiveTabLoaded()
 })
 
+watch(mappedTmdbId, async () => {
+  await refreshEmbyStatus()
+})
+
 watch(pan115SourceTab, async (tab) => {
   if (tab === 'nullbr') pan115Pager.value.nullbr = 1
   if (tab === 'pansou') pan115Pager.value.pansou = 1
@@ -1588,6 +1614,7 @@ watch(magnetSourceTab, async (tab) => {
 
 watch(() => `${route.params.mediaType || ''}:${route.params.id || ''}`, async () => {
   await resetSeedhubTaskState()
+  isInEmby.value = false
   activeTab.value = 'pan115'
   pan115SourceTab.value = 'nullbr'
   magnetSourceTab.value = 'nullbr'
@@ -1626,6 +1653,25 @@ onBeforeUnmount(async () => {
 
     .info {
       flex: 1;
+
+      .title-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .emby-badge-inline {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 999px;
+        background: rgba(52, 199, 89, 0.95);
+        color: #fff;
+        box-shadow: 0 6px 18px rgba(52, 199, 89, 0.35);
+      }
 
       .title {
         margin: 0;
