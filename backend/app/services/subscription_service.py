@@ -1447,12 +1447,10 @@ class SubscriptionService:
         # 订阅自动转存应使用“默认转存文件夹”，而不是离线下载目录。
         default_folder_id = runtime_settings_service.get_pan115_default_folder().get("folder_id", "0")
         parent_folder_id = str(default_folder_id or "0")
-        target_folder_name = self._build_target_folder_name(sub)
 
         saved = 0
         failed = 0
         errors: list[dict[str, Any]] = []
-        target_folder_id = ""
         tv_missing_enabled = False
         missing_episodes: set[tuple[int, int]] = set()
         is_tv_subscription = sub.media_type == MediaType.TV and sub.tmdb_id is not None
@@ -1601,23 +1599,12 @@ class SubscriptionService:
                         )
                         continue
 
-                    if not target_folder_id:
-                        target_folder_id = await pan_service.get_or_create_folder(parent_folder_id, target_folder_name)
-                    result = await pan_service.save_share_files(
-                        share_code=share_code,
+                    result = await pan_service.save_share_files_directly(
+                        share_url=share_link,
                         file_ids=selected_file_ids,
-                        pid=target_folder_id,
+                        parent_id=parent_folder_id,
                         receive_code=receive_code,
                     )
-                    if not self._is_pan115_save_success(result):
-                        raise ValueError(
-                            str(
-                                (result or {}).get("error")
-                                or (result or {}).get("message")
-                                or (result or {}).get("msg")
-                                or "115转存失败"
-                            )
-                        )
 
                     if selected_mode == "missing":
                         for pair in matched_pairs:
@@ -1625,7 +1612,7 @@ class SubscriptionService:
                     record.status = MediaStatus.PENDING
                     record.completed_at = None
                     record.error_message = None
-                    record.file_id = str(target_folder_id or "")
+                    record.file_id = parent_folder_id
                     saved += 1
                     await self._create_step_log(
                         db,
@@ -1642,7 +1629,8 @@ class SubscriptionService:
                             "selected_mode": selected_mode,
                             "selected_count": len(selected_file_ids),
                             "remaining_missing_count": len(missing_episodes),
-                            "folder_id": record.file_id,
+                            "target_parent_id": parent_folder_id,
+                            "save_mode": "direct",
                         },
                     )
                     if not missing_episodes:
@@ -1653,22 +1641,20 @@ class SubscriptionService:
                             "source": source,
                             "record_id": record.id,
                             "remaining_missing_count": 0,
-                            "folder_id": record.file_id,
+                            "target_parent_id": parent_folder_id,
+                            "save_mode": "direct",
                         }
                         break
                 else:
-                    result = await pan_service.save_share_to_folder(
+                    result = await pan_service.save_share_directly(
                         share_url=share_link,
-                        folder_name=target_folder_name,
                         parent_id=parent_folder_id,
                         receive_code=receive_code,
                     )
                     record.status = MediaStatus.COMPLETED
                     record.completed_at = datetime.utcnow()
                     record.error_message = None
-                    folder_id = str((result or {}).get("folder_id") or "").strip()
-                    if folder_id:
-                        record.file_id = folder_id
+                    record.file_id = parent_folder_id
                     saved += 1
                     await self._create_step_log(
                         db,
@@ -1682,7 +1668,8 @@ class SubscriptionService:
                         payload={
                             "source": source,
                             "record_id": record.id,
-                            "folder_id": record.file_id,
+                            "target_parent_id": parent_folder_id,
+                            "save_mode": "direct",
                         },
                     )
                     subscription_completed = True
@@ -1691,7 +1678,8 @@ class SubscriptionService:
                     cleanup_payload = {
                         "source": source,
                         "record_id": record.id,
-                        "folder_id": record.file_id,
+                        "target_parent_id": parent_folder_id,
+                        "save_mode": "direct",
                     }
                     break
             except Exception as exc:
@@ -1728,6 +1716,8 @@ class SubscriptionService:
                             "source": source,
                             "record_id": record.id,
                             "reason": "already_received",
+                            "target_parent_id": parent_folder_id,
+                            "save_mode": "direct",
                         }
                         break
                     continue

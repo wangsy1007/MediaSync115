@@ -189,6 +189,17 @@ class ExploreActionQueueService:
             merged["source_order"] = [str(item) for item in result.get("source_order")[:10]]
         if isinstance(result.get("attempts"), list):
             merged["attempts"] = result.get("attempts")[:20]
+        save_mode = str(result.get("save_mode") or "").strip()
+        if not save_mode and str(task.get("queue_type") or "") == "save":
+            save_mode = "direct"
+        if save_mode:
+            merged["save_mode"] = save_mode
+        target_parent_id = result.get("target_parent_id")
+        if target_parent_id is None and str(task.get("queue_type") or "") == "save":
+            folder = runtime_settings_service.get_pan115_default_folder()
+            target_parent_id = folder.get("folder_id")
+        if target_parent_id is not None:
+            merged["target_parent_id"] = str(target_parent_id or "")
         if extra:
             merged.update(extra)
         return merged
@@ -920,14 +931,10 @@ class ExploreActionQueueService:
 
         folder = runtime_settings_service.get_pan115_default_folder()
         folder_id = str(folder.get("folder_id") or "0").strip() or "0"
-        title = str(payload.get("title") or payload.get("name") or "").strip() or f"TMDB {tmdb_id}"
-        year = self._normalize_year(payload.get("year"))
-        folder_name = f"{title} ({year})" if year else title
         receive_code = self._extract_receive_code(share_link)
 
-        result = await pan115_service.save_share_to_folder(
+        result = await pan115_service.save_share_directly(
             share_link,
-            folder_name,
             folder_id,
             receive_code,
         )
@@ -957,6 +964,8 @@ class ExploreActionQueueService:
             "selected_source": str(search_result.get("selected_source") or ""),
             "source_order": list(search_result.get("source_order") or []),
             "attempts": list(search_result.get("attempts") or []),
+            "save_mode": "direct",
+            "target_parent_id": folder_id,
             "message": str(result.get("message") or "已提交转存任务") if isinstance(result, dict) else "已提交转存任务",
         }
 

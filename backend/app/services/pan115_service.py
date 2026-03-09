@@ -1066,6 +1066,41 @@ class Pan115Service:
         
         return None
 
+    def _resolve_share_payload(self, share_url: str, receive_code: str = "") -> tuple[str, str]:
+        """Normalize share url into share_code and receive_code."""
+        normalized_url = str(share_url or "").strip()
+        try:
+            share_payload = share_extract_payload(normalized_url)
+        except Exception:
+            share_payload = {
+                "share_code": self._extract_share_code(normalized_url) or "",
+                "receive_code": "",
+            }
+
+        share_code = str(share_payload.get("share_code") or "").strip()
+        if not share_code:
+            raise ValueError("无效的分享链接格式")
+
+        resolved_receive_code = str(receive_code or "").strip()
+        if not resolved_receive_code:
+            resolved_receive_code = str(share_payload.get("receive_code") or "").strip()
+        if not resolved_receive_code:
+            short_receive_match = re.match(r"^[A-Za-z0-9]+-([A-Za-z0-9]{4})$", normalized_url)
+            if short_receive_match:
+                resolved_receive_code = short_receive_match.group(1)
+        if not resolved_receive_code:
+            password_match = re.search(r"(?:password|pwd)=([^&#]+)", normalized_url, re.IGNORECASE)
+            resolved_receive_code = password_match.group(1) if password_match else ""
+        if not resolved_receive_code:
+            text_receive_match = re.search(
+                r"(?:提取码|提取碼|密码|密碼)\s*[:：=]?\s*([A-Za-z0-9]{4})",
+                normalized_url,
+                re.IGNORECASE,
+            )
+            resolved_receive_code = text_receive_match.group(1) if text_receive_match else ""
+
+        return share_code, resolved_receive_code
+
     @staticmethod
     def _safe_int(value: Any, default: int | None = 0) -> int | None:
         try:
@@ -1358,37 +1393,7 @@ class Pan115Service:
         Returns:
             转存结果
         """
-        # 提取分享码（支持更多链接格式）
-        share_url = (share_url or "").strip()
-        try:
-            share_payload = share_extract_payload(share_url)
-        except Exception:
-            share_payload = {
-                "share_code": self._extract_share_code(share_url) or "",
-                "receive_code": ""
-            }
-
-        share_code = share_payload.get("share_code")
-        if not share_code:
-            raise ValueError("无效的分享链接格式")
-
-        # 如果调用方未显式传提取码，尝试从链接中自动提取
-        if not receive_code:
-            receive_code = share_payload.get("receive_code") or ""
-            if not receive_code:
-                short_receive_match = re.match(r"^[A-Za-z0-9]+-([A-Za-z0-9]{4})$", share_url)
-                if short_receive_match:
-                    receive_code = short_receive_match.group(1)
-            if not receive_code:
-                password_match = re.search(r"(?:password|pwd)=([^&#]+)", share_url, re.IGNORECASE)
-                receive_code = password_match.group(1) if password_match else ""
-            if not receive_code:
-                text_receive_match = re.search(
-                    r"(?:提取码|提取碼|密码|密碼)\s*[:：=]?\s*([A-Za-z0-9]{4})",
-                    share_url,
-                    re.IGNORECASE,
-                )
-                receive_code = text_receive_match.group(1) if text_receive_match else ""
+        share_code, receive_code = self._resolve_share_payload(share_url, receive_code)
         
         # 获取或创建目标文件夹
         target_folder_id = await self.get_or_create_folder(parent_id, folder_name)
@@ -1436,6 +1441,51 @@ class Pan115Service:
             "result": result
         }
 
+    async def save_share_directly(
+        self,
+        share_url: str,
+        parent_id: str = "0",
+        receive_code: str = "",
+    ) -> Dict[str, Any]:
+        """将分享里的所有文件直接转存到目标目录，不创建影视外层文件夹。"""
+        share_code, receive_code = self._resolve_share_payload(share_url, receive_code)
+        all_files = await self.get_share_all_files_recursive(share_code, receive_code)
+        if not all_files:
+            raise ValueError("分享中没有可转存的文件")
+
+        file_ids = list(dict.fromkeys([str(f["fid"]) for f in all_files if f.get("fid")]))
+        result = await self.save_share_files(share_code, file_ids, str(parent_id or "0"), receive_code)
+        transfer_success = True
+        if isinstance(result, dict):
+            if "success" in result:
+                transfer_success = bool(result.get("success"))
+            elif "state" in result:
+                transfer_success = bool(result.get("state"))
+            elif "errNo" in result:
+                transfer_success = str(result.get("errNo")) == "0"
+            elif "code" in result:
+                transfer_success = str(result.get("code")) in {"0", "200"}
+
+        if not transfer_success:
+            error_msg = ""
+            if isinstance(result, dict):
+                error_msg = (
+                    str(result.get("error") or "")
+                    or str(result.get("error_msg") or "")
+                    or str(result.get("message") or "")
+                    or str(result.get("msg") or "")
+                )
+            raise ValueError(error_msg or "115转存失败，接口未返回成功状态")
+
+        return {
+            "success": transfer_success,
+            "message": f"成功直存 {len(file_ids)} 个文件",
+            "target_parent_id": str(parent_id or "0"),
+            "file_count": len(file_ids),
+            "save_mode": "direct",
+            "result": result,
+        }
+
 
     async def save_share_files_to_folder(
         self,
@@ -1461,37 +1511,7 @@ class Pan115Service:
         if not file_ids:
             raise ValueError("未选择任何要转存的文件")
 
-        # 提取分享码（支持更多链接格式）
-        share_url = (share_url or "").strip()
-        try:
-            share_payload = share_extract_payload(share_url)
-        except Exception:
-            share_payload = {
-                "share_code": self._extract_share_code(share_url) or "",
-                "receive_code": ""
-            }
-
-        share_code = share_payload.get("share_code")
-        if not share_code:
-            raise ValueError("无效的分享链接格式")
-
-        # 自动提取或使用提供的提取码
-        if not receive_code:
-            receive_code = share_payload.get("receive_code") or ""
-            if not receive_code:
-                short_receive_match = re.match(r"^[A-Za-z0-9]+-([A-Za-z0-9]{4})$", share_url)
-                if short_receive_match:
-                    receive_code = short_receive_match.group(1)
-            if not receive_code:
-                password_match = re.search(r"(?:password|pwd)=([^&#]+)", share_url, re.IGNORECASE)
-                receive_code = password_match.group(1) if password_match else ""
-            if not receive_code:
-                text_receive_match = re.search(
-                    r"(?:提取码|提取碼|密码|密碼)\s*[:：=]?\s*([A-Za-z0-9]{4})",
-                    share_url,
-                    re.IGNORECASE,
-                )
-                receive_code = text_receive_match.group(1) if text_receive_match else ""
+        share_code, receive_code = self._resolve_share_payload(share_url, receive_code)
         
         # 获取或创建目标文件夹
         target_folder_id = await self.get_or_create_folder(parent_id, folder_name)
@@ -1532,6 +1552,51 @@ class Pan115Service:
             "folder_name": folder_name,
             "file_count": len(file_ids),
             "result": result
+        }
+
+    async def save_share_files_directly(
+        self,
+        share_url: str,
+        file_ids: List[str],
+        parent_id: str = "0",
+        receive_code: str = "",
+    ) -> Dict[str, Any]:
+        """将指定文件直接转存到目标目录，不创建影视外层文件夹。"""
+        if not file_ids:
+            raise ValueError("未选择任何要转存的文件")
+
+        share_code, receive_code = self._resolve_share_payload(share_url, receive_code)
+        file_ids = list(dict.fromkeys([str(fid) for fid in file_ids if str(fid or "").strip()]))
+        result = await self.save_share_files(share_code, file_ids, str(parent_id or "0"), receive_code)
+        transfer_success = True
+        if isinstance(result, dict):
+            if "success" in result:
+                transfer_success = bool(result.get("success"))
+            elif "state" in result:
+                transfer_success = bool(result.get("state"))
+            elif "errNo" in result:
+                transfer_success = str(result.get("errNo")) == "0"
+            elif "code" in result:
+                transfer_success = str(result.get("code")) in {"0", "200"}
+
+        if not transfer_success:
+            error_msg = ""
+            if isinstance(result, dict):
+                error_msg = (
+                    str(result.get("error") or "")
+                    or str(result.get("error_msg") or "")
+                    or str(result.get("message") or "")
+                    or str(result.get("msg") or "")
+                )
+            raise ValueError(error_msg or "115转存失败，接口未返回成功状态")
+
+        return {
+            "success": transfer_success,
+            "message": f"成功直存 {len(file_ids)} 个文件",
+            "target_parent_id": str(parent_id or "0"),
+            "file_count": len(file_ids),
+            "save_mode": "direct",
+            "result": result,
         }
 
 
