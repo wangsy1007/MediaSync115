@@ -180,6 +180,7 @@ const mergeEmbyStatusMap = (rawMap = {}) => {
     nextMap.set(key, value || {})
   }
   embyStatusMap.value = nextMap
+  applySubscribedFlags()
 }
 
 const normalizeExploreQueueMediaType = (rawType) => {
@@ -392,6 +393,10 @@ const getCachedBatchPayload = (sectionKey, start, count) => {
     sectionBatchCache.delete(cacheKey)
     return null
   }
+  if (!Object.prototype.hasOwnProperty.call(cached.payload || {}, 'emby_status_map')) {
+    sectionBatchCache.delete(cacheKey)
+    return null
+  }
   return cached.payload
 }
 
@@ -416,7 +421,10 @@ const requestSectionBatch = async (sectionKey, start, { refresh = false } = {}) 
 
   const task = searchApi.getExploreSection(exploreSource.value, sectionKey, count, refresh, start)
     .then(({ data }) => {
-      const payload = data.section || {}
+      const payload = {
+        ...(data.section || {}),
+        emby_status_map: data?.emby_status_map || {}
+      }
       setCachedBatchPayload(sectionKey, start, count, payload)
       return payload
     })
@@ -634,6 +642,7 @@ const resetSectionState = () => {
   nextOffset.value = 0
   fetchedOnce.value = false
   loadingMore.value = false
+  embyStatusMap.value = new Map()
   sectionMeta.key = ''
   sectionMeta.title = ''
   sectionMeta.tag = ''
