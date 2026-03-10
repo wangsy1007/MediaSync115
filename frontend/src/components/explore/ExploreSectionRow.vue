@@ -148,9 +148,6 @@ const props = defineProps({
 const emit = defineEmits(['item-click', 'subscribe', 'save', 'merge-emby-status', 'open-section'])
 
 const HOME_SECTION_LIMIT = 12
-const HOME_SECTION_CACHE_VERSION = 'v1'
-const HOME_SECTION_CACHE_TTL_MS = 10 * 60 * 1000
-const HOME_SECTION_CACHE_PREFIX = 'explore-home'
 const PRIORITY_POSTER_COUNT = 6
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
 const rowItems = ref([])
@@ -161,7 +158,6 @@ const loadError = ref('')
 const rowRef = ref(null)
 const containerRef = ref(null)
 const scrollState = ref({ hasLeft: false, hasRight: false })
-const cacheHydrated = ref(false)
 let intersectionObserver = null
 
 const toValidTmdbId = (rawId) => {
@@ -233,126 +229,6 @@ const normalizeItems = (items = [], rankStart = 1) => {
   })
 }
 
-const buildSectionCacheKey = () => {
-  const source = String(props.source || 'douban').toLowerCase() === 'tmdb' ? 'tmdb' : 'douban'
-  const sectionKey = String(props.section?.key || '').trim()
-  if (!sectionKey) return ''
-  return `${HOME_SECTION_CACHE_PREFIX}:${source}:${sectionKey}:${HOME_SECTION_CACHE_VERSION}`
-}
-
-const buildCacheItemKey = (item) => {
-  if (!item || typeof item !== 'object') return ''
-  const mediaType = String(item.media_type || '').toLowerCase() === 'tv' ? 'tv' : 'movie'
-  const tmdbId = toValidTmdbId(item.tmdb_id || item.tmdbid)
-  if (tmdbId) return `tmdb:${mediaType}:${tmdbId}`
-  const doubanId = String(item.douban_id || item.id || '').trim()
-  if (doubanId) return `douban:${mediaType}:${doubanId}`
-  const title = String(item.title || item.name || '').trim().toLowerCase()
-  const year = String(item.year || '').trim()
-  if (title) return `fallback:${mediaType}:${title}:${year}`
-  return ''
-}
-
-const stripTransientFields = (item) => {
-  if (!item || typeof item !== 'object') return null
-  const {
-    isSubscribed,
-    isInEmby,
-    subscribing,
-    saving,
-    justSaved,
-    ...rest
-  } = item
-  return {
-    ...rest,
-    tmdb_id: toValidTmdbId(rest.tmdb_id || rest.tmdbid),
-    media_type: rest.media_type === 'tv' ? 'tv' : 'movie'
-  }
-}
-
-const persistSectionCache = () => {
-  if (typeof window === 'undefined') return
-  const cacheKey = buildSectionCacheKey()
-  if (!cacheKey) return
-  try {
-    const payload = {
-      cached_at: Date.now(),
-      total: Number(remoteTotal.value) || rowItems.value.length,
-      items: rowItems.value
-        .map((item) => stripTransientFields(item))
-        .filter((item) => item && typeof item === 'object')
-    }
-    window.localStorage.setItem(cacheKey, JSON.stringify(payload))
-  } catch {
-    // ignore storage write failures
-  }
-}
-
-const restoreSectionCache = () => {
-  cacheHydrated.value = false
-  if (typeof window === 'undefined') return false
-  const cacheKey = buildSectionCacheKey()
-  if (!cacheKey) return false
-  try {
-    const raw = window.localStorage.getItem(cacheKey)
-    if (!raw) return false
-    const payload = JSON.parse(raw)
-    const cachedAt = Number(payload?.cached_at || 0)
-    const items = Array.isArray(payload?.items) ? payload.items : []
-    if (!cachedAt || Date.now() - cachedAt > HOME_SECTION_CACHE_TTL_MS || !items.length) {
-      window.localStorage.removeItem(cacheKey)
-      return false
-    }
-    rowItems.value = normalizeItems(items, 1)
-    remoteTotal.value = Number(payload?.total) || rowItems.value.length
-    loaded.value = true
-    loadError.value = ''
-    cacheHydrated.value = true
-    return true
-  } catch {
-    try {
-      window.localStorage.removeItem(cacheKey)
-    } catch {
-      // ignore storage remove failures
-    }
-    return false
-  }
-}
-
-const mergeSectionItems = (freshItems = []) => {
-  const normalizedFresh = normalizeItems(freshItems, 1)
-  if (!rowItems.value.length) return normalizedFresh.slice(0, HOME_SECTION_LIMIT)
-
-  const existingMap = new Map()
-  for (const item of rowItems.value) {
-    const cacheKey = buildCacheItemKey(item)
-    if (cacheKey) existingMap.set(cacheKey, item)
-  }
-
-  const freshMap = new Map()
-  const newItems = []
-  for (const item of normalizedFresh) {
-    const cacheKey = buildCacheItemKey(item)
-    if (cacheKey) freshMap.set(cacheKey, item)
-    if (!cacheKey || !existingMap.has(cacheKey)) {
-      newItems.push(item)
-    }
-  }
-
-  const mergedExisting = rowItems.value.map((item) => {
-    const cacheKey = buildCacheItemKey(item)
-    if (cacheKey && freshMap.has(cacheKey)) {
-      return {
-        ...item,
-        ...freshMap.get(cacheKey)
-      }
-    }
-    return item
-  })
-
-  return [...newItems, ...mergedExisting].slice(0, HOME_SECTION_LIMIT)
-}
-
 const formatExploreCount = (value) => {
   const total = Number(value) || 0
   if (total > 100) return '100+'
@@ -422,7 +298,7 @@ const setupObserver = () => {
   intersectionObserver = new IntersectionObserver((entries) => {
     const entry = entries[0]
     if (!entry?.isIntersecting) return
-    fetchSection(cacheHydrated.value)
+    fetchSection()
     disconnectObserver()
   }, {
     rootMargin: '320px 0px'
@@ -434,28 +310,20 @@ const fetchSection = async (force = false) => {
   if (loading.value) return
   if (loaded.value && !force) return
   loading.value = true
-  if (!cacheHydrated.value || !rowItems.value.length) {
-    loadError.value = ''
-  }
+  loadError.value = ''
   try {
     const { data } = await searchApi.getExploreSection(props.source, props.section.key, HOME_SECTION_LIMIT, force, 0)
     emit('merge-emby-status', data?.emby_status_map || {})
     const payload = data?.section || {}
     const items = Array.isArray(payload.items) ? payload.items : []
-    rowItems.value = cacheHydrated.value
-      ? mergeSectionItems(items)
-      : normalizeItems(items, 1)
+    rowItems.value = normalizeItems(items, 1)
     remoteTotal.value = Number(payload.total) || rowItems.value.length
     loaded.value = true
-    cacheHydrated.value = false
-    persistSectionCache()
     await nextTick()
     applyStateToItems()
     updateScrollState()
   } catch (error) {
-    if (!rowItems.value.length) {
-      loadError.value = error.response?.data?.detail || error.message || '分区加载失败'
-    }
+    loadError.value = error.response?.data?.detail || error.message || '分区加载失败'
   } finally {
     loading.value = false
   }
@@ -487,22 +355,12 @@ watch(
     loaded.value = false
     loading.value = false
     loadError.value = ''
-    cacheHydrated.value = false
-    restoreSectionCache()
     await nextTick()
-    if (loaded.value) {
-      updateScrollState()
-    }
     setupObserver()
   }
 )
 
-onMounted(async () => {
-  restoreSectionCache()
-  await nextTick()
-  if (loaded.value) {
-    updateScrollState()
-  }
+onMounted(() => {
   setupObserver()
 })
 

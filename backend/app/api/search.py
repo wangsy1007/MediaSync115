@@ -21,6 +21,10 @@ from app.services.douban_explore_service import (
 )
 from app.services.explore_action_queue_service import explore_action_queue_service
 from app.services.emby_service import emby_service
+from app.services.explore_home_warmup_service import (
+    EXPLORE_HOME_WARMUP_LIMIT,
+    explore_home_warmup_service,
+)
 from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_service import nullbr_service
 from app.services.pansou_service import pansou_service
@@ -34,7 +38,7 @@ from app.services.tv_missing_service import tv_missing_service
 
 router = APIRouter(prefix="/search", tags=["search"])
 logger = logging.getLogger(__name__)
-EXPLORE_HOME_SECTION_LIMIT = 12
+EXPLORE_HOME_SECTION_LIMIT = EXPLORE_HOME_WARMUP_LIMIT
 DOUBAN_HOME_SYNC_PRIME_LIMIT = 0
 
 POPULAR_MOVIES_URL = "https://popular-movies-data.stevenlu.com/movies.json"
@@ -1312,6 +1316,18 @@ async def get_explore_section(
     refresh: bool = Query(False, description="Force refresh cache"),
 ):
     normalized_source = source if source in {"douban", "tmdb"} else "douban"
+    home_cached = explore_home_warmup_service.get_cached_section(
+        normalized_source,
+        section_key,
+        start,
+        limit,
+    )
+    if home_cached is not None and not refresh:
+        return {
+            **home_cached,
+            "cache_hit": True,
+            "cache_source": "home_warmup",
+        }
 
     if normalized_source == "tmdb":
         section = _find_tmdb_source(section_key)
@@ -1341,6 +1357,9 @@ async def get_explore_section(
                 "items": items,
             },
             "emby_status_map": await _build_emby_status_map(items),
+            "cache_hit": False,
+            "cache_source": "section_runtime",
+            "cache_warmed_at": None,
         }
 
     section = _find_douban_source(section_key)
@@ -1368,6 +1387,9 @@ async def get_explore_section(
             "items": items,
         },
         "emby_status_map": await _build_emby_status_map(items),
+        "cache_hit": False,
+        "cache_source": "section_runtime",
+        "cache_warmed_at": None,
     }
 
 

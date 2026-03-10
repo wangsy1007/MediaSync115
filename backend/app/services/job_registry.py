@@ -41,6 +41,7 @@ class JobRegistry:
         search_api._movie_pan115_cache.clear()
         search_api._tv_pan115_cache.clear()
         search_api._emby_badge_cache.clear()
+        explore_home_warmup_service.clear_snapshots()
         for cache_item in search_api._popular_sections_cache.values():
             cache_item["payload"] = None
             cache_item["expires_at"] = 0.0

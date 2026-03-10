@@ -1,4 +1,6 @@
 import asyncio
+from copy import deepcopy
+from datetime import datetime, timezone
 import logging
 import time
 from typing import Any
@@ -17,6 +19,48 @@ EXPLORE_HOME_WARMUP_TIMEOUT_SECONDS = 60.0
 class ExploreHomeWarmupService:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
+        self._section_snapshots: dict[str, dict[str, Any]] = {}
+
+    def _build_snapshot_key(self, source: str, section_key: str, start: int, limit: int) -> str:
+        return f"{source}:{section_key}:{start}:{limit}"
+
+    def _should_cache_request(self, start: int, limit: int) -> bool:
+        return int(start) == 0 and int(limit) == EXPLORE_HOME_WARMUP_LIMIT
+
+    def clear_snapshots(self) -> None:
+        self._section_snapshots.clear()
+
+    def get_cached_section(self, source: str, section_key: str, start: int, limit: int) -> dict[str, Any] | None:
+        normalized_source = "tmdb" if source == "tmdb" else "douban"
+        if not self._should_cache_request(start, limit):
+            return None
+        snapshot = self._section_snapshots.get(
+            self._build_snapshot_key(normalized_source, section_key, int(start), int(limit))
+        )
+        if not isinstance(snapshot, dict):
+            return None
+        payload = snapshot.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        return {
+            "source": snapshot.get("source") or ("tmdb" if normalized_source == "tmdb" else "douban-frodo"),
+            "fetched_at": snapshot.get("fetched_at"),
+            "cache_warmed_at": snapshot.get("cache_warmed_at"),
+            "section": deepcopy(payload),
+            "emby_status_map": deepcopy(snapshot.get("emby_status_map") or {}),
+        }
+
+    def _replace_source_snapshots(self, source: str, snapshots: list[dict[str, Any]]) -> None:
+        prefix = f"{source}:"
+        for key in list(self._section_snapshots.keys()):
+            if key.startswith(prefix):
+                self._section_snapshots.pop(key, None)
+        for snapshot in snapshots:
+            section_key = str(snapshot.get("section_key") or "").strip()
+            if not section_key:
+                continue
+            cache_key = self._build_snapshot_key(source, section_key, 0, EXPLORE_HOME_WARMUP_LIMIT)
+            self._section_snapshots[cache_key] = snapshot
 
     async def warmup(self, force_refresh: bool = False) -> dict[str, Any]:
         async with self._lock:
@@ -74,6 +118,7 @@ class ExploreHomeWarmupService:
     async def _warmup_source(self, source_name: str, force_refresh: bool) -> dict[str, Any]:
         source_rows = TMDB_SECTION_SOURCES if source_name == "tmdb" else DOUBAN_SECTION_SOURCES
         started_at = time.perf_counter()
+        source_label = "tmdb" if source_name == "tmdb" else "douban-frodo"
 
         async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
             if source_name == "tmdb":
@@ -103,7 +148,8 @@ class ExploreHomeWarmupService:
 
         success_count = 0
         failures: list[dict[str, str]] = []
-        items: list[dict[str, Any]] = []
+        warmed_at = datetime.now(timezone.utc).isoformat()
+        snapshots: list[dict[str, Any]] = []
         for section, result in zip(source_rows, results):
             if isinstance(result, Exception):
                 failures.append(
@@ -123,16 +169,37 @@ class ExploreHomeWarmupService:
                 continue
             success_count += 1
             section_items = result.get("items")
-            if isinstance(section_items, list):
-                items.extend(section_items)
+            section_payload = {
+                "key": result.get("key") or str(section.get("key") or ""),
+                "title": result.get("title") or str(section.get("title") or ""),
+                "tag": result.get("tag") or str(section.get("tag") or ""),
+                "source_url": result.get("source_url") or "",
+                "fetched_at": result.get("fetched_at") or warmed_at,
+                "total": int(result.get("total") or 0),
+                "start": 0,
+                "count": EXPLORE_HOME_WARMUP_LIMIT,
+                "items": section_items if isinstance(section_items, list) else [],
+            }
+            try:
+                from app.api import search as search_api
 
-        # Warm emby badge cache together with section caches so the first page load avoids recomputing it.
-        try:
-            from app.api import search as search_api
+                section_status_map = await search_api._build_emby_status_map(section_payload["items"])
+            except Exception as exc:
+                logger.warning("explore home warmup emby badge cache failed for %s/%s: %s", source_name, section_payload["key"], exc)
+                section_status_map = {}
+            snapshots.append(
+                {
+                    "section_key": section_payload["key"],
+                    "source": source_label,
+                    "fetched_at": section_payload["fetched_at"],
+                    "cache_warmed_at": warmed_at,
+                    "payload": section_payload,
+                    "emby_status_map": section_status_map,
+                }
+            )
 
-            await search_api._build_emby_status_map(items)
-        except Exception as exc:
-            logger.warning("explore home warmup emby badge cache failed for %s: %s", source_name, exc)
+        if snapshots:
+            self._replace_source_snapshots(source_name, snapshots)
 
         elapsed_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
