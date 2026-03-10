@@ -106,10 +106,21 @@
                   </el-table-column>
                   <el-table-column label="操作" width="180" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" @click="handleSaveToPan115(row)">
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :loading="Boolean(row?.saving) || isHdhiveUnlocking(row)"
+                        :disabled="isPan115ActionDisabled(row)"
+                        @click="handleSaveToPan115(row)"
+                      >
                         一键转存
                       </el-button>
-                      <el-button size="small" @click="handleSelectSave(row)">
+                      <el-button
+                        size="small"
+                        :loading="Boolean(row?.extracting)"
+                        :disabled="isPan115ActionDisabled(row)"
+                        @click="handleSelectSave(row)"
+                      >
                         选集
                       </el-button>
                     </template>
@@ -185,10 +196,21 @@
                   </el-table-column>
                   <el-table-column label="操作" width="180" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" @click="handleSaveToPan115(row)">
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :loading="Boolean(row?.saving) || isHdhiveUnlocking(row)"
+                        :disabled="isPan115ActionDisabled(row)"
+                        @click="handleSaveToPan115(row)"
+                      >
                         一键转存
                       </el-button>
-                      <el-button size="small" @click="handleSelectSave(row)">
+                      <el-button
+                        size="small"
+                        :loading="Boolean(row?.extracting)"
+                        :disabled="isPan115ActionDisabled(row)"
+                        @click="handleSelectSave(row)"
+                      >
                         选集
                       </el-button>
                     </template>
@@ -275,10 +297,21 @@
                   </el-table-column>
                   <el-table-column label="操作" width="180" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" :disabled="isPan115ActionDisabled(row)" @click="handleSaveToPan115(row)">
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :loading="Boolean(row?.saving) || isHdhiveUnlocking(row)"
+                        :disabled="isPan115ActionDisabled(row)"
+                        @click="handleSaveToPan115(row)"
+                      >
                         一键转存
                       </el-button>
-                      <el-button size="small" :disabled="isPan115ActionDisabled(row)" @click="handleSelectSave(row)">
+                      <el-button
+                        size="small"
+                        :loading="Boolean(row?.extracting)"
+                        :disabled="isPan115ActionDisabled(row)"
+                        @click="handleSelectSave(row)"
+                      >
                         选集
                       </el-button>
                     </template>
@@ -337,10 +370,21 @@
                   </el-table-column>
                   <el-table-column label="操作" width="180" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" @click="handleSaveToPan115(row)">
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :loading="Boolean(row?.saving) || isHdhiveUnlocking(row)"
+                        :disabled="isPan115ActionDisabled(row)"
+                        @click="handleSaveToPan115(row)"
+                      >
                         一键转存
                       </el-button>
-                      <el-button size="small" @click="handleSelectSave(row)">
+                      <el-button
+                        size="small"
+                        :loading="Boolean(row?.extracting)"
+                        :disabled="isPan115ActionDisabled(row)"
+                        @click="handleSelectSave(row)"
+                      >
                         选集
                       </el-button>
                     </template>
@@ -826,8 +870,15 @@ const isHdhiveResourceSuspectedInvalid = (row) => {
 }
 
 const isPan115ActionDisabled = (row) => {
+  if (Boolean(row?.saving) || Boolean(row?.extracting) || isHdhiveUnlocking(row)) return true
   if (isHdhiveResourceLocked(row)) return false
   return row?.pan115_savable === false
+}
+
+const isHdhiveUnlocking = (row) => {
+  const slug = String(row?.slug || '').trim()
+  if (!slug) return false
+  return hdhiveUnlockingSlugs.value.has(slug)
 }
 
 const showHdhiveNeedPointsNotice = async (row, reason = '') => {
@@ -1293,29 +1344,30 @@ const checkSubscribed = async () => {
 }
 
 const handleSaveToPan115 = async (item) => {
-  let shareLink = resolvePanShareLink(item)
-  if (!shareLink && item?.source_service === 'hdhive') {
-    shareLink = await ensureHdhiveShareLink(item, '一键转存')
-  }
-  if (!shareLink) {
-    ElMessage.warning('该资源暂无分享链接')
-    return
-  }
-
-  // 获取默认转存文件夹
-  let defaultFolderId = '0'
+  if (item?.saving || item?.extracting || isHdhiveUnlocking(item)) return
+  item.saving = true
   try {
-    const { data } = await pan115Api.getDefaultFolder()
-    defaultFolderId = data.folder_id || '0'
-  } catch (error) {
-    console.error('Failed to get default folder:', error)
-  }
+    let shareLink = resolvePanShareLink(item)
+    if (item?.source_service === 'hdhive') {
+      shareLink = await ensureHdhiveShareLink(item, '一键转存')
+    }
+    if (!shareLink) {
+      ElMessage.warning('该资源暂无分享链接')
+      return
+    }
 
-  const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
-  const folderName = tv.value.name + ' (' + tv.value.first_air_date?.split('-')[0] + ')' + seasonSuffix
-  const receiveCode = resolvePanReceiveCode(item, shareLink)
-  
-  try {
+    let defaultFolderId = '0'
+    try {
+      const { data } = await pan115Api.getDefaultFolder()
+      defaultFolderId = data.folder_id || '0'
+    } catch (error) {
+      console.error('Failed to get default folder:', error)
+    }
+
+    const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
+    const folderName = tv.value.name + ' (' + tv.value.first_air_date?.split('-')[0] + ')' + seasonSuffix
+    const receiveCode = resolvePanReceiveCode(item, shareLink)
+
     // 由后端统一解析分享链接并执行转存
     const { data } = await pan115Api.saveShareToFolder(
       shareLink,
@@ -1371,44 +1423,48 @@ const handleSaveToPan115 = async (item) => {
       return
     }
     ElMessage.error(detail || error.message || '转存失败')
+  } finally {
+    item.saving = false
   }
 }
 
 // 选集转存相关方法
 const handleSelectSave = async (item) => {
-  let shareLink = resolvePanShareLink(item)
-  if (!shareLink && item?.source_service === 'hdhive') {
-    shareLink = await ensureHdhiveShareLink(item, '选集转存')
-  }
-  if (!shareLink) {
-    ElMessage.warning('该资源暂无分享链接')
-    return
-  }
-
-  let defaultFolderId = '0'
-  try {
-    const { data } = await pan115Api.getDefaultFolder()
-    defaultFolderId = data.folder_id || '0'
-  } catch (error) {
-    console.error('Failed to get default folder:', error)
-  }
-
-  const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
-  const receiveCode = resolvePanReceiveCode(item, shareLink)
-  selectSaveForm.value = {
-    shareLink,
-    receiveCode,
-    targetFolder: defaultFolderId,
-    newFolderName: tv.value.name + ' (' + tv.value.first_air_date?.split('-')[0] + ')' + seasonSuffix
-  }
-
-  shareFilesList.value = []
-  selectedFiles.value = []
-  fileNameSortOrder.value = 'asc'
-  selectSaveDialogVisible.value = true
+  if (item?.saving || item?.extracting || isHdhiveUnlocking(item)) return
+  item.extracting = true
   extractingFiles.value = true
-
   try {
+    let shareLink = resolvePanShareLink(item)
+    if (item?.source_service === 'hdhive') {
+      shareLink = await ensureHdhiveShareLink(item, '选集转存')
+    }
+    if (!shareLink) {
+      ElMessage.warning('该资源暂无分享链接')
+      return
+    }
+
+    let defaultFolderId = '0'
+    try {
+      const { data } = await pan115Api.getDefaultFolder()
+      defaultFolderId = data.folder_id || '0'
+    } catch (error) {
+      console.error('Failed to get default folder:', error)
+    }
+
+    const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
+    const receiveCode = resolvePanReceiveCode(item, shareLink)
+    selectSaveForm.value = {
+      shareLink,
+      receiveCode,
+      targetFolder: defaultFolderId,
+      newFolderName: tv.value.name + ' (' + tv.value.first_air_date?.split('-')[0] + ')' + seasonSuffix
+    }
+
+    shareFilesList.value = []
+    selectedFiles.value = []
+    fileNameSortOrder.value = 'asc'
+    selectSaveDialogVisible.value = true
+
     const { data } = await pan115Api.extractShareFiles(shareLink, receiveCode)
     if (data && Array.isArray(data.list)) {
       // 过滤视频文件
@@ -1452,6 +1508,7 @@ const handleSelectSave = async (item) => {
     }
     ElMessage.error('提取文件列表失败')
   } finally {
+    item.extracting = false
     extractingFiles.value = false
   }
 }

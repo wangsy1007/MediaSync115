@@ -75,10 +75,19 @@
                   </el-table-column>
                   <el-table-column label="操作" width="180" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" :loading="Boolean(row.saving)" @click="savePan115Resource(row)">转存</el-button>
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :disabled="isPan115ActionDisabled(row)"
+                        :loading="Boolean(row.saving) || isHdhiveUnlocking(row)"
+                        @click="savePan115Resource(row)"
+                      >
+                        转存
+                      </el-button>
                       <el-button
                         v-if="mediaType === 'tv'"
                         size="small"
+                        :disabled="isPan115ActionDisabled(row)"
                         :loading="Boolean(row.extracting)"
                         @click="openSelectSaveDialog(row)"
                       >
@@ -124,10 +133,19 @@
                   </el-table-column>
                   <el-table-column label="操作" width="180" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" :loading="Boolean(row.saving)" @click="savePan115Resource(row)">转存</el-button>
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :disabled="isPan115ActionDisabled(row)"
+                        :loading="Boolean(row.saving) || isHdhiveUnlocking(row)"
+                        @click="savePan115Resource(row)"
+                      >
+                        转存
+                      </el-button>
                       <el-button
                         v-if="mediaType === 'tv'"
                         size="small"
+                        :disabled="isPan115ActionDisabled(row)"
                         :loading="Boolean(row.extracting)"
                         @click="openSelectSaveDialog(row)"
                       >
@@ -214,7 +232,7 @@
                         type="primary"
                         size="small"
                         :disabled="isPan115ActionDisabled(row)"
-                        :loading="Boolean(row.saving)"
+                        :loading="Boolean(row.saving) || isHdhiveUnlocking(row)"
                         @click="savePan115Resource(row)"
                       >
                         转存
@@ -268,10 +286,19 @@
                   </el-table-column>
                   <el-table-column label="操作" width="180" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" :loading="Boolean(row.saving)" @click="savePan115Resource(row)">一键转存</el-button>
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :disabled="isPan115ActionDisabled(row)"
+                        :loading="Boolean(row.saving) || isHdhiveUnlocking(row)"
+                        @click="savePan115Resource(row)"
+                      >
+                        一键转存
+                      </el-button>
                       <el-button
                         v-if="mediaType === 'tv'"
                         size="small"
+                        :disabled="isPan115ActionDisabled(row)"
                         :loading="Boolean(row.extracting)"
                         @click="openSelectSaveDialog(row)"
                       >
@@ -643,8 +670,15 @@ const isHdhiveResourceSuspectedInvalid = (row) => {
 }
 
 const isPan115ActionDisabled = (row) => {
+  if (Boolean(row?.saving) || Boolean(row?.extracting) || isHdhiveUnlocking(row)) return true
   if (isHdhiveResourceLocked(row)) return false
   return row?.pan115_savable === false
+}
+
+const isHdhiveUnlocking = (row) => {
+  const slug = String(row?.slug || '').trim()
+  if (!slug) return false
+  return hdhiveUnlockingSlugs.value.has(slug)
 }
 
 const showHdhiveNeedPointsNotice = async (row, reason = '') => {
@@ -1199,16 +1233,17 @@ const isVideoFile = (filename) => {
 }
 
 const savePan115Resource = async (row) => {
-  let shareLink = resolvePan115ShareLink(row)
-  if (!shareLink && row?.source_service === 'hdhive') {
-    shareLink = await ensureHdhiveShareLink(row, '转存')
-  }
-  if (!shareLink) {
-    ElMessage.warning('资源缺少分享链接')
-    return
-  }
+  if (row?.saving || row?.extracting || isHdhiveUnlocking(row)) return
   row.saving = true
   try {
+    let shareLink = resolvePan115ShareLink(row)
+    if (row?.source_service === 'hdhive') {
+      shareLink = await ensureHdhiveShareLink(row, '转存')
+    }
+    if (!shareLink) {
+      ElMessage.warning('资源缺少分享链接')
+      return
+    }
     const folderId = await getDefaultTransferFolderId()
     const folderName = detail.value?.title || '豆瓣资源'
     const receiveCode = parseReceiveCodeFromShareLink(shareLink)
@@ -1260,14 +1295,7 @@ const savePan115Resource = async (row) => {
 }
 
 const openSelectSaveDialog = async (row) => {
-  let shareLink = resolvePan115ShareLink(row)
-  if (!shareLink && row?.source_service === 'hdhive') {
-    shareLink = await ensureHdhiveShareLink(row, '选集转存')
-  }
-  if (!shareLink) {
-    ElMessage.warning('资源缺少分享链接')
-    return
-  }
+  if (row?.saving || row?.extracting || isHdhiveUnlocking(row)) return
   if (mediaType.value !== 'tv') {
     ElMessage.warning('仅剧集资源支持选集转存')
     return
@@ -1275,12 +1303,22 @@ const openSelectSaveDialog = async (row) => {
 
   row.extracting = true
   extractingFiles.value = true
-  shareFilesList.value = []
-  selectedFiles.value = []
-  fileNameSortOrder.value = 'asc'
-  selectSaveDialogVisible.value = true
 
   try {
+    let shareLink = resolvePan115ShareLink(row)
+    if (row?.source_service === 'hdhive') {
+      shareLink = await ensureHdhiveShareLink(row, '选集转存')
+    }
+    if (!shareLink) {
+      ElMessage.warning('资源缺少分享链接')
+      return
+    }
+
+    shareFilesList.value = []
+    selectedFiles.value = []
+    fileNameSortOrder.value = 'asc'
+    selectSaveDialogVisible.value = true
+
     const folderId = await getDefaultTransferFolderId()
     const folderName = detail.value?.title || '豆瓣剧集'
     const receiveCode = parseReceiveCodeFromShareLink(shareLink)

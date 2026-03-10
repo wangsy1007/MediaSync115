@@ -103,7 +103,13 @@
                   </el-table-column>
                   <el-table-column label="操作" width="100" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" @click="handleSaveToPan115(row)">
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :loading="Boolean(row?.saving) || isHdhiveUnlocking(row)"
+                        :disabled="isPan115ActionDisabled(row)"
+                        @click="handleSaveToPan115(row)"
+                      >
                         转存
                       </el-button>
                     </template>
@@ -191,7 +197,13 @@
                   </el-table-column>
                   <el-table-column label="操作" width="100" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" @click="handleSaveToPan115(row)">
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :loading="Boolean(row?.saving) || isHdhiveUnlocking(row)"
+                        :disabled="isPan115ActionDisabled(row)"
+                        @click="handleSaveToPan115(row)"
+                      >
                         转存
                       </el-button>
                     </template>
@@ -287,7 +299,13 @@
                   </el-table-column>
                   <el-table-column label="操作" width="100" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" :disabled="isPan115ActionDisabled(row)" @click="handleSaveToPan115(row)">
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :loading="Boolean(row?.saving) || isHdhiveUnlocking(row)"
+                        :disabled="isPan115ActionDisabled(row)"
+                        @click="handleSaveToPan115(row)"
+                      >
                         转存
                       </el-button>
                     </template>
@@ -358,7 +376,13 @@
                   </el-table-column>
                   <el-table-column label="操作" width="100" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" @click="handleSaveToPan115(row)">
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :loading="Boolean(row?.saving) || isHdhiveUnlocking(row)"
+                        :disabled="isPan115ActionDisabled(row)"
+                        @click="handleSaveToPan115(row)"
+                      >
                         转存
                       </el-button>
                     </template>
@@ -813,8 +837,15 @@ const isHdhiveResourceSuspectedInvalid = (row) => {
 }
 
 const isPan115ActionDisabled = (row) => {
+  if (Boolean(row?.saving) || isHdhiveUnlocking(row)) return true
   if (isHdhiveResourceLocked(row)) return false
   return row?.pan115_savable === false
+}
+
+const isHdhiveUnlocking = (row) => {
+  const slug = String(row?.slug || '').trim()
+  if (!slug) return false
+  return hdhiveUnlockingSlugs.value.has(slug)
 }
 
 const showHdhiveNeedPointsNotice = async (row, reason = '') => {
@@ -1272,25 +1303,26 @@ const checkSubscribed = async () => {
 }
 
 const handleSaveToPan115 = async (item) => {
-  let shareLink = resolvePanShareLink(item)
-  if (!shareLink && item?.source_service === 'hdhive') {
-    shareLink = await ensureHdhiveShareLink(item, '转存')
-  }
-  if (!shareLink) {
-    ElMessage.warning('该资源暂无分享链接')
-    return
-  }
-
-  // 获取默认转存文件夹
-  let defaultFolderId = '0'
+  if (item?.saving || isHdhiveUnlocking(item)) return
+  item.saving = true
   try {
-    const { data } = await pan115Api.getDefaultFolder()
-    defaultFolderId = data.folder_id || '0'
-  } catch (error) {
-    console.error('Failed to get default folder:', error)
-  }
+    let shareLink = resolvePanShareLink(item)
+    if (item?.source_service === 'hdhive') {
+      shareLink = await ensureHdhiveShareLink(item, '转存')
+    }
+    if (!shareLink) {
+      ElMessage.warning('该资源暂无分享链接')
+      return
+    }
 
-  try {
+    let defaultFolderId = '0'
+    try {
+      const { data } = await pan115Api.getDefaultFolder()
+      defaultFolderId = data.folder_id || '0'
+    } catch (error) {
+      console.error('Failed to get default folder:', error)
+    }
+
     const receiveCode = resolvePanReceiveCode(item, shareLink)
     // 由后端统一解析分享链接并执行转存
     const { data } = await pan115Api.saveShareToFolder(
@@ -1345,6 +1377,8 @@ const handleSaveToPan115 = async (item) => {
       return
     }
     ElMessage.error(detail || error.message || '转存失败')
+  } finally {
+    item.saving = false
   }
 }
 
