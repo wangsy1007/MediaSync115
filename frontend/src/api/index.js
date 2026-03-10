@@ -22,9 +22,24 @@ api.interceptors.response.use(
     const detail = String(error.response?.data?.detail || '').trim()
     const requestUrl = String(error.config?.url || '')
     const isOfflineTasksRequest = requestUrl.includes('/pan115/offline/tasks')
+    const isAuthSessionRequest = requestUrl.includes('/auth/session')
+    const isAuthLoginRequest = requestUrl.includes('/auth/login')
+    const isAuthLogoutRequest = requestUrl.includes('/auth/logout')
+    const isUnauthorized = error.response?.status === 401
 
     // 离线任务列表错误由 Downloads 页面自己处理，避免干扰转存等场景。
     if (isOfflineTasksRequest) {
+      return Promise.reject(error)
+    }
+
+    if (isAuthSessionRequest) {
+      return Promise.reject(error)
+    }
+
+    if (isUnauthorized && !isAuthLoginRequest && !isAuthLogoutRequest) {
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
       return Promise.reject(error)
     }
 
@@ -126,6 +141,13 @@ export const searchApi = {
   getCollection: (collectionId) => api.get(`/search/collection/${collectionId}`),
   getCollectionPan115: (collectionId, page = 1) => api.get(`/search/collection/${collectionId}/115`, { params: { page } }),
   getBridgeByImdbId: (imdbId, mediaType = 'movie') => api.get(`/search/bridge/imdb/${imdbId}`, { params: { media_type: mediaType } })
+}
+
+export const authApi = {
+  getSession: () => api.get('/auth/session'),
+  login: (payload) => api.post('/auth/login', payload),
+  logout: () => api.post('/auth/logout'),
+  changeCredentials: (payload) => api.post('/auth/change-credentials', payload)
 }
 
 export const pansouApi = {

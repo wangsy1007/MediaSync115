@@ -3,6 +3,49 @@
     <h2>系统设置</h2>
 
     <el-tabs v-model="activeSettingsTab" class="settings-tabs">
+      <el-tab-pane label="账号安全" name="account">
+        <el-card class="settings-card">
+          <template #header>
+            <span>登录账号设置</span>
+          </template>
+
+          <el-form :model="accountForm" label-width="120px">
+            <el-form-item label="当前账号">
+              <el-input v-model="accountForm.username" placeholder="请输入登录账号" />
+            </el-form-item>
+            <el-form-item label="当前密码">
+              <el-input
+                v-model="accountForm.currentPassword"
+                type="password"
+                show-password
+                placeholder="请输入当前密码"
+              />
+            </el-form-item>
+            <el-form-item label="新密码">
+              <el-input
+                v-model="accountForm.newPassword"
+                type="password"
+                show-password
+                placeholder="留空表示不修改密码"
+              />
+            </el-form-item>
+            <el-form-item label="确认新密码">
+              <el-input
+                v-model="accountForm.confirmPassword"
+                type="password"
+                show-password
+                placeholder="再次输入新密码"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingAccount" @click="handleSaveAccount">
+                保存账号设置
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </el-tab-pane>
+
       <el-tab-pane label="115网盘" name="pan115">
         <el-card class="settings-card">
           <template #header>
@@ -989,10 +1032,17 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, reactive, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { pan115Api, pansouApi, settingsApi, subscriptionApi } from '@/api'
+import { authApi, pan115Api, pansouApi, settingsApi, subscriptionApi } from '@/api'
+import { resetAuthSessionCache } from '@/router'
 import { formatBeijingTableCell } from '@/utils/timezone'
 
 const activeSettingsTab = ref('pan115')
+const accountForm = ref({
+  username: 'admin',
+  currentPassword: '',
+  newPassword: '',
+  confirmPassword: ''
+})
 
 const nullbrForm = ref({
   appId: '',
@@ -1119,6 +1169,7 @@ const serviceNameMap = {
 }
 const savingProxy = ref(false)
 const testingProxy = ref(false)
+const savingAccount = ref(false)
 
 const testing = ref(false)
 const testingRiskHealth = ref(false)
@@ -2372,6 +2423,60 @@ const handleSaveTmdb = () => {
   })
 }
 
+const fetchAuthSession = async () => {
+  try {
+    const { data } = await authApi.getSession()
+    if (data?.authenticated && data?.username) {
+      accountForm.value.username = data.username
+    }
+  } catch (error) {
+    console.error('Failed to fetch auth session:', error)
+  }
+}
+
+const handleSaveAccount = async () => {
+  const username = String(accountForm.value.username || '').trim()
+  const currentPassword = String(accountForm.value.currentPassword || '')
+  const newPassword = String(accountForm.value.newPassword || '')
+  const confirmPassword = String(accountForm.value.confirmPassword || '')
+
+  if (!username) {
+    ElMessage.warning('请输入账号')
+    return
+  }
+  if (!currentPassword) {
+    ElMessage.warning('请输入当前密码')
+    return
+  }
+  if (newPassword && newPassword.length < 6) {
+    ElMessage.warning('新密码长度不能少于 6 位')
+    return
+  }
+  if (newPassword !== confirmPassword) {
+    ElMessage.warning('两次输入的新密码不一致')
+    return
+  }
+
+  savingAccount.value = true
+  try {
+    await authApi.changeCredentials({
+      username,
+      current_password: currentPassword,
+      ...(newPassword ? { new_password: newPassword } : {})
+    })
+    resetAuthSessionCache()
+    accountForm.value.currentPassword = ''
+    accountForm.value.newPassword = ''
+    accountForm.value.confirmPassword = ''
+    ElMessage.success('账号设置已更新')
+    await fetchAuthSession()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '账号设置保存失败')
+  } finally {
+    savingAccount.value = false
+  }
+}
+
 const fetchRuntimeSettings = async () => {
   try {
     const { data } = await settingsApi.getRuntime()
@@ -2725,6 +2830,7 @@ const handleSaveOfflineDefaultFolder = async () => {
 }
 
 onMounted(() => {
+  fetchAuthSession()
   fetchRuntimeSettings().then(() => {
     if (String(hdhiveForm.value.cookie || '').trim()) {
       checkHdhive(false)

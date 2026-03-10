@@ -1,5 +1,7 @@
 import json
 import os
+import secrets
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,20 @@ from app.services.emby_service import emby_service
 
 
 class RuntimeSettingsService:
+    @staticmethod
+    def _hash_auth_password(password: str, salt: str | None = None) -> str:
+        raw_password = str(password or "")
+        if not raw_password:
+            raise ValueError("密码不能为空")
+        normalized_salt = salt or secrets.token_hex(16)
+        derived = hashlib.pbkdf2_hmac(
+            "sha256",
+            raw_password.encode("utf-8"),
+            normalized_salt.encode("utf-8"),
+            390000,
+        )
+        return f"{normalized_salt}${derived.hex()}"
+
     def __init__(self) -> None:
         self._file_path = Path("data/runtime_settings.json")
         self._defaults = {
@@ -48,6 +64,9 @@ class RuntimeSettingsService:
             "emby_api_key": settings.EMBY_API_KEY or "",
             "emby_sync_enabled": False,
             "emby_sync_interval_hours": 24,
+            "auth_username": "admin",
+            "auth_password_hash": "",
+            "auth_secret": "",
             "subscription_nullbr_enabled": False,
             "subscription_nullbr_interval_hours": 24,
             "subscription_nullbr_run_time": "03:00",
@@ -68,6 +87,7 @@ class RuntimeSettingsService:
         }
         self._data = dict(self._defaults)
         self._load()
+        self._ensure_auth_defaults()
         self.apply_runtime_overrides()
 
     def _load(self) -> None:
@@ -112,6 +132,23 @@ class RuntimeSettingsService:
             json.dumps(self._data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def _ensure_auth_defaults(self) -> None:
+        changed = False
+        if not str(self._data.get("auth_secret") or "").strip():
+            self._data["auth_secret"] = secrets.token_urlsafe(32)
+            changed = True
+
+        if not str(self._data.get("auth_username") or "").strip():
+            self._data["auth_username"] = "admin"
+            changed = True
+
+        if not str(self._data.get("auth_password_hash") or "").strip():
+            self._data["auth_password_hash"] = self._hash_auth_password("password")
+            changed = True
+
+        if changed:
+            self._save()
 
     def get_pansou_base_url(self) -> str:
         return self._data["pansou_base_url"]
@@ -306,6 +343,28 @@ class RuntimeSettingsService:
         except Exception:
             return 24
 
+    def get_auth_username(self) -> str:
+        return str(self._data.get("auth_username") or "admin").strip() or "admin"
+
+    def get_auth_password_hash(self) -> str:
+        return str(self._data.get("auth_password_hash") or "").strip()
+
+    def get_auth_secret(self) -> str:
+        return str(self._data.get("auth_secret") or "").strip()
+
+    def update_auth_credentials(self, username: str, new_password: str | None = None) -> dict[str, str]:
+        next_username = str(username or "").strip()
+        if not next_username:
+            raise ValueError("账号不能为空")
+
+        self._data["auth_username"] = next_username
+        if new_password is not None:
+            self._data["auth_password_hash"] = self._hash_auth_password(new_password)
+        self._save()
+        return {
+            "username": self.get_auth_username(),
+        }
+
     def get_subscription_resource_priority(self) -> list[str]:
         value = self._data.get("subscription_resource_priority")
         if not isinstance(value, list):
@@ -495,6 +554,7 @@ class RuntimeSettingsService:
             "emby_api_key": self.get_emby_api_key(),
             "emby_sync_enabled": self.get_emby_sync_enabled(),
             "emby_sync_interval_hours": self.get_emby_sync_interval_hours(),
+            "auth_username": self.get_auth_username(),
             "subscription_nullbr_enabled": bool(self._data.get("subscription_nullbr_enabled", False)),
             "subscription_nullbr_interval_hours": int(self._data.get("subscription_nullbr_interval_hours", 24) or 24),
             "subscription_nullbr_run_time": str(self._data.get("subscription_nullbr_run_time", "03:00") or "03:00"),

@@ -6,11 +6,13 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import init_db
 from app.api import (
+    auth as auth_api,
     logs as logs_api,
     pan115,
     pansou,
@@ -21,6 +23,7 @@ from app.api import (
     workflow,
 )
 from app.scheduler import scheduler_manager
+from app.services.auth_service import auth_service
 from app.services.explore_home_warmup_service import explore_home_warmup_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pansou_service import pansou_service
@@ -66,6 +69,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+UNAUTHENTICATED_API_PATHS = {
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/session",
+}
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path or ""
+    if not path.startswith("/api") or path in UNAUTHENTICATED_API_PATHS:
+        return await call_next(request)
+
+    session = auth_service.get_request_session(request)
+    if not session:
+        return JSONResponse(status_code=401, content={"detail": "请先登录"})
+    request.state.auth_session = session
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -133,6 +156,7 @@ async def operation_logging_middleware(request: Request, call_next):
 
 
 app.include_router(search.router, prefix="/api")
+app.include_router(auth_api.router, prefix="/api")
 app.include_router(subscriptions.router, prefix="/api")
 app.include_router(pan115.router, prefix="/api")
 app.include_router(pansou.router, prefix="/api")

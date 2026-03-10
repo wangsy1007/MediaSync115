@@ -1,6 +1,13 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { authApi } from '@/api'
 
 const routes = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/Login.vue'),
+    meta: { public: true }
+  },
   {
     path: '/',
     redirect: '/explore/douban'
@@ -77,6 +84,52 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+let authSessionCache = null
+let authSessionPromise = null
+
+const getAuthSession = async (force = false) => {
+  if (!force && authSessionCache) return authSessionCache
+  if (!force && authSessionPromise) return authSessionPromise
+
+  authSessionPromise = authApi.getSession()
+    .then(({ data }) => {
+      authSessionCache = data || { authenticated: false, username: '' }
+      return authSessionCache
+    })
+    .catch(() => {
+      authSessionCache = { authenticated: false, username: '' }
+      return authSessionCache
+    })
+    .finally(() => {
+      authSessionPromise = null
+    })
+
+  return authSessionPromise
+}
+
+export const resetAuthSessionCache = () => {
+  authSessionCache = null
+  authSessionPromise = null
+}
+
+router.beforeEach(async (to) => {
+  const session = await getAuthSession()
+  if (to.meta?.public) {
+    if (to.path === '/login' && session?.authenticated) {
+      return to.query.redirect ? String(to.query.redirect) : '/'
+    }
+    return true
+  }
+
+  if (session?.authenticated) return true
+  return {
+    path: '/login',
+    query: {
+      redirect: to.fullPath
+    }
+  }
 })
 
 export default router

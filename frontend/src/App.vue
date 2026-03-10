@@ -1,6 +1,12 @@
 <template>
   <el-config-provider :locale="zhCn">
-    <el-container class="app-container" :class="{ 'is-compact': isCompact }">
+    <router-view v-if="isLoginRoute" v-slot="{ Component }">
+      <transition name="page-fade" mode="out-in">
+        <component :is="Component" />
+      </transition>
+    </router-view>
+
+    <el-container v-else class="app-container" :class="{ 'is-compact': isCompact }">
       <el-aside v-if="!isCompact" width="240px" class="app-aside">
         <div
           class="logo"
@@ -76,6 +82,7 @@
           <div class="version-info">
             <span>v1.0.0</span>
           </div>
+          <el-button class="logout-btn" plain @click="handleLogout">退出登录</el-button>
         </div>
       </el-aside>
 
@@ -171,6 +178,7 @@
           <div class="version-info">
             <span>v1.0.0</span>
           </div>
+          <el-button class="logout-btn" plain @click="handleLogout">退出登录</el-button>
         </div>
       </div>
     </el-drawer>
@@ -180,7 +188,10 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
+import { authApi } from '@/api'
+import { resetAuthSessionCache } from '@/router'
 import { formatBeijingDateTime } from '@/utils/timezone'
 import {
   Search,
@@ -203,6 +214,7 @@ const systemDark = ref(supportsMatchMedia ? window.matchMedia('(prefers-color-sc
 const beijingNow = ref(formatBeijingDateTime(new Date()))
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
 const mobileMenuOpen = ref(false)
+const isLoginRoute = computed(() => route.path === '/login')
 
 const activeMenu = computed(() => {
   if (route.path.startsWith('/explore/tmdb')) return '/explore/tmdb'
@@ -255,6 +267,19 @@ function handleDrawerGoHome() {
 
 function handleDrawerNavigate() {
   mobileMenuOpen.value = false
+}
+
+async function handleLogout() {
+  try {
+    await authApi.logout()
+  } catch {
+    // ignore logout failures
+  } finally {
+    resetAuthSessionCache()
+    mobileMenuOpen.value = false
+    ElMessage.success('已退出登录')
+    router.replace('/login')
+  }
 }
 
 function handleResize() {
@@ -477,12 +502,17 @@ html, body, #app {
       display: flex;
       align-items: center;
       justify-content: center;
+      margin-bottom: 12px;
 
       span {
         font-size: 12px;
         color: var(--ms-text-muted);
         font-weight: 500;
       }
+    }
+
+    .logout-btn {
+      width: 100%;
     }
   }
 }
