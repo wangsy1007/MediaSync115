@@ -11,11 +11,21 @@
           @keydown.space.prevent="handleGoHome"
         >
           <div class="logo-icon">
-            <el-icon :size="24"><VideoCamera /></el-icon>
+            <svg viewBox="0 0 48 48" class="brand-mark" aria-hidden="true">
+              <rect x="4" y="4" width="40" height="40" rx="12" class="brand-shell" />
+              <path
+                d="M13 31V17h4.6l6.4 7.6 6.4-7.6H35v14h-4.3v-8l-5.9 6.8h-1.6L17.3 23v8H13Z"
+                class="brand-letter"
+              />
+              <path d="M14 36h20" class="brand-track" />
+            </svg>
           </div>
           <div class="logo-text">
-            <span class="logo-title">MediaSync</span>
-            <span class="logo-badge">115</span>
+            <div class="logo-heading">
+              <span class="logo-title">MediaSync</span>
+              <span class="logo-badge">115</span>
+            </div>
+            <span class="logo-subtitle">Search • Save • Sync</span>
           </div>
         </div>
         <el-menu
@@ -72,7 +82,17 @@
       <el-container class="app-content-container">
         <header v-if="isCompact" class="mobile-topbar">
           <el-button text class="menu-toggle" @click="mobileMenuOpen = true">菜单</el-button>
-          <div class="mobile-brand" @click="handleGoHome">MediaSync 115</div>
+          <div class="mobile-brand" @click="handleGoHome">
+            <svg viewBox="0 0 48 48" class="mobile-brand-icon" aria-hidden="true">
+              <rect x="4" y="4" width="40" height="40" rx="12" class="brand-shell" />
+              <path
+                d="M13 31V17h4.6l6.4 7.6 6.4-7.6H35v14h-4.3v-8l-5.9 6.8h-1.6L17.3 23v8H13Z"
+                class="brand-letter"
+              />
+              <path d="M14 36h20" class="brand-track" />
+            </svg>
+            <span class="mobile-brand-text">MediaSync 115</span>
+          </div>
           <el-radio-group v-model="themeMode" size="small" class="mobile-theme-mode">
             <el-radio-button label="auto">自动</el-radio-button>
             <el-radio-button label="light">浅色</el-radio-button>
@@ -100,11 +120,21 @@
       <div class="mobile-nav-body">
         <div class="logo" role="button" tabindex="0" @click="handleDrawerGoHome">
           <div class="logo-icon">
-            <el-icon :size="24"><VideoCamera /></el-icon>
+            <svg viewBox="0 0 48 48" class="brand-mark" aria-hidden="true">
+              <rect x="4" y="4" width="40" height="40" rx="12" class="brand-shell" />
+              <path
+                d="M13 31V17h4.6l6.4 7.6 6.4-7.6H35v14h-4.3v-8l-5.9 6.8h-1.6L17.3 23v8H13Z"
+                class="brand-letter"
+              />
+              <path d="M14 36h20" class="brand-track" />
+            </svg>
           </div>
           <div class="logo-text">
-            <span class="logo-title">MediaSync</span>
-            <span class="logo-badge">115</span>
+            <div class="logo-heading">
+              <span class="logo-title">MediaSync</span>
+              <span class="logo-badge">115</span>
+            </div>
+            <span class="logo-subtitle">Search • Save • Sync</span>
           </div>
         </div>
         <el-menu :default-active="activeMenu" router @select="handleDrawerNavigate">
@@ -153,7 +183,6 @@ import { useRoute, useRouter } from 'vue-router'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { formatBeijingDateTime } from '@/utils/timezone'
 import {
-  VideoCamera,
   Search,
   Star,
   Download,
@@ -333,39 +362,72 @@ html, body, #app {
     }
 
     .logo-icon {
-      width: 42px;
-      height: 42px;
+      width: 46px;
+      height: 46px;
       display: flex;
       align-items: center;
       justify-content: center;
-      background: var(--ms-gradient-primary);
-      border-radius: 12px;
-      color: #fff;
-      box-shadow: var(--ms-shadow-md);
+      background:
+        radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.2), transparent 45%),
+        linear-gradient(145deg, #1f78ff 0%, #0f4cb7 100%);
+      border-radius: 14px;
+      box-shadow: 0 14px 30px rgba(12, 62, 148, 0.24);
+
+      .brand-mark {
+        width: 32px;
+        height: 32px;
+      }
+
+      .brand-shell {
+        fill: rgba(255, 255, 255, 0.12);
+      }
+
+      .brand-letter {
+        fill: #fff;
+      }
+
+      .brand-track {
+        fill: none;
+        stroke: rgba(255, 255, 255, 0.72);
+        stroke-width: 2.6;
+        stroke-linecap: round;
+      }
     }
 
     .logo-text {
       display: flex;
-      align-items: baseline;
-      gap: 6px;
+      flex-direction: column;
+      gap: 2px;
+
+      .logo-heading {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
 
       .logo-title {
         font-size: 20px;
-        font-weight: 700;
-        background: linear-gradient(120deg, var(--ms-text-primary) 0%, var(--ms-text-secondary) 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        letter-spacing: -0.5px;
+        font-weight: 800;
+        color: var(--ms-text-primary);
+        letter-spacing: -0.7px;
       }
 
       .logo-badge {
-        font-size: 12px;
-        font-weight: 700;
-        padding: 2px 6px;
-        background: var(--ms-gradient-soft);
+        font-size: 11px;
+        font-weight: 800;
+        padding: 3px 7px;
+        background: rgba(43, 123, 255, 0.1);
         color: var(--ms-accent-primary);
-        border-radius: 4px;
+        border: 1px solid rgba(43, 123, 255, 0.18);
+        border-radius: 999px;
+      }
+
+      .logo-subtitle {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--ms-text-muted);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
       }
     }
   }
@@ -446,11 +508,40 @@ html, body, #app {
   }
 
   .mobile-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     font-size: 16px;
     font-weight: 700;
     color: var(--ms-text-primary);
     white-space: nowrap;
     cursor: pointer;
+
+    .mobile-brand-icon {
+      width: 30px;
+      height: 30px;
+      flex: 0 0 auto;
+      filter: drop-shadow(0 10px 18px rgba(17, 79, 179, 0.18));
+    }
+
+    .brand-shell {
+      fill: rgba(43, 123, 255, 0.12);
+    }
+
+    .brand-letter {
+      fill: var(--ms-accent-primary);
+    }
+
+    .brand-track {
+      fill: none;
+      stroke: rgba(80, 137, 224, 0.75);
+      stroke-width: 2.6;
+      stroke-linecap: round;
+    }
+
+    .mobile-brand-text {
+      white-space: nowrap;
+    }
   }
 
   .mobile-theme-mode {
@@ -509,36 +600,73 @@ html, body, #app {
   }
 
   .logo-icon {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--ms-gradient-primary);
-    border-radius: 12px;
-    color: #fff;
-    box-shadow: var(--ms-shadow-md);
+    background:
+      radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.2), transparent 45%),
+      linear-gradient(145deg, #1f78ff 0%, #0f4cb7 100%);
+    border-radius: 14px;
+    box-shadow: 0 14px 30px rgba(12, 62, 148, 0.24);
+
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+    }
+
+    .brand-shell {
+      fill: rgba(255, 255, 255, 0.12);
+    }
+
+    .brand-letter {
+      fill: #fff;
+    }
+
+    .brand-track {
+      fill: none;
+      stroke: rgba(255, 255, 255, 0.72);
+      stroke-width: 2.6;
+      stroke-linecap: round;
+    }
   }
 
   .logo-text {
     display: flex;
-    align-items: baseline;
-    gap: 6px;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .logo-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   .logo-title {
     font-size: 18px;
-    font-weight: 700;
+    font-weight: 800;
     color: var(--ms-text-primary);
+    letter-spacing: -0.6px;
   }
 
   .logo-badge {
-    font-size: 12px;
-    font-weight: 700;
-    padding: 2px 6px;
-    background: var(--ms-gradient-soft);
+    font-size: 11px;
+    font-weight: 800;
+    padding: 3px 7px;
+    background: rgba(43, 123, 255, 0.1);
     color: var(--ms-accent-primary);
-    border-radius: 4px;
+    border: 1px solid rgba(43, 123, 255, 0.18);
+    border-radius: 999px;
+  }
+
+  .logo-subtitle {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ms-text-muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
   }
 
   .el-menu {
@@ -592,9 +720,14 @@ html, body, #app {
 
     .mobile-brand {
       font-size: 15px;
-      max-width: 110px;
+      max-width: 152px;
       overflow: hidden;
       text-overflow: ellipsis;
+
+      .mobile-brand-icon {
+        width: 28px;
+        height: 28px;
+      }
     }
 
     .mobile-theme-mode {
