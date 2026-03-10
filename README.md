@@ -202,10 +202,22 @@ docker compose -f docker-compose.single.yml down
 
 ### Option 1: All-in-one image from Docker Hub
 
+Docker Hub 页面：
+
+```text
+https://hub.docker.com/r/wangsy1007/mediasync115
+```
+
 镜像名：
 
 ```bash
 wangsy1007/mediasync115:latest
+```
+
+拉取镜像：
+
+```bash
+docker pull wangsy1007/mediasync115:latest
 ```
 
 #### Run with docker run
@@ -224,6 +236,34 @@ docker run -d \
 
 ```bash
 docker compose -f docker-compose.single.yml up -d
+```
+
+`docker-compose.single.yml` 内容：
+
+```yaml
+services:
+  app:
+    image: wangsy1007/mediasync115:latest
+    container_name: mediasync115
+    restart: unless-stopped
+    working_dir: /app
+    ports:
+      - "5173:80"
+    volumes:
+      - ./backend/data:/app/data
+      - ./backend/.env:/app/.env:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1/healthz', timeout=10)"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 ```
 
 ### Option 2: Build the all-in-one image locally
