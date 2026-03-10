@@ -81,6 +81,12 @@ class EmbyService:
         """
         基于 Emby API 直接获取剧集已入库集信息。
         """
+        from app.services.emby_sync_index_service import emby_sync_index_service
+
+        indexed_status = await emby_sync_index_service.get_tv_existing_episodes(tmdb_id)
+        if indexed_status is not None:
+            return indexed_status
+
         if not self.base_url or not self.api_key:
             return {
                 "status": "not_configured",
@@ -127,6 +133,12 @@ class EmbyService:
 
     async def get_movie_status_by_tmdb(self, tmdb_id: int) -> dict[str, Any]:
         """基于 Emby API 直接判断电影是否已入库。"""
+        from app.services.emby_sync_index_service import emby_sync_index_service
+
+        indexed_status = await emby_sync_index_service.get_movie_status(tmdb_id)
+        if indexed_status is not None:
+            return indexed_status
+
         if not self.base_url or not self.api_key:
             return {
                 "status": "not_configured",
@@ -152,6 +164,63 @@ class EmbyService:
                     "exists": False,
                     "item_ids": [],
                 }
+
+    async def list_all_movies(self) -> list[dict[str, Any]]:
+        if not self.base_url or not self.api_key:
+            return []
+        async with httpx.AsyncClient() as client:
+            return await self.list_all_movies_with_client(client)
+
+    async def list_all_series(self) -> list[dict[str, Any]]:
+        if not self.base_url or not self.api_key:
+            return []
+        async with httpx.AsyncClient() as client:
+            return await self.list_all_series_with_client(client)
+
+    async def list_series_episodes(self, series_id: str) -> list[dict[str, Any]]:
+        normalized_id = str(series_id or "").strip()
+        if not normalized_id or not self.base_url or not self.api_key:
+            return []
+        async with httpx.AsyncClient() as client:
+            return await self.list_series_episodes_with_client(client, normalized_id)
+
+    async def list_all_movies_with_client(self, client: httpx.AsyncClient) -> list[dict[str, Any]]:
+        return await self._fetch_items(
+            client,
+            {
+                "IncludeItemTypes": "Movie",
+                "Recursive": "true",
+                "Fields": "ProviderIds",
+            },
+        )
+
+    async def list_all_series_with_client(self, client: httpx.AsyncClient) -> list[dict[str, Any]]:
+        return await self._fetch_items(
+            client,
+            {
+                "IncludeItemTypes": "Series",
+                "Recursive": "true",
+                "Fields": "ProviderIds",
+            },
+        )
+
+    async def list_series_episodes_with_client(
+        self,
+        client: httpx.AsyncClient,
+        series_id: str,
+    ) -> list[dict[str, Any]]:
+        normalized_id = str(series_id or "").strip()
+        if not normalized_id:
+            return []
+        return await self._fetch_items(
+            client,
+            {
+                "ParentId": normalized_id,
+                "IncludeItemTypes": "Episode",
+                "Recursive": "true",
+                "Fields": "ParentIndexNumber,IndexNumber,IndexNumberEnd,SeriesId",
+            },
+        )
 
     async def _find_series_ids_by_tmdb(self, client: httpx.AsyncClient, tmdb_id: int) -> list[str]:
         target = str(int(tmdb_id))
@@ -303,6 +372,9 @@ class EmbyService:
             for episode_number in range(episode_start, episode_end + 1):
                 pairs.add((season_number, episode_number))
         return pairs
+
+    def extract_episode_pairs(self, items: list[dict[str, Any]]) -> set[tuple[int, int]]:
+        return self._extract_episode_pairs(items)
 
     @staticmethod
     def _safe_int(value: Any, default: int | None = None) -> int | None:

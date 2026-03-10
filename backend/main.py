@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -24,7 +25,17 @@ from app.services.explore_home_warmup_service import explore_home_warmup_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
+from app.services.emby_sync_scheduler_service import emby_sync_scheduler_service
 from app.services.subscription_scheduler_service import subscription_scheduler_service
+
+logger = logging.getLogger(__name__)
+
+
+async def _safe_log_api_request(**kwargs) -> None:
+    try:
+        await operation_log_service.log_api_request(**kwargs)
+    except Exception:
+        logger.exception("api operation log failed")
 
 
 @asynccontextmanager
@@ -35,6 +46,7 @@ async def lifespan(app: FastAPI):
     await operation_log_service.prune(days=30)
     await scheduler_manager.init()
     await subscription_scheduler_service.ensure_subscription_tasks()
+    await emby_sync_scheduler_service.ensure_sync_task()
     await explore_home_warmup_service.warmup(force_refresh=False)
     yield
     await scheduler_manager.stop()
@@ -93,7 +105,7 @@ async def operation_logging_middleware(request: Request, call_next):
         response = await call_next(request)
     except Exception as exc:
         duration_ms = int((time.perf_counter() - started_at) * 1000)
-        await operation_log_service.log_api_request(
+        await _safe_log_api_request(
             trace_id=trace_id,
             method=request.method,
             path=path,
@@ -107,7 +119,7 @@ async def operation_logging_middleware(request: Request, call_next):
 
     duration_ms = int((time.perf_counter() - started_at) * 1000)
     response_summary = {"status_code": response.status_code}
-    await operation_log_service.log_api_request(
+    await _safe_log_api_request(
         trace_id=trace_id,
         method=request.method,
         path=path,

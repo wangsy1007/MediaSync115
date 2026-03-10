@@ -12,6 +12,8 @@ from app.services.nullbr_service import nullbr_service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.subscription_scheduler_service import subscription_scheduler_service
+from app.services.emby_sync_index_service import emby_sync_index_service
+from app.services.emby_sync_scheduler_service import emby_sync_scheduler_service
 from app.services.tg_sync_service import tg_sync_service
 from app.services.tg_service import tg_service
 from app.services.tmdb_service import tmdb_service
@@ -57,6 +59,8 @@ class RuntimeSettingsRequest(BaseModel):
     tmdb_region: Optional[str] = None
     emby_url: Optional[str] = None
     emby_api_key: Optional[str] = None
+    emby_sync_enabled: Optional[bool] = None
+    emby_sync_interval_hours: Optional[int] = None
     subscription_nullbr_enabled: Optional[bool] = None
     subscription_nullbr_interval_hours: Optional[int] = None
     subscription_nullbr_run_time: Optional[str] = None
@@ -198,6 +202,22 @@ def _validate_hdhive_unlock_settings(merged_settings: dict) -> None:
         raise HTTPException(status_code=400, detail="HDHive 自动解锁任务积分预算必须大于等于 1")
 
 
+def _validate_emby_sync_settings(merged_settings: dict) -> None:
+    enabled = bool(merged_settings.get("emby_sync_enabled", False))
+    if not enabled:
+        return
+    emby_url = str(merged_settings.get("emby_url") or "").strip()
+    emby_api_key = str(merged_settings.get("emby_api_key") or "").strip()
+    if not emby_url or not emby_api_key:
+        raise HTTPException(status_code=400, detail="启用 Emby 定时同步前必须先配置 Emby URL 和 API Key")
+    try:
+        interval_hours = int(merged_settings.get("emby_sync_interval_hours", 24) or 24)
+    except Exception:
+        interval_hours = 0
+    if interval_hours < 1:
+        raise HTTPException(status_code=400, detail="Emby 同步间隔必须大于等于 1 小时")
+
+
 @router.get("/runtime")
 async def get_runtime_settings():
     return runtime_settings_service.get_all()
@@ -218,9 +238,12 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
     }
     if any(key in payload for key in unlock_keys) or payload.get("hdhive_cookie") is not None:
         _validate_hdhive_unlock_settings(merged_settings)
+    if any(key in payload for key in {"emby_url", "emby_api_key", "emby_sync_enabled", "emby_sync_interval_hours"}):
+        _validate_emby_sync_settings(merged_settings)
     try:
         updated = runtime_settings_service.update_bulk(payload)
         await subscription_scheduler_service.ensure_subscription_tasks()
+        await emby_sync_scheduler_service.ensure_sync_task()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {
@@ -336,6 +359,23 @@ async def check_emby_credentials(
     else:
         payload = await emby_service.check_connection()
     return payload
+
+
+@router.get("/emby/sync/status")
+async def get_emby_sync_status():
+    status = await emby_sync_index_service.get_status()
+    return {
+        **status,
+        "configured": bool(runtime_settings_service.get_emby_url() and runtime_settings_service.get_emby_api_key()),
+    }
+
+
+@router.post("/emby/sync/run")
+async def run_emby_sync():
+    result = await emby_sync_index_service.start_background_sync(trigger="manual")
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message") or "Emby 同步启动失败")
+    return result
 
 
 @router.get("/proxy")

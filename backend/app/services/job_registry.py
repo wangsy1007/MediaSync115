@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from app.services.emby_service import emby_service
+from app.services.emby_sync_index_service import emby_sync_index_service
 from app.services.explore_home_warmup_service import explore_home_warmup_service
 from app.core.database import async_session_maker
 from app.services.subscription_service import subscription_service
@@ -12,6 +13,7 @@ class JobRegistry:
     def __init__(self):
         self._registry: dict[str, Callable[..., Any]] = {
             "system.refresh_emby": self._refresh_emby,
+            "system.sync_emby_index": self._sync_emby_index,
             "system.cleanup_runtime_cache": self._cleanup_runtime_cache,
             "system.warmup_explore_home_cache": self._warmup_explore_home_cache,
             "system.noop": self._noop,
@@ -33,6 +35,9 @@ class JobRegistry:
     async def _refresh_emby(self, **kwargs) -> dict[str, Any]:
         await emby_service.refresh_library()
         return {"success": True, "message": "emby refresh triggered"}
+
+    async def _sync_emby_index(self, **kwargs) -> dict[str, Any]:
+        return await emby_sync_index_service.sync_index(trigger="scheduler")
 
     async def _cleanup_runtime_cache(self, **kwargs) -> dict[str, Any]:
         from app.api import search as search_api

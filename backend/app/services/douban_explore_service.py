@@ -1579,6 +1579,7 @@ async def fetch_douban_section(
     start: int = 0,
     client: Optional[httpx.AsyncClient] = None,
     home_prime_limit: Optional[int] = None,
+    sync_prime_limit: Optional[int] = None,
 ) -> dict[str, Any]:
     key = source["key"]
     now = time.time()
@@ -1640,7 +1641,9 @@ async def fetch_douban_section(
             rank_start=start + 1,
         )
 
-        if start == 0 and home_prime_limit is None:
+        if sync_prime_limit is not None:
+            await _prime_tmdb_ids_for_home_screen(items, backfill_candidates, sync_prime_limit)
+        elif start == 0 and home_prime_limit is None:
             await _prime_tmdb_ids_for_first_screen(items, backfill_candidates)
         elif start == 0 and home_prime_limit is not None:
             await _prime_tmdb_ids_for_home_screen(items, backfill_candidates, home_prime_limit)

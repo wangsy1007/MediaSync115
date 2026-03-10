@@ -1323,8 +1323,11 @@ async def get_explore_section(
         limit,
     )
     if home_cached is not None and not refresh:
+        cached_section = home_cached.get("section") if isinstance(home_cached.get("section"), dict) else {}
+        cached_items = cached_section.get("items") if isinstance(cached_section.get("items"), list) else []
         return {
             **home_cached,
+            "emby_status_map": await _build_emby_status_map(cached_items),
             "cache_hit": True,
             "cache_source": "home_warmup",
         }
@@ -1367,7 +1370,13 @@ async def get_explore_section(
         raise HTTPException(status_code=404, detail=f"Unknown section key: {section_key}")
 
     try:
-        payload = await fetch_douban_section(section, limit, refresh, start=start)
+        payload = await fetch_douban_section(
+            section,
+            limit,
+            refresh,
+            start=start,
+            sync_prime_limit=limit,
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch section: {str(exc)}")
 
@@ -1405,7 +1414,13 @@ async def get_explore_douban_section(
         raise HTTPException(status_code=404, detail=f"Unknown section key: {section_key}")
 
     try:
-        payload = await fetch_douban_section(source, limit, refresh, start=start)
+        payload = await fetch_douban_section(
+            source,
+            limit,
+            refresh,
+            start=start,
+            sync_prime_limit=limit,
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to fetch section: {str(exc)}")
 

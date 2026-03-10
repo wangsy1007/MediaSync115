@@ -46,6 +46,8 @@ class RuntimeSettingsService:
             "tmdb_region": settings.TMDB_REGION,
             "emby_url": settings.EMBY_URL or "",
             "emby_api_key": settings.EMBY_API_KEY or "",
+            "emby_sync_enabled": False,
+            "emby_sync_interval_hours": 24,
             "subscription_nullbr_enabled": False,
             "subscription_nullbr_interval_hours": 24,
             "subscription_nullbr_run_time": "03:00",
@@ -294,6 +296,16 @@ class RuntimeSettingsService:
     def get_emby_api_key(self) -> str:
         return str(self._data.get("emby_api_key") or "")
 
+    def get_emby_sync_enabled(self) -> bool:
+        return bool(self._data.get("emby_sync_enabled", False))
+
+    def get_emby_sync_interval_hours(self) -> int:
+        value = self._data.get("emby_sync_interval_hours", 24)
+        try:
+            return max(1, int(value))
+        except Exception:
+            return 24
+
     def get_subscription_resource_priority(self) -> list[str]:
         value = self._data.get("subscription_resource_priority")
         if not isinstance(value, list):
@@ -481,6 +493,8 @@ class RuntimeSettingsService:
             "tmdb_region": self.get_tmdb_region(),
             "emby_url": self.get_emby_url(),
             "emby_api_key": self.get_emby_api_key(),
+            "emby_sync_enabled": self.get_emby_sync_enabled(),
+            "emby_sync_interval_hours": self.get_emby_sync_interval_hours(),
             "subscription_nullbr_enabled": bool(self._data.get("subscription_nullbr_enabled", False)),
             "subscription_nullbr_interval_hours": int(self._data.get("subscription_nullbr_interval_hours", 24) or 24),
             "subscription_nullbr_run_time": str(self._data.get("subscription_nullbr_run_time", "03:00") or "03:00"),

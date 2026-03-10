@@ -38,7 +38,10 @@ class TvMissingService:
             if cached is not None:
                 return cached
 
-        emby_result = await emby_service.get_tv_episode_status_by_tmdb(normalized_tmdb_id)
+        from app.services.emby_sync_index_service import emby_sync_index_service
+
+        indexed_emby_result = await emby_sync_index_service.get_tv_existing_episodes(normalized_tmdb_id)
+        emby_result = indexed_emby_result if indexed_emby_result is not None else await emby_service.get_tv_episode_status_by_tmdb(normalized_tmdb_id)
         status_text = str(emby_result.get("status") or "")
         if status_text != "ok":
             result = {
@@ -93,6 +96,9 @@ class TvMissingService:
         }
         await self._set_cached_status(cache_key, result)
         return result
+
+    def clear_cache(self) -> None:
+        self._status_cache.clear()
 
     async def _collect_tmdb_episode_pairs(self, tmdb_id: int, include_specials: bool = False) -> set[tuple[int, int]]:
         detail = await tmdb_service.get_tv_detail(tmdb_id)

@@ -260,9 +260,23 @@
                 placeholder="请输入 Emby API Key"
               />
             </el-form-item>
+            <el-form-item label="定时同步">
+              <el-switch v-model="embyForm.syncEnabled" />
+            </el-form-item>
+            <el-form-item label="同步间隔(小时)">
+              <el-input-number
+                v-model="embyForm.syncIntervalHours"
+                :min="1"
+                :max="168"
+                :disabled="!embyForm.syncEnabled"
+              />
+            </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingEmby" @click="handleSaveEmby">保存</el-button>
               <el-button :loading="testingEmby" @click="handleTestEmby">测试连接</el-button>
+              <el-button type="warning" :loading="runningEmbySync" @click="handleRunEmbySync">
+                立即同步
+              </el-button>
             </el-form-item>
           </el-form>
 
@@ -285,7 +299,56 @@
               <el-descriptions-item label="版本">
                 {{ embyStatus.user.version || '-' }}
               </el-descriptions-item>
+              </el-descriptions>
+          </div>
+
+          <div class="user-info">
+            <el-divider />
+            <h4>同步状态</h4>
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="当前状态">
+                <el-tag :type="embySyncStatusTagType" size="small">
+                  {{ embySyncStatusText }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="是否已有快照">
+                <el-tag :type="embySyncStatus.hasSnapshot ? 'success' : 'info'" size="small">
+                  {{ embySyncStatus.hasSnapshot ? '有' : '无' }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="最近开始时间">
+                {{ formatBeijingTableCell(null, null, embySyncStatus.lastSyncStartedAt) || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="最近完成时间">
+                {{ formatBeijingTableCell(null, null, embySyncStatus.lastSyncFinishedAt) || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="最近成功时间">
+                {{ formatBeijingTableCell(null, null, embySyncStatus.lastSuccessfulSyncAt) || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="最近耗时">
+                {{ embySyncStatus.lastSyncDurationMs ? `${embySyncStatus.lastSyncDurationMs} ms` : '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="电影数">
+                {{ embySyncStatus.movieCount }}
+              </el-descriptions-item>
+              <el-descriptions-item label="剧集数">
+                {{ embySyncStatus.tvCount }}
+              </el-descriptions-item>
+              <el-descriptions-item label="已索引集数">
+                {{ embySyncStatus.episodeCount }}
+              </el-descriptions-item>
+              <el-descriptions-item label="最近触发来源">
+                {{ embySyncStatus.lastTrigger || '-' }}
+              </el-descriptions-item>
             </el-descriptions>
+            <el-alert
+              v-if="embySyncStatus.lastSyncError"
+              :closable="false"
+              type="error"
+              show-icon
+              style="margin-top: 12px"
+              :title="embySyncStatus.lastSyncError"
+            />
           </div>
         </el-card>
       </el-tab-pane>
@@ -942,7 +1005,9 @@ const hdhiveForm = ref({
 })
 const embyForm = ref({
   url: '',
-  apiKey: ''
+  apiKey: '',
+  syncEnabled: false,
+  syncIntervalHours: 24
 })
 
 const tgForm = ref({
@@ -1065,6 +1130,7 @@ const savingHdhive = ref(false)
 const testingHdhive = ref(false)
 const savingEmby = ref(false)
 const testingEmby = ref(false)
+const runningEmbySync = ref(false)
 const savingTg = ref(false)
 const testingTg = ref(false)
 const verifyingTgPassword = ref(false)
@@ -1176,6 +1242,21 @@ const embyStatus = reactive({
   message: '',
   user: null
 })
+const embySyncStatus = reactive({
+  status: '',
+  running: false,
+  hasSnapshot: false,
+  lastTrigger: '',
+  lastSyncStartedAt: '',
+  lastSyncFinishedAt: '',
+  lastSuccessfulSyncAt: '',
+  lastSyncDurationMs: null,
+  lastSyncError: '',
+  movieCount: 0,
+  tvCount: 0,
+  episodeCount: 0
+})
+let embySyncPollTimer = null
 const sourceConnectionStatus = reactive({
   nullbr: { checked: false, ok: false, text: '未检测' },
   hdhive: { checked: false, ok: false, text: '未检测' },
@@ -1203,6 +1284,20 @@ const riskHealthAlertType = computed(() => {
   if (riskHealth.status === 'healthy') return 'success'
   if (riskHealth.status === 'rate_limited') return 'warning'
   if (riskHealth.status === 'auth_invalid') return 'error'
+  return 'info'
+})
+
+const embySyncStatusText = computed(() => {
+  if (embySyncStatus.running) return '同步中'
+  if (embySyncStatus.status === 'success') return '同步成功'
+  if (embySyncStatus.status === 'failed') return '同步失败'
+  return '未同步'
+})
+
+const embySyncStatusTagType = computed(() => {
+  if (embySyncStatus.running) return 'warning'
+  if (embySyncStatus.status === 'success') return 'success'
+  if (embySyncStatus.status === 'failed') return 'danger'
   return 'info'
 })
 
@@ -1746,6 +1841,55 @@ const checkEmby = async (notify = false) => {
   }
 }
 
+const applyEmbySyncStatus = (data = {}) => {
+  embySyncStatus.status = String(data.status || '')
+  embySyncStatus.running = !!data.running
+  embySyncStatus.hasSnapshot = !!data.has_snapshot
+  embySyncStatus.lastTrigger = String(data.last_trigger || '')
+  embySyncStatus.lastSyncStartedAt = data.last_sync_started_at || ''
+  embySyncStatus.lastSyncFinishedAt = data.last_sync_finished_at || ''
+  embySyncStatus.lastSuccessfulSyncAt = data.last_successful_sync_at || ''
+  embySyncStatus.lastSyncDurationMs = Number.isFinite(Number(data.last_sync_duration_ms))
+    ? Number(data.last_sync_duration_ms)
+    : null
+  embySyncStatus.lastSyncError = String(data.last_sync_error || '')
+  embySyncStatus.movieCount = Number(data.movie_count || 0)
+  embySyncStatus.tvCount = Number(data.tv_count || 0)
+  embySyncStatus.episodeCount = Number(data.episode_count || 0)
+}
+
+const stopEmbySyncPolling = () => {
+  if (embySyncPollTimer) {
+    clearInterval(embySyncPollTimer)
+    embySyncPollTimer = null
+  }
+}
+
+const startEmbySyncPolling = () => {
+  if (embySyncPollTimer) return
+  embySyncPollTimer = window.setInterval(async () => {
+    await fetchEmbySyncStatus(false)
+    if (!embySyncStatus.running) {
+      stopEmbySyncPolling()
+      runningEmbySync.value = false
+    }
+  }, 5000)
+}
+
+const fetchEmbySyncStatus = async (notifyOnError = false) => {
+  try {
+    const { data } = await settingsApi.getEmbySyncStatus()
+    applyEmbySyncStatus(data || {})
+    runningEmbySync.value = embySyncStatus.running
+    if (embySyncStatus.running) startEmbySyncPolling()
+    else stopEmbySyncPolling()
+  } catch (error) {
+    if (notifyOnError) {
+      ElMessage.error(error.response?.data?.detail || error.message || '获取 Emby 同步状态失败')
+    }
+  }
+}
+
 const handleSaveEmby = async () => {
   if (!String(embyForm.value.url || '').trim()) {
     ElMessage.warning('请输入 Emby URL')
@@ -1760,9 +1904,12 @@ const handleSaveEmby = async () => {
   try {
     await settingsApi.updateRuntime({
       emby_url: embyForm.value.url,
-      emby_api_key: embyForm.value.apiKey
+      emby_api_key: embyForm.value.apiKey,
+      emby_sync_enabled: embyForm.value.syncEnabled,
+      emby_sync_interval_hours: Number(embyForm.value.syncIntervalHours || 24)
     })
     await fetchRuntimeSettings()
+    await fetchEmbySyncStatus(false)
     ElMessage.success('Emby 配置已保存')
     await checkEmby(false)
   } catch (error) {
@@ -1786,6 +1933,23 @@ const handleTestEmby = async () => {
     await checkEmby(true)
   } finally {
     testingEmby.value = false
+  }
+}
+
+const handleRunEmbySync = async () => {
+  runningEmbySync.value = true
+  try {
+    const { data } = await settingsApi.runEmbySync()
+    applyEmbySyncStatus(data?.status || {})
+    if (data?.started) {
+      ElMessage.success(data?.message || 'Emby 同步任务已启动')
+    } else {
+      ElMessage.info(data?.message || 'Emby 同步任务已在运行')
+    }
+    startEmbySyncPolling()
+  } catch (error) {
+    runningEmbySync.value = false
+    ElMessage.error(error.response?.data?.detail || error.message || '启动 Emby 同步失败')
   }
 }
 
@@ -2236,6 +2400,8 @@ const fetchRuntimeSettings = async () => {
     tmdbForm.value.imageBaseUrl = data.tmdb_image_base_url || 'https://image.tmdb.org/t/p/w500'
     embyForm.value.url = data.emby_url || ''
     embyForm.value.apiKey = data.emby_api_key || ''
+    embyForm.value.syncEnabled = !!data.emby_sync_enabled
+    embyForm.value.syncIntervalHours = Number(data.emby_sync_interval_hours || 24)
 
     if (!pansouForm.value.baseUrl) {
       pansouForm.value.baseUrl = data.pansou_base_url || ''
@@ -2566,6 +2732,7 @@ onMounted(() => {
     if (String(embyForm.value.url || '').trim() && String(embyForm.value.apiKey || '').trim()) {
       checkEmby(false)
     }
+    fetchEmbySyncStatus(false)
     if (String(tgForm.value.session || '').trim()) {
       checkTg(false)
     }
@@ -2586,6 +2753,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopPan115QrPolling()
   stopTgQrPolling()
+  stopEmbySyncPolling()
 })
 </script>
 
