@@ -1,4 +1,4 @@
-FROM node:20-alpine AS frontend-builder
+FROM --platform=linux/amd64,linux/arm64 node:20-alpine AS frontend-builder
 
 WORKDIR /frontend
 
@@ -13,7 +13,7 @@ COPY frontend/ ./
 RUN npm run build
 
 
-FROM python:3.12-slim AS backend-builder
+FROM --platform=linux/amd64,linux/arm64 python:3.12-slim AS backend-builder
 
 WORKDIR /backend
 
@@ -25,7 +25,7 @@ RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
 COPY backend/ ./
 
 
-FROM python:3.12-slim
+FROM --platform=linux/amd64,linux/arm64 python:3.12-slim
 
 WORKDIR /app
 
