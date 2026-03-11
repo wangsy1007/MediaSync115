@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: wangsy1007/mediasync115:latest
+    image: wabisabi926/mediasync115:latest
     container_name: mediasync115
     restart: unless-stopped
     working_dir: /app
