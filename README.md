@@ -89,7 +89,7 @@ docker run -d \
   --name mediasync115 \
   -p 5173:80 \
   -v $(pwd)/backend/data:/app/data \
-  -v $(pwd)/backend/.env:/app/.env:ro \
+  -v $(pwd)/backend/.env:/app/.env \
   --restart unless-stopped \
   wangsy1007/mediasync115:latest
 ```
@@ -107,7 +107,7 @@ services:
       - "5173:80"
     volumes:
       - ./backend/data:/app/data
-      - ./backend/.env:/app/.env:ro
+      - ./backend/.env:/app/.env
     healthcheck:
       test:
         [

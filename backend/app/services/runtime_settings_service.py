@@ -6,14 +6,45 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
+from app.services.env_file_service import env_file_service
 from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_client import nullbr_client
 from app.services.pansou_service import pansou_service
 from app.services.tg_service import tg_service
 from app.services.emby_service import emby_service
+from app.utils.proxy import proxy_manager
 
 
 class RuntimeSettingsService:
+    ENV_FIELD_MAP = {
+        "http_proxy": "HTTP_PROXY",
+        "https_proxy": "HTTPS_PROXY",
+        "all_proxy": "ALL_PROXY",
+        "socks_proxy": "SOCKS_PROXY",
+        "pan115_cookie": "PAN115_COOKIE",
+        "hdhive_cookie": "HDHIVE_COOKIE",
+        "hdhive_base_url": "HDHIVE_BASE_URL",
+        "pansou_base_url": "PANSOU_BASE_URL",
+        "nullbr_app_id": "NULLBR_APP_ID",
+        "nullbr_api_key": "NULLBR_API_KEY",
+        "nullbr_base_url": "NULLBR_BASE_URL",
+        "tg_api_id": "TG_API_ID",
+        "tg_api_hash": "TG_API_HASH",
+        "tg_phone": "TG_PHONE",
+        "tg_session": "TG_SESSION",
+        "tg_proxy": "TG_PROXY",
+        "tg_channel_usernames": "TG_CHANNEL_USERNAMES",
+        "tg_search_days": "TG_SEARCH_DAYS",
+        "tg_max_messages_per_channel": "TG_MAX_MESSAGES_PER_CHANNEL",
+        "tmdb_api_key": "TMDB_API_KEY",
+        "tmdb_base_url": "TMDB_BASE_URL",
+        "tmdb_image_base_url": "TMDB_IMAGE_BASE_URL",
+        "tmdb_language": "TMDB_LANGUAGE",
+        "tmdb_region": "TMDB_REGION",
+        "emby_url": "EMBY_URL",
+        "emby_api_key": "EMBY_API_KEY",
+    }
+
     @staticmethod
     def _hash_auth_password(password: str, salt: str | None = None) -> str:
         raw_password = str(password or "")
@@ -31,6 +62,10 @@ class RuntimeSettingsService:
     def __init__(self) -> None:
         self._file_path = Path("data/runtime_settings.json")
         self._defaults = {
+            "http_proxy": settings.HTTP_PROXY or "",
+            "https_proxy": settings.HTTPS_PROXY or "",
+            "all_proxy": settings.ALL_PROXY or "",
+            "socks_proxy": settings.SOCKS_PROXY or "",
             "pan115_cookie": settings.PAN115_COOKIE or "",
             "pan115_default_folder_id": "0",
             "pan115_default_folder_name": "根目录",
@@ -87,8 +122,16 @@ class RuntimeSettingsService:
         }
         self._data = dict(self._defaults)
         self._load()
+        self._sync_env_backed_values_from_settings()
         self._ensure_auth_defaults()
         self.apply_runtime_overrides()
+
+    def _get_runtime_only_data(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in self._data.items()
+            if key not in self.ENV_FIELD_MAP
+        }
 
     def _load(self) -> None:
         if not self._file_path.exists():
@@ -129,9 +172,93 @@ class RuntimeSettingsService:
     def _save(self) -> None:
         os.makedirs(self._file_path.parent, exist_ok=True)
         self._file_path.write_text(
-            json.dumps(self._data, ensure_ascii=False, indent=2),
+            json.dumps(self._get_runtime_only_data(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def _sync_env_backed_values_from_settings(self) -> None:
+        self._data["http_proxy"] = settings.HTTP_PROXY or ""
+        self._data["https_proxy"] = settings.HTTPS_PROXY or ""
+        self._data["all_proxy"] = settings.ALL_PROXY or ""
+        self._data["socks_proxy"] = settings.SOCKS_PROXY or ""
+        self._data["pan115_cookie"] = settings.PAN115_COOKIE or ""
+        self._data["hdhive_cookie"] = settings.HDHIVE_COOKIE or ""
+        self._data["hdhive_base_url"] = settings.HDHIVE_BASE_URL or ""
+        self._data["pansou_base_url"] = settings.PANSOU_BASE_URL or ""
+        self._data["nullbr_app_id"] = settings.NULLBR_APP_ID or ""
+        self._data["nullbr_api_key"] = settings.NULLBR_API_KEY or ""
+        self._data["nullbr_base_url"] = settings.NULLBR_BASE_URL or ""
+        self._data["tg_api_id"] = settings.TG_API_ID or ""
+        self._data["tg_api_hash"] = settings.TG_API_HASH or ""
+        self._data["tg_phone"] = settings.TG_PHONE or ""
+        self._data["tg_session"] = settings.TG_SESSION or ""
+        self._data["tg_proxy"] = settings.TG_PROXY or ""
+        self._data["tg_channel_usernames"] = tg_service._parse_channels(settings.TG_CHANNEL_USERNAMES)
+        self._data["tg_search_days"] = int(settings.TG_SEARCH_DAYS or 30)
+        self._data["tg_max_messages_per_channel"] = int(settings.TG_MAX_MESSAGES_PER_CHANNEL or 200)
+        self._data["tmdb_api_key"] = settings.TMDB_API_KEY or ""
+        self._data["tmdb_base_url"] = settings.TMDB_BASE_URL or ""
+        self._data["tmdb_image_base_url"] = settings.TMDB_IMAGE_BASE_URL or ""
+        self._data["tmdb_language"] = settings.TMDB_LANGUAGE or ""
+        self._data["tmdb_region"] = settings.TMDB_REGION or ""
+        self._data["emby_url"] = settings.EMBY_URL or ""
+        self._data["emby_api_key"] = settings.EMBY_API_KEY or ""
+
+    def _normalize_env_backed_update(self, key: str, value: Any) -> tuple[Any, str | None]:
+        default_value = self._defaults[key]
+
+        if isinstance(default_value, list):
+            source_items: list[str] = []
+            if value is None:
+                return [], None
+            if isinstance(value, str):
+                source_items = [part.strip() for part in value.split(",")]
+            elif isinstance(value, list):
+                source_items = [str(part or "").strip() for part in value]
+            normalized_list = tg_service._parse_channels(source_items)
+            if not normalized_list:
+                return [], None
+            return normalized_list, ",".join(normalized_list)
+
+        if isinstance(default_value, bool):
+            if value is None:
+                return default_value, None
+            if isinstance(value, bool):
+                return value, "true" if value else "false"
+            normalized_bool = str(value or "").strip().lower()
+            if normalized_bool in {"1", "true", "yes", "on"}:
+                return True, "true"
+            if normalized_bool in {"0", "false", "no", "off"}:
+                return False, "false"
+            return default_value, None
+
+        if isinstance(default_value, int):
+            if value is None or not str(value).strip():
+                return default_value, None
+            parsed = int(str(value).strip())
+            return parsed, str(parsed)
+
+        if value is None:
+            return "", None
+        cleaned = str(value).strip()
+        if not cleaned:
+            return "", None
+        return cleaned, cleaned
+
+    def _persist_env_backed_fields(self, updates: dict[str, Any]) -> None:
+        if not updates:
+            return
+
+        env_updates: dict[str, str | None] = {}
+        for key, value in updates.items():
+            if key not in self.ENV_FIELD_MAP:
+                continue
+            normalized_value, env_value = self._normalize_env_backed_update(key, value)
+            self._data[key] = normalized_value
+            env_updates[self.ENV_FIELD_MAP[key]] = env_value
+
+        if env_updates:
+            env_file_service.update_values(env_updates)
 
     def _ensure_auth_defaults(self) -> None:
         changed = False
@@ -167,20 +294,20 @@ class RuntimeSettingsService:
         if not cleaned:
             raise ValueError("115 Cookie 不能为空")
 
-        self._data["pan115_cookie"] = cleaned
+        self._persist_env_backed_fields({"pan115_cookie": cleaned})
         self._save()
         self.apply_runtime_overrides()
-        return cleaned
+        return self.get_pan115_cookie()
 
     def update_pansou_base_url(self, base_url: str) -> str:
         cleaned = str(base_url or "").strip()
         if not cleaned:
             raise ValueError("pansou base_url 不能为空")
 
-        self._data["pansou_base_url"] = cleaned
+        self._persist_env_backed_fields({"pansou_base_url": cleaned})
         self._save()
         self.apply_runtime_overrides()
-        return cleaned
+        return self.get_pansou_base_url()
 
     def get_pan115_default_folder(self) -> dict[str, str]:
         folder_id = str(self._data.get("pan115_default_folder_id") or "0")
@@ -252,13 +379,13 @@ class RuntimeSettingsService:
         return str(self._data.get("tg_session") or "")
 
     def update_tg_session(self, session: str) -> str:
-        self._data["tg_session"] = str(session or "").strip()
+        self._persist_env_backed_fields({"tg_session": str(session or "").strip()})
         self._save()
         self.apply_runtime_overrides()
         return self._data["tg_session"]
 
     def clear_tg_session(self) -> None:
-        self._data["tg_session"] = ""
+        self._persist_env_backed_fields({"tg_session": None})
         self._save()
         self.apply_runtime_overrides()
 
@@ -408,10 +535,15 @@ class RuntimeSettingsService:
             raise ValueError("配置数据格式无效")
 
         normalized = dict(self._data)
+        env_updates: dict[str, Any] = {}
         for key in self._defaults.keys():
             if key not in payload:
                 continue
             value = payload.get(key)
+            if key in self.ENV_FIELD_MAP:
+                env_updates[key] = value
+                continue
+
             if value is None:
                 continue
 
@@ -464,11 +596,16 @@ class RuntimeSettingsService:
                 normalized[key] = value
 
         self._data = normalized
+        self._persist_env_backed_fields(env_updates)
         self._save()
         self.apply_runtime_overrides()
         return self.get_all()
 
     def apply_runtime_overrides(self) -> None:
+        settings.HTTP_PROXY = str(self._data.get("http_proxy") or "").strip() or None
+        settings.HTTPS_PROXY = str(self._data.get("https_proxy") or "").strip() or None
+        settings.ALL_PROXY = str(self._data.get("all_proxy") or "").strip() or None
+        settings.SOCKS_PROXY = str(self._data.get("socks_proxy") or "").strip() or None
         settings.PAN115_COOKIE = self.get_pan115_cookie() or None
         settings.HDHIVE_COOKIE = self.get_hdhive_cookie() or None
         settings.HDHIVE_BASE_URL = self.get_hdhive_base_url()
@@ -492,6 +629,13 @@ class RuntimeSettingsService:
         settings.TMDB_REGION = self.get_tmdb_region()
         settings.EMBY_URL = self.get_emby_url()
         settings.EMBY_API_KEY = self.get_emby_api_key()
+
+        proxy_manager.update_proxy(
+            http_proxy=self._data.get("http_proxy"),
+            https_proxy=self._data.get("https_proxy"),
+            all_proxy=self._data.get("all_proxy"),
+            socks_proxy=self._data.get("socks_proxy"),
+        )
 
         # Keep the singleton client in sync with runtime cookie updates.
         from app.services.pan115_service import pan115_service
@@ -522,6 +666,10 @@ class RuntimeSettingsService:
 
     def get_all(self) -> dict[str, Any]:
         return {
+            "http_proxy": str(self._data.get("http_proxy") or ""),
+            "https_proxy": str(self._data.get("https_proxy") or ""),
+            "all_proxy": str(self._data.get("all_proxy") or ""),
+            "socks_proxy": str(self._data.get("socks_proxy") or ""),
             "pan115_default_folder_id": self.get_pan115_default_folder()["folder_id"],
             "pan115_default_folder_name": self.get_pan115_default_folder()["folder_name"],
             "pan115_offline_folder_id": self.get_pan115_offline_folder()["folder_id"],

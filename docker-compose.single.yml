@@ -11,7 +11,7 @@ services:
       - "5173:80"
     volumes:
       - ./backend/data:/app/data
-      - ./backend/.env:/app/.env:ro
+      - ./backend/.env:/app/.env
     healthcheck:
       test:
         [

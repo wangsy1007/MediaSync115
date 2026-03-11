@@ -691,7 +691,7 @@
               代理配置说明
             </template>
             <template #default>
-              配置代理后，所有外部服务请求（TMDB、HDHive、Nullbr、Pansou）都将通过代理访问。代理配置需要在后端 .env 文件中设置环境变量。
+              配置代理后，所有外部服务请求（TMDB、HDHive、Nullbr、Pansou）都将通过代理访问。保存时会自动写入后端 .env 文件，不存在时会自动创建。
             </template>
           </el-alert>
 
@@ -1682,6 +1682,10 @@ const fetchProxyStatus = async () => {
   try {
     const { data } = await settingsApi.getProxy()
     proxyStatus.value.hasProxy = data.has_proxy || false
+    proxyForm.value.httpProxy = data.http_proxy || ''
+    proxyForm.value.httpsProxy = data.https_proxy || ''
+    proxyForm.value.allProxy = data.all_proxy || ''
+    proxyForm.value.socksProxy = data.socks_proxy || ''
   } catch (error) {
     console.error('Failed to fetch proxy status:', error)
   }
@@ -1711,7 +1715,7 @@ const handleSaveProxy = async () => {
       all_proxy: proxyForm.value.allProxy || null,
       socks_proxy: proxyForm.value.socksProxy || null
     })
-    ElMessage.success('代理配置已保存，重启后端服务生效')
+    ElMessage.success('代理配置已保存并生效')
     await fetchProxyStatus()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '代理配置保存失败')
@@ -2506,6 +2510,10 @@ const fetchRuntimeSettings = async () => {
     tmdbForm.value.region = data.tmdb_region || 'CN'
     tmdbForm.value.baseUrl = data.tmdb_base_url || 'https://api.themoviedb.org/3'
     tmdbForm.value.imageBaseUrl = data.tmdb_image_base_url || 'https://image.tmdb.org/t/p/w500'
+    proxyForm.value.httpProxy = data.http_proxy || ''
+    proxyForm.value.httpsProxy = data.https_proxy || ''
+    proxyForm.value.allProxy = data.all_proxy || ''
+    proxyForm.value.socksProxy = data.socks_proxy || ''
     embyForm.value.url = data.emby_url || ''
     embyForm.value.apiKey = data.emby_api_key || ''
     embyForm.value.syncEnabled = !!data.emby_sync_enabled

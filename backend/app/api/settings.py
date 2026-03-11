@@ -33,6 +33,10 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 
 class RuntimeSettingsRequest(BaseModel):
+    http_proxy: Optional[str] = None
+    https_proxy: Optional[str] = None
+    all_proxy: Optional[str] = None
+    socks_proxy: Optional[str] = None
     hdhive_cookie: Optional[str] = None
     hdhive_base_url: Optional[str] = None
     pansou_base_url: Optional[str] = None
@@ -225,7 +229,7 @@ async def get_runtime_settings():
 
 @router.put("/runtime")
 async def update_runtime_settings(request: RuntimeSettingsRequest):
-    payload = request.model_dump(exclude_none=True)
+    payload = request.model_dump(exclude_unset=True)
     merged_settings = runtime_settings_service.get_all()
     merged_settings.update(payload)
     if "subscription_resource_priority" in payload:
@@ -380,13 +384,13 @@ async def run_emby_sync():
 
 @router.get("/proxy")
 async def get_proxy_config():
-    """获取当前代理配置（隐藏敏感信息）"""
+    """获取当前代理配置。"""
     config = proxy_manager.get_current_config()
     return {
-        "http_proxy": "***" if config.get("http_proxy") else None,
-        "https_proxy": "***" if config.get("https_proxy") else None,
-        "all_proxy": "***" if config.get("all_proxy") else None,
-        "socks_proxy": "***" if config.get("socks_proxy") else None,
+        "http_proxy": config.get("http_proxy") or "",
+        "https_proxy": config.get("https_proxy") or "",
+        "all_proxy": config.get("all_proxy") or "",
+        "socks_proxy": config.get("socks_proxy") or "",
         "has_proxy": any([
             config.get("http_proxy"),
             config.get("https_proxy"),
