@@ -11,7 +11,7 @@ env:
   REGISTRY: ghcr.io
   DOCKER_HUB_REGISTRY: docker.io
   IMAGE_NAME: ${{ github.repository }}
-  DOCKER_HUB_IMAGE_NAME: wangsy1007/mediasync115
+  DOCKER_HUB_IMAGE_NAME: wabisabi926/mediasync115
 
 jobs:
   build-multi-platform:
