@@ -554,8 +554,8 @@ const EXPLORE_HERO_POSTER_COUNT = 6
 const HOME_SECTION_PREFETCH_ROUNDS = EXPLORE_SPEED_MODE === 'extreme' ? 3 : 1
 const HOME_SECTION_PREFETCH_DELAY_MS = EXPLORE_SPEED_MODE === 'extreme' ? 12 : 36
 const HOME_SECTION_CACHE_TTL_MS = 5 * 60 * 1000
-const HOME_CARD_MIN_WIDTH = 150
-const HOME_CARD_MAX_WIDTH = 210
+const HOME_CARD_MIN_WIDTH = 132
+const HOME_CARD_MAX_WIDTH = 188
 const HOME_CARD_MIN_PER_VIEW = 2
 const HOME_CARD_MAX_PER_VIEW = 9
 let sectionResizeObserver = null
@@ -2126,8 +2126,8 @@ onBeforeUnmount(() => {
     }
 
     .results-grid {
-      grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+      gap: 14px;
     }
   }
 }
@@ -2186,8 +2186,8 @@ onBeforeUnmount(() => {
         }
 
         .recommend-card {
-          width: min(160px, 42vw);
-          min-width: min(160px, 42vw);
+          width: min(136px, 31vw);
+          min-width: min(136px, 31vw);
         }
       }
     }
@@ -2197,8 +2197,8 @@ onBeforeUnmount(() => {
 
       .results-skeleton-grid,
       .results-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
       }
 
       .results-header {
@@ -2209,33 +2209,39 @@ onBeforeUnmount(() => {
     }
 
     .media-card {
+      border-radius: 12px;
+
       .poster-wrapper {
         .action-buttons {
           opacity: 1;
-          gap: 8px;
-          padding: 10px;
+          gap: 6px;
+          padding: 8px;
 
           .action-btn {
             flex: 1 1 0;
             min-width: 0;
-            padding-inline: 8px;
+            padding-inline: 6px;
+            font-size: 11px;
           }
         }
       }
 
       .media-info {
-        padding: 12px;
+        padding: 10px;
 
         .title {
           white-space: normal;
           display: -webkit-box;
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
+          font-size: 13px;
         }
 
         .year {
           align-items: flex-start;
           flex-direction: column;
+          gap: 4px;
+          margin-bottom: 0;
         }
 
         .overview {

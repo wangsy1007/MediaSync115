@@ -427,8 +427,8 @@ onMounted(() => {
 
   .subscriptions-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
   }
 
   .subscription-item {
@@ -587,13 +587,32 @@ onMounted(() => {
     }
 
     .subscriptions-grid {
-      grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
     }
 
     .subscription-item {
+      border-radius: 12px;
+
       .poster {
         width: calc(100% + 32px);
         margin: -16px -16px 10px;
+      }
+
+      .info {
+        .title-row {
+          margin-bottom: 6px;
+
+          .title {
+            font-size: 13px;
+          }
+        }
+
+        .meta {
+          gap: 8px;
+          margin-bottom: 8px;
+          font-size: 11px;
+        }
       }
     }
 
