@@ -8,7 +8,6 @@ services:
     working_dir: /app
     volumes:
       - ./backend/data:/app/data
-      - ./backend/.env:/app/.env
     expose:
       - "8000"
     healthcheck:

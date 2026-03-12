@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
-from app.services.env_file_service import env_file_service
 from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_client import nullbr_client
 from app.services.pansou_service import pansou_service
@@ -32,7 +31,6 @@ class RuntimeSettingsService:
         "tg_api_hash": "TG_API_HASH",
         "tg_phone": "TG_PHONE",
         "tg_session": "TG_SESSION",
-        "tg_proxy": "TG_PROXY",
         "tg_channel_usernames": "TG_CHANNEL_USERNAMES",
         "tg_search_days": "TG_SEARCH_DAYS",
         "tg_max_messages_per_channel": "TG_MAX_MESSAGES_PER_CHANNEL",
@@ -61,6 +59,7 @@ class RuntimeSettingsService:
 
     def __init__(self) -> None:
         self._file_path = Path("data/runtime_settings.json")
+        self._loaded_keys: set[str] = set()
         self._defaults = {
             "http_proxy": settings.HTTP_PROXY or "",
             "https_proxy": settings.HTTPS_PROXY or "",
@@ -81,7 +80,6 @@ class RuntimeSettingsService:
             "tg_api_hash": settings.TG_API_HASH or "",
             "tg_phone": settings.TG_PHONE or "",
             "tg_session": settings.TG_SESSION or "",
-            "tg_proxy": settings.TG_PROXY or "",
             "tg_channel_usernames": tg_service._parse_channels(settings.TG_CHANNEL_USERNAMES),
             "tg_search_days": int(settings.TG_SEARCH_DAYS or 30),
             "tg_max_messages_per_channel": int(settings.TG_MAX_MESSAGES_PER_CHANNEL or 200),
@@ -122,16 +120,12 @@ class RuntimeSettingsService:
         }
         self._data = dict(self._defaults)
         self._load()
-        self._sync_env_backed_values_from_settings()
+        self._merge_settings_backed_values()
         self._ensure_auth_defaults()
         self.apply_runtime_overrides()
 
-    def _get_runtime_only_data(self) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in self._data.items()
-            if key not in self.ENV_FIELD_MAP
-        }
+    def _get_persisted_data(self) -> dict[str, Any]:
+        return dict(self._data)
 
     def _load(self) -> None:
         if not self._file_path.exists():
@@ -145,10 +139,11 @@ class RuntimeSettingsService:
         if not isinstance(raw, dict):
             return
 
+        self._loaded_keys = {str(key) for key in raw.keys()}
         for key, default_value in self._defaults.items():
             value = raw.get(key)
             if isinstance(default_value, str):
-                if isinstance(value, str) and value.strip():
+                if isinstance(value, str):
                     self._data[key] = value.strip()
             elif isinstance(default_value, bool):
                 if isinstance(value, bool):
@@ -172,37 +167,58 @@ class RuntimeSettingsService:
     def _save(self) -> None:
         os.makedirs(self._file_path.parent, exist_ok=True)
         self._file_path.write_text(
-            json.dumps(self._get_runtime_only_data(), ensure_ascii=False, indent=2),
+            json.dumps(self._get_persisted_data(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
-    def _sync_env_backed_values_from_settings(self) -> None:
-        self._data["http_proxy"] = settings.HTTP_PROXY or ""
-        self._data["https_proxy"] = settings.HTTPS_PROXY or ""
-        self._data["all_proxy"] = settings.ALL_PROXY or ""
-        self._data["socks_proxy"] = settings.SOCKS_PROXY or ""
-        self._data["pan115_cookie"] = settings.PAN115_COOKIE or ""
-        self._data["hdhive_cookie"] = settings.HDHIVE_COOKIE or ""
-        self._data["hdhive_base_url"] = settings.HDHIVE_BASE_URL or ""
-        self._data["pansou_base_url"] = settings.PANSOU_BASE_URL or ""
-        self._data["nullbr_app_id"] = settings.NULLBR_APP_ID or ""
-        self._data["nullbr_api_key"] = settings.NULLBR_API_KEY or ""
-        self._data["nullbr_base_url"] = settings.NULLBR_BASE_URL or ""
-        self._data["tg_api_id"] = settings.TG_API_ID or ""
-        self._data["tg_api_hash"] = settings.TG_API_HASH or ""
-        self._data["tg_phone"] = settings.TG_PHONE or ""
-        self._data["tg_session"] = settings.TG_SESSION or ""
-        self._data["tg_proxy"] = settings.TG_PROXY or ""
-        self._data["tg_channel_usernames"] = tg_service._parse_channels(settings.TG_CHANNEL_USERNAMES)
-        self._data["tg_search_days"] = int(settings.TG_SEARCH_DAYS or 30)
-        self._data["tg_max_messages_per_channel"] = int(settings.TG_MAX_MESSAGES_PER_CHANNEL or 200)
-        self._data["tmdb_api_key"] = settings.TMDB_API_KEY or ""
-        self._data["tmdb_base_url"] = settings.TMDB_BASE_URL or ""
-        self._data["tmdb_image_base_url"] = settings.TMDB_IMAGE_BASE_URL or ""
-        self._data["tmdb_language"] = settings.TMDB_LANGUAGE or ""
-        self._data["tmdb_region"] = settings.TMDB_REGION or ""
-        self._data["emby_url"] = settings.EMBY_URL or ""
-        self._data["emby_api_key"] = settings.EMBY_API_KEY or ""
+    def _merge_settings_backed_values(self) -> None:
+        fallback_values = {
+            "http_proxy": settings.HTTP_PROXY or "",
+            "https_proxy": settings.HTTPS_PROXY or "",
+            "all_proxy": settings.ALL_PROXY or "",
+            "socks_proxy": settings.SOCKS_PROXY or "",
+            "pan115_cookie": settings.PAN115_COOKIE or "",
+            "hdhive_cookie": settings.HDHIVE_COOKIE or "",
+            "hdhive_base_url": settings.HDHIVE_BASE_URL or "",
+            "pansou_base_url": settings.PANSOU_BASE_URL or "",
+            "nullbr_app_id": settings.NULLBR_APP_ID or "",
+            "nullbr_api_key": settings.NULLBR_API_KEY or "",
+            "nullbr_base_url": settings.NULLBR_BASE_URL or "",
+            "tg_api_id": settings.TG_API_ID or "",
+            "tg_api_hash": settings.TG_API_HASH or "",
+            "tg_phone": settings.TG_PHONE or "",
+            "tg_session": settings.TG_SESSION or "",
+            "tg_channel_usernames": tg_service._parse_channels(settings.TG_CHANNEL_USERNAMES),
+            "tg_search_days": int(settings.TG_SEARCH_DAYS or 30),
+            "tg_max_messages_per_channel": int(settings.TG_MAX_MESSAGES_PER_CHANNEL or 200),
+            "tmdb_api_key": settings.TMDB_API_KEY or "",
+            "tmdb_base_url": settings.TMDB_BASE_URL or "",
+            "tmdb_image_base_url": settings.TMDB_IMAGE_BASE_URL or "",
+            "tmdb_language": settings.TMDB_LANGUAGE or "",
+            "tmdb_region": settings.TMDB_REGION or "",
+            "emby_url": settings.EMBY_URL or "",
+            "emby_api_key": settings.EMBY_API_KEY or "",
+        }
+        for key, fallback_value in fallback_values.items():
+            if key in self._loaded_keys:
+                continue
+            current_value = self._data.get(key)
+            if isinstance(fallback_value, list):
+                if isinstance(current_value, list) and current_value:
+                    continue
+                self._data[key] = list(fallback_value)
+                continue
+            if isinstance(fallback_value, int):
+                try:
+                    if int(current_value) > 0:
+                        continue
+                except Exception:
+                    pass
+                self._data[key] = fallback_value
+                continue
+            if str(current_value or "").strip():
+                continue
+            self._data[key] = fallback_value
 
     def _normalize_env_backed_update(self, key: str, value: Any) -> tuple[Any, str | None]:
         default_value = self._defaults[key]
@@ -249,16 +265,12 @@ class RuntimeSettingsService:
         if not updates:
             return
 
-        env_updates: dict[str, str | None] = {}
         for key, value in updates.items():
             if key not in self.ENV_FIELD_MAP:
                 continue
-            normalized_value, env_value = self._normalize_env_backed_update(key, value)
+            normalized_value, _ = self._normalize_env_backed_update(key, value)
             self._data[key] = normalized_value
-            env_updates[self.ENV_FIELD_MAP[key]] = env_value
-
-        if env_updates:
-            env_file_service.update_values(env_updates)
+            self._loaded_keys.add(key)
 
     def _ensure_auth_defaults(self) -> None:
         changed = False
@@ -388,9 +400,6 @@ class RuntimeSettingsService:
         self._persist_env_backed_fields({"tg_session": None})
         self._save()
         self.apply_runtime_overrides()
-
-    def get_tg_proxy(self) -> str:
-        return str(self._data.get("tg_proxy") or "")
 
     def get_tg_channel_usernames(self) -> list[str]:
         value = self._data.get("tg_channel_usernames")
@@ -597,6 +606,7 @@ class RuntimeSettingsService:
 
         self._data = normalized
         self._persist_env_backed_fields(env_updates)
+        self._loaded_keys.update(self._data.keys())
         self._save()
         self.apply_runtime_overrides()
         return self.get_all()
@@ -617,7 +627,6 @@ class RuntimeSettingsService:
         settings.TG_API_HASH = self.get_tg_api_hash() or None
         settings.TG_PHONE = self.get_tg_phone() or None
         settings.TG_SESSION = self.get_tg_session() or None
-        settings.TG_PROXY = self.get_tg_proxy() or None
         settings.TG_CHANNEL_USERNAMES = ",".join(self.get_tg_channel_usernames())
         settings.TG_SEARCH_DAYS = self.get_tg_search_days()
         settings.TG_MAX_MESSAGES_PER_CHANNEL = self.get_tg_max_messages_per_channel()
@@ -654,7 +663,6 @@ class RuntimeSettingsService:
             api_hash=self.get_tg_api_hash(),
             phone=self.get_tg_phone(),
             session=self.get_tg_session(),
-            proxy=self.get_tg_proxy(),
             channels=self.get_tg_channel_usernames(),
             search_days=self.get_tg_search_days(),
             max_messages=self.get_tg_max_messages_per_channel(),
@@ -684,7 +692,6 @@ class RuntimeSettingsService:
             "tg_api_hash": self.get_tg_api_hash(),
             "tg_phone": self.get_tg_phone(),
             "tg_session": self.get_tg_session(),
-            "tg_proxy": self.get_tg_proxy(),
             "tg_channel_usernames": self.get_tg_channel_usernames(),
             "tg_search_days": self.get_tg_search_days(),
             "tg_max_messages_per_channel": self.get_tg_max_messages_per_channel(),

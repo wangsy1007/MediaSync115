@@ -417,9 +417,6 @@
             <el-form-item label="手机号">
               <el-input v-model="tgForm.phone" placeholder="例如: +8613812345678" />
             </el-form-item>
-            <el-form-item label="代理">
-              <el-input v-model="tgForm.proxy" placeholder="可选，例如 socks5://127.0.0.1:1080" />
-            </el-form-item>
             <el-form-item label="频道列表">
               <el-input
                 v-model="tgForm.channelsText"
@@ -691,7 +688,7 @@
               代理配置说明
             </template>
             <template #default>
-              配置代理后，可用于检测 TMDB、HDHive、Nullbr、Telegram 这些目标地址的连通性。保存时会自动写入后端 .env 文件，不存在时会自动创建。
+              配置代理后，可用于检测 TMDB、HDHive、Nullbr、Telegram 这些目标地址的连通性。保存后会写入后端运行时配置，并持久化到 data 目录。
             </template>
           </el-alert>
 
@@ -750,6 +747,12 @@
                     </el-tag>
                   </div>
                   <div class="service-message">{{ service.message }}</div>
+                  <div v-if="service.target" class="service-detail">
+                    检测目标：{{ service.target }}
+                  </div>
+                  <div class="service-detail">
+                    已应用代理：{{ getHealthAppliedProxyText(service) }}
+                  </div>
                 </el-card>
               </el-col>
             </el-row>
@@ -1067,7 +1070,6 @@ const tgForm = ref({
   apiHash: '',
   phone: '',
   session: '',
-  proxy: '',
   channelsText: '',
   searchDays: 30,
   maxMessagesPerChannel: 200
@@ -1726,6 +1728,14 @@ const getHealthStatusText = (service) => {
   return '异常'
 }
 
+const getHealthAppliedProxyText = (service) => {
+  const appliedProxy = String(service?.applied_proxy || '').trim()
+  if (!appliedProxy) {
+    return '未命中代理'
+  }
+  return appliedProxy
+}
+
 const handleSaveProxy = async () => {
   savingProxy.value = true
   try {
@@ -2081,7 +2091,6 @@ const handleSaveTg = async () => {
       tg_api_id: tgForm.value.apiId,
       tg_api_hash: tgForm.value.apiHash,
       tg_phone: tgForm.value.phone,
-      tg_proxy: tgForm.value.proxy,
       tg_channel_usernames: channels,
       tg_search_days: Number(tgForm.value.searchDays || 30),
       tg_max_messages_per_channel: Number(tgForm.value.maxMessagesPerChannel || 200),
@@ -2150,8 +2159,7 @@ const ensureTgLoginBaseConfig = async () => {
   await settingsApi.updateRuntime({
     tg_api_id: tgForm.value.apiId,
     tg_api_hash: tgForm.value.apiHash,
-    tg_phone: tgForm.value.phone,
-    tg_proxy: tgForm.value.proxy
+    tg_phone: tgForm.value.phone
   })
   return true
 }
@@ -2517,7 +2525,6 @@ const fetchRuntimeSettings = async () => {
     tgForm.value.apiHash = data.tg_api_hash || ''
     tgForm.value.phone = data.tg_phone || ''
     tgForm.value.session = data.tg_session || ''
-    tgForm.value.proxy = data.tg_proxy || ''
     tgForm.value.searchDays = Number(data.tg_search_days || 30)
     tgForm.value.maxMessagesPerChannel = Number(data.tg_max_messages_per_channel || 200)
     tgForm.value.channelsText = Array.isArray(data.tg_channel_usernames) ? data.tg_channel_usernames.join('\n') : ''
@@ -3132,6 +3139,14 @@ onBeforeUnmount(() => {
           font-size: 12px;
           color: var(--ms-text-secondary);
           line-height: 1.4;
+        }
+
+        .service-detail {
+          margin-top: 6px;
+          font-size: 12px;
+          color: var(--ms-text-muted);
+          line-height: 1.4;
+          word-break: break-all;
         }
       }
     }

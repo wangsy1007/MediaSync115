@@ -69,16 +69,13 @@ https://hub.docker.com/r/wangsy1007/mediasync115
 ### 1. 准备配置文件
 
 ```bash
-cp backend/.env.example backend/.env
+mkdir -p backend/data
 ```
 
-至少需要填写：
-- `NULLBR_APP_ID`
-- `NULLBR_API_KEY`
-- `TMDB_API_KEY`
-- `PAN115_COOKIE`
-- `EMBY_URL`
-- `EMBY_API_KEY`
+注意：
+- `docker compose` 部署时不再需要预先创建 `backend/.env`。
+- 首次启动后可直接进入设置页填写必要参数，配置会持久化到 `backend/data/runtime_settings.json`。
+- 如果你习惯本地开发用 `.env`，应用仍然兼容读取 `backend/.env`。
 
 ### 2. 使用 docker run 部署
 
@@ -89,7 +86,6 @@ docker run -d \
   --name mediasync115 \
   -p 5173:80 \
   -v $(pwd)/backend/data:/app/data \
-  -v $(pwd)/backend/.env:/app/.env \
   --restart unless-stopped \
   wangsy1007/mediasync115:latest
 ```
@@ -107,7 +103,6 @@ services:
       - "5173:80"
     volumes:
       - ./backend/data:/app/data
-      - ./backend/.env:/app/.env
     healthcheck:
       test:
         [
@@ -128,6 +123,20 @@ services:
 docker compose up -d
 ```
 
+首次启动后，请在设置页补齐必要配置，例如：
+
+- `TMDB_API_KEY`
+- `PAN115_COOKIE`
+- `EMBY_URL`
+- `EMBY_API_KEY`
+
+如果你之前已经把 `backend/.env` 错误创建成目录，不会影响当前 compose 方案；如果你仍需本地 `.env`，先删除目录再重新创建文件：
+
+```bash
+rm -rf backend/.env
+cp backend/.env.example backend/.env
+```
+
 访问地址：
 - `http://127.0.0.1:5173`
 - `http://127.0.0.1:5173/api/docs`
@@ -138,7 +147,7 @@ docker compose up -d
 后端启动阶段会执行首页探索预热和部分运行时初始化，健康检查通过前页面不会完全可用。这是当前实现的设计选择。
 
 ### 数据丢失后怎么恢复？
-核心数据都在 `backend/data/` 下。只要这个目录保留，容器重建后数据库和运行时配置会继续存在。
+核心数据都在 `backend/data/` 下。只要这个目录保留，容器重建后数据库和运行时配置都会继续存在。
 
 ### 详情页 Nullbr 为什么不是自动加载？
 当前详情页已经改成手动获取 Nullbr 资源，避免页面打开即触发重型请求。
