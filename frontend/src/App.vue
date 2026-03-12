@@ -88,8 +88,7 @@
 
       <el-container class="app-content-container">
         <header v-if="isCompact" class="mobile-topbar">
-          <el-button text class="menu-toggle" @click="mobileMenuOpen = true">菜单</el-button>
-          <div class="mobile-brand" @click="handleGoHome">
+          <div class="mobile-brand" role="button" tabindex="0" @click="mobileMenuOpen = true" @keydown.enter.prevent="mobileMenuOpen = true" @keydown.space.prevent="mobileMenuOpen = true">
             <svg viewBox="0 0 48 48" class="mobile-brand-icon" aria-hidden="true">
               <rect x="4" y="4" width="40" height="40" rx="12" class="brand-shell" />
               <path
@@ -100,11 +99,6 @@
             </svg>
             <span class="mobile-brand-text">MediaSync 115</span>
           </div>
-          <el-radio-group v-model="themeMode" size="small" class="mobile-theme-mode">
-            <el-radio-button label="auto">自动</el-radio-button>
-            <el-radio-button label="light">浅色</el-radio-button>
-            <el-radio-button label="dark">深色</el-radio-button>
-          </el-radio-group>
         </header>
 
         <el-main class="app-main">
@@ -171,6 +165,17 @@
           </el-menu-item>
         </el-menu>
         <div class="aside-footer">
+          <el-radio-group v-model="themeMode" size="small" class="theme-mode-group mobile-drawer-theme-mode">
+            <el-radio-button label="auto">
+              <el-icon><Monitor /></el-icon>
+            </el-radio-button>
+            <el-radio-button label="light">
+              <el-icon><Sunny /></el-icon>
+            </el-radio-button>
+            <el-radio-button label="dark">
+              <el-icon><MoonNight /></el-icon>
+            </el-radio-button>
+          </el-radio-group>
           <div class="timezone-info">
             <span class="timezone-label">北京时间</span>
             <span class="timezone-value">{{ beijingNow }}</span>
@@ -521,7 +526,7 @@ html, body, #app {
 .mobile-topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
   min-height: 64px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--ms-glass-border);
@@ -532,21 +537,17 @@ html, body, #app {
   }
   contain: layout style;
 
-  .menu-toggle {
-    padding: 0 4px;
-    font-weight: 600;
-    color: var(--ms-text-secondary);
-  }
-
   .mobile-brand {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 10px;
     font-size: 16px;
     font-weight: 700;
     color: var(--ms-text-primary);
     white-space: nowrap;
     cursor: pointer;
+    max-width: 100%;
 
     .mobile-brand-icon {
       width: 30px;
@@ -572,16 +573,6 @@ html, body, #app {
 
     .mobile-brand-text {
       white-space: nowrap;
-    }
-  }
-
-  .mobile-theme-mode {
-    margin-left: auto;
-
-    .el-radio-button__inner {
-      padding: 6px 8px;
-      min-width: 48px;
-      font-size: 12px;
     }
   }
 }
@@ -710,6 +701,19 @@ html, body, #app {
   .aside-footer {
     padding: 14px 12px;
     border-top: 1px solid var(--ms-glass-border);
+
+    .mobile-drawer-theme-mode {
+      width: 100%;
+      margin-bottom: 12px;
+
+      .el-radio-button {
+        flex: 1;
+      }
+
+      .el-radio-button__inner {
+        width: 100%;
+      }
+    }
   }
 }
 
@@ -730,18 +734,8 @@ html, body, #app {
 
 @media (max-width: 1024px) {
   .mobile-topbar {
-    flex-wrap: wrap;
-
     .mobile-brand {
-      flex: 1 1 auto;
       min-width: 0;
-    }
-
-    .mobile-theme-mode {
-      margin-left: 0;
-      width: 100%;
-      display: flex;
-      justify-content: flex-end;
     }
   }
 
@@ -762,25 +756,15 @@ html, body, #app {
 
 @media (max-width: 768px) {
   .mobile-topbar {
-    align-items: flex-start;
-    min-height: auto;
-    gap: 8px;
-    row-gap: 10px;
+    min-height: 56px;
     padding: 10px;
 
-    .menu-toggle {
-      flex: 0 0 auto;
-      padding-inline: 0;
-      min-width: 32px;
-      min-height: 32px;
-    }
-
     .mobile-brand {
-      flex: 1 1 0;
-      align-items: center;
       font-size: 15px;
-      max-width: none;
+      max-width: 100%;
       overflow: hidden;
+      padding: 4px 8px;
+      border-radius: 12px;
 
       .mobile-brand-icon {
         width: 28px;
@@ -790,25 +774,6 @@ html, body, #app {
       .mobile-brand-text {
         overflow: hidden;
         text-overflow: ellipsis;
-      }
-    }
-
-    .mobile-theme-mode {
-      flex: 0 0 100%;
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      justify-content: stretch;
-      gap: 0;
-
-      :deep(.el-radio-button) {
-        width: 100%;
-      }
-
-      :deep(.el-radio-button__inner) {
-        width: 100%;
-        min-width: 40px;
-        padding: 7px 4px;
-        text-align: center;
       }
     }
   }
