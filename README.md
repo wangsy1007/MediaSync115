@@ -66,6 +66,10 @@ Docker Hub 页面：
 https://hub.docker.com/r/wangsy1007/mediasync115
 ```
 
+镜像发布说明：
+- DockerHub 一体化镜像会同时发布 `linux/amd64` 和 `linux/arm64`
+- `latest` 以及版本 tag 都是多架构 manifest，x86 和 ARM 设备会自动拉取对应架构镜像
+
 ### 1. 准备配置文件
 
 ```bash
