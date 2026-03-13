@@ -21,12 +21,13 @@ class PansouConfigRequest(BaseModel):
 
 
 @router.get("/health")
-async def health_check():
+async def health_check(base_url: Optional[str] = None):
     """
-    检查 pansou 服务健康状态
+    检查 pansou 服务健康状态。
+    可传入 base_url 参数检测指定地址，不传则使用已保存的配置。
     """
-    pansou_service.set_base_url(runtime_settings_service.get_pansou_base_url())
-    result = await pansou_service.health_check()
+    target = str(base_url or "").strip() or runtime_settings_service.get_pansou_base_url()
+    result = await pansou_service.health_check(base_url=target)
     return result
 
 

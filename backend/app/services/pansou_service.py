@@ -57,24 +57,34 @@ class PansouService:
         """关闭 HTTP 客户端"""
         await self.client.aclose()
 
-    async def health_check(self) -> dict:
+    async def health_check(self, base_url: str | None = None) -> dict:
         """
-        检查 pansou 服务健康状态（使用较短超时）
+        检查 pansou 服务健康状态。
+        使用临时 client 避免长生命周期 client 的连接状态问题。
+
+        Args:
+            base_url: 可选，指定要检测的地址；为空则使用当前配置的地址
 
         Returns:
             dict: 健康状态
         """
+        target_url = self._normalize_base_url(base_url) if base_url else self.base_url
         try:
-            response = await self.client.get("/api/health", timeout=5.0)
-            return {
-                "status": "healthy" if response.status_code == 200 else "unhealthy",
-                "code": response.status_code,
-                "data": response.json() if response.status_code == 200 else None
-            }
-        except httpx.RequestError as e:
+            async with httpx.AsyncClient(
+                base_url=target_url,
+                timeout=5.0,
+                follow_redirects=True,
+            ) as client:
+                response = await client.get("/api/health")
+                return {
+                    "status": "healthy" if response.status_code == 200 else "unhealthy",
+                    "code": response.status_code,
+                    "data": response.json() if response.status_code == 200 else None
+                }
+        except Exception as e:
             return {
                 "status": "error",
-                "error": str(e)
+                "error": f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
             }
 
     async def search(

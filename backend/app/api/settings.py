@@ -504,7 +504,8 @@ async def check_tmdb_credentials():
 async def check_pansou_credentials():
     """检查 Pansou 服务是否可用"""
     try:
-        health = await pansou_service.health_check()
+        base_url = runtime_settings_service.get_pansou_base_url()
+        health = await pansou_service.health_check(base_url=base_url)
         is_healthy = health.get("status") == "healthy"
         return {
             "valid": is_healthy,
