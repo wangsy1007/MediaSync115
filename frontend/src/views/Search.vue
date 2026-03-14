@@ -12,8 +12,14 @@
         <template #prefix>
           <el-icon><SearchIcon /></el-icon>
         </template>
+        <template #append>
+          <el-button type="primary" @click="handleSearch">
+            <el-icon><SearchIcon /></el-icon>
+            搜索
+          </el-button>
+        </template>
       </el-input>
-      </div>
+    </div>
 
     <section
       v-show="!isSearchMode"
@@ -1539,7 +1545,7 @@ onBeforeUnmount(() => {
       width: 100%;
 
       .el-input__wrapper {
-        border-radius: 10px;
+        border-radius: 10px 0 0 10px;
         min-height: 44px;
         padding: 0 12px;
         background: var(--search-pill-bg);
@@ -1548,6 +1554,26 @@ onBeforeUnmount(() => {
 
       &.is-focus .el-input__wrapper {
         box-shadow: 0 0 0 1px rgba(45, 153, 255, 0.35), 0 0 20px rgba(45, 153, 255, 0.14);
+      }
+
+      .el-input-group__append {
+        padding: 0;
+        border-radius: 0 10px 10px 0;
+        background: transparent;
+        box-shadow: none;
+
+        .el-button {
+          border-radius: 0 10px 10px 0;
+          height: 44px;
+          padding: 0 20px;
+          margin: 0;
+          border: none;
+          font-weight: 500;
+
+          .el-icon {
+            margin-right: 4px;
+          }
+        }
       }
     }
   }
