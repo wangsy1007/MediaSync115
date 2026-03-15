@@ -111,6 +111,12 @@ class TgIndexBackfillRequest(BaseModel):
     rebuild: Optional[bool] = False
 
 
+class HDHiveCheckinRequest(BaseModel):
+    mode: Optional[str] = None
+    cookie: Optional[str] = None
+    base_url: Optional[str] = None
+
+
 def _build_qr_image_data_url(content: str) -> str:
     if not QRCODE_AVAILABLE:
         return ""
@@ -519,6 +525,32 @@ async def check_nullbr_credentials():
 @router.get("/hdhive/check")
 async def check_hdhive_credentials():
     return await _perform_hdhive_check()
+
+
+@router.post("/hdhive/checkin")
+async def run_hdhive_checkin(payload: HDHiveCheckinRequest):
+    mode = str(payload.mode or runtime_settings_service.get_hdhive_auto_checkin_mode()).strip().lower()
+    if mode not in {"normal", "gamble"}:
+        raise HTTPException(status_code=400, detail="HDHive 手动签到模式仅支持 normal 或 gamble")
+
+    cookie = str(payload.cookie or "").strip()
+    base_url = str(payload.base_url or "").strip()
+    service = hdhive_service
+    if cookie or base_url:
+        from app.services.hdhive_service import HDHiveService
+
+        service = HDHiveService(
+            base_url=base_url or runtime_settings_service.get_hdhive_base_url(),
+            cookie=cookie or runtime_settings_service.get_hdhive_cookie(),
+        )
+
+    try:
+        return await service.check_in(gamble=(mode == "gamble"))
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code if exc.response else 502
+        raise HTTPException(status_code=502, detail=f"HDHive 手动签到失败({status})")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"HDHive 手动签到失败: {str(exc)}")
 
 
 @router.get("/tg/check")

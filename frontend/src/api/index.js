@@ -167,6 +167,7 @@ export const settingsApi = {
   checkUpdates: () => api.get('/settings/update-check'),
   checkNullbr: () => api.get('/settings/nullbr/check'),
   checkHdhive: () => api.get('/settings/hdhive/check'),
+  runHdhiveCheckin: (payload) => api.post('/settings/hdhive/checkin', payload),
   checkTg: () => api.get('/settings/tg/check'),
   checkTmdb: () => api.get('/settings/tmdb/check'),
   checkPansou: () => api.get('/settings/pansou/check'),

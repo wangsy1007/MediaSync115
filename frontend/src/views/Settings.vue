@@ -286,6 +286,18 @@
                 每天会在该时间自动执行一次所选签到模式
               </el-text>
             </el-form-item>
+            <el-form-item label="手动签到">
+              <el-button
+                type="primary"
+                :loading="runningHdhiveCheckin"
+                @click="handleRunHdhiveCheckin"
+              >
+                立即签到
+              </el-button>
+              <el-text size="small" type="info" style="margin-left: 8px">
+                会按当前选择的签到模式立即执行一次
+              </el-text>
+            </el-form-item>
           </el-form>
 
           <div
@@ -1308,6 +1320,7 @@ const savingNullbr = ref(false)
 const testingNullbr = ref(false)
 const savingHdhive = ref(false)
 const testingHdhive = ref(false)
+const runningHdhiveCheckin = ref(false)
 const savingEmby = ref(false)
 const testingEmby = ref(false)
 const runningEmbySync = ref(false)
@@ -2091,6 +2104,28 @@ const handleTestHdhive = async () => {
     await checkHdhive(true)
   } finally {
     testingHdhive.value = false
+  }
+}
+
+const handleRunHdhiveCheckin = async () => {
+  if (!String(hdhiveForm.value.cookie || '').trim()) {
+    ElMessage.warning('请先填写 HDHive Cookie')
+    return
+  }
+
+  runningHdhiveCheckin.value = true
+  try {
+    const { data } = await settingsApi.runHdhiveCheckin({
+      mode: hdhiveForm.value.autoCheckinMode || 'normal',
+      cookie: hdhiveForm.value.cookie
+    })
+    await checkHdhive(false)
+    const modeLabel = hdhiveForm.value.autoCheckinMode === 'gamble' ? '赌狗签到' : '普通签到'
+    ElMessage.success(data?.message || `${modeLabel}执行成功`)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || 'HDHive 手动签到失败')
+  } finally {
+    runningHdhiveCheckin.value = false
   }
 }
 
