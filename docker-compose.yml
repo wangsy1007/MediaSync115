@@ -3,6 +3,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        APP_BUILD_VERSION: "1.0.2"
+        APP_BUILD_TAG: "1.0.2"
     image: mediasync115:latest
     container_name: mediasync115
     restart: unless-stopped
