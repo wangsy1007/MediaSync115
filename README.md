@@ -67,8 +67,14 @@ https://hub.docker.com/r/wangsy1007/mediasync115
 ```
 
 镜像发布说明：
+- 推送 `master`/`main` 会更新 `wangsy1007/mediasync115:latest`
+- 推送 `v1.0.2` 这类 tag 会发布对应版本 tag，例如 `1.0.2` 和 `1.0`
 - DockerHub 一体化镜像会同时发布 `linux/amd64` 和 `linux/arm64`
 - `latest` 以及版本 tag 都是多架构 manifest，x86 和 ARM 设备会自动拉取对应架构镜像
+
+维护者需要在 GitHub 仓库 Secrets 中配置：
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
 
 ### 1. 准备配置文件
 
@@ -92,6 +98,13 @@ docker run -d \
   -v $(pwd)/backend/data:/app/data \
   --restart unless-stopped \
   wangsy1007/mediasync115:latest
+```
+
+如果你确实需要强制指定架构，也可以显式传入 `--platform`：
+
+```bash
+docker pull --platform linux/amd64 wangsy1007/mediasync115:latest
+docker pull --platform linux/arm64 wangsy1007/mediasync115:latest
 ```
 
 ### 3. 使用 docker compose 部署

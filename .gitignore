@@ -62,7 +62,5 @@ test-results/
 /data/
 /deploy.sh
 /dev-linux.sh
-/docker/
-/Dockerfile
 /frontend.dev.pid
 /QWEN.md

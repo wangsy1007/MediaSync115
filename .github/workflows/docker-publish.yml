@@ -1,0 +1,124 @@
+name: Publish Docker Image
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Optional version tag without leading v, for example 1.0.2"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  DOCKERHUB_IMAGE: wangsy1007/mediasync115
+  BUILD_PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  dockerhub:
+    name: Build and Push Multi-Arch Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve build metadata
+        id: build_meta
+        run: |
+          package_version="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' frontend/package.json | head -n 1)"
+          manual_version="${{ github.event.inputs.release_version }}"
+          release_version=""
+
+          if [ -n "${manual_version}" ]; then
+            release_version="${manual_version}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            release_version="${GITHUB_REF_NAME#v}"
+          fi
+
+          app_version="${release_version:-${package_version:-latest}}"
+          image_tag="${release_version:-latest}"
+          build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          tags=()
+          if [ "${GITHUB_REF_NAME}" = "master" ] || [ "${GITHUB_REF_NAME}" = "main" ] || [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            tags+=("${DOCKERHUB_IMAGE}:latest")
+          fi
+
+          if [ -n "${release_version}" ]; then
+            tags+=("${DOCKERHUB_IMAGE}:${release_version}")
+
+            major_minor="$(echo "${release_version}" | awk -F. 'NF >= 2 {print $1 "." $2}')"
+            if [ -n "${major_minor}" ] && [ "${major_minor}" != "${release_version}" ]; then
+              tags+=("${DOCKERHUB_IMAGE}:${major_minor}")
+            fi
+          fi
+
+          echo "app_version=${app_version}" >> "${GITHUB_OUTPUT}"
+          echo "image_tag=${image_tag}" >> "${GITHUB_OUTPUT}"
+          echo "git_sha=${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "build_time=${build_time}" >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "tags<<EOF"
+            printf '%s\n' "${tags[@]}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "labels<<EOF"
+            echo "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+            echo "org.opencontainers.image.revision=${GITHUB_SHA}"
+            echo "org.opencontainers.image.version=${app_version}"
+            echo "org.opencontainers.image.created=${build_time}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ env.BUILD_PLATFORMS }}
+          push: true
+          tags: ${{ steps.build_meta.outputs.tags }}
+          labels: ${{ steps.build_meta.outputs.labels }}
+          build-args: |
+            APP_BUILD_VERSION=${{ steps.build_meta.outputs.app_version }}
+            APP_BUILD_TAG=${{ steps.build_meta.outputs.image_tag }}
+            APP_BUILD_GIT_SHA=${{ steps.build_meta.outputs.git_sha }}
+            APP_BUILD_TIME=${{ steps.build_meta.outputs.build_time }}
+          cache-from: type=gha,scope=dockerhub-app
+          cache-to: type=gha,mode=max,scope=dockerhub-app
+
+      - name: Write workflow summary
+        run: |
+          {
+            echo "## Docker Hub publish"
+            echo ""
+            echo "- Image: \`${DOCKERHUB_IMAGE}\`"
+            echo "- Platforms: \`${BUILD_PLATFORMS}\`"
+            echo "- Tags:"
+            echo "${{ steps.build_meta.outputs.tags }}" | sed 's/^/  - /'
+            echo ""
+            echo "Docker will automatically pull the matching image variant for amd64 or arm64 hosts."
+          } >> "${GITHUB_STEP_SUMMARY}"
