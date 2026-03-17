@@ -130,7 +130,7 @@ class NullbrClient:
         """根据鉴权类型构建请求头"""
         headers = {
             "X-APP-ID": self.app_id,
-            "User-Agent": "MediaSync115/v1.0.3",
+            "User-Agent": "MediaSync115/v1.0.4",
         }
 
         if auth == "app_id+api_key":

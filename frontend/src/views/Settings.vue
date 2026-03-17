@@ -1358,7 +1358,7 @@ const savingUpdateSettings = ref(false)
 const checkingUpdates = ref(false)
 
 const appInfo = ref({
-  currentVersion: '1.0.3',
+  currentVersion: '1.0.4',
   currentImageTag: '',
   currentGitSha: '',
   currentBuildTime: '',

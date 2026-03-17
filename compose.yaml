@@ -1,0 +1,21 @@
+services:
+  mediasync115:
+    image: wangsy1007/mediasync115:latest
+    container_name: mediasync115
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1/healthz', timeout=10)"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s

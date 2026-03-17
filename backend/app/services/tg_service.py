@@ -290,7 +290,7 @@ class TgService:
             proxy=proxy,
             device_model="MediaSync115",
             system_version="Linux",
-            app_version="1.0.3",
+            app_version="1.0.4",
             system_lang_code="zh-CN",
             lang_code="zh-CN",
         )
