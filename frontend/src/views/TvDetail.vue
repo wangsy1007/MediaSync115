@@ -695,6 +695,7 @@ const doubanLink = ref(null)
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
 const PAN115_CACHE_TTL_MS = 30 * 60 * 1000
+const PAN115_CACHE_VERSION = 2
 
 // 转存对话框相关
 // 转存相关
@@ -726,6 +727,7 @@ const readPan115Cache = () => {
     if (!raw) return null
     const parsed = JSON.parse(raw)
     if (!parsed || !Array.isArray(parsed.list) || !parsed.ts) return null
+    if (Number(parsed.version || 0) !== PAN115_CACHE_VERSION) return null
     if (Date.now() - parsed.ts > PAN115_CACHE_TTL_MS) return null
     return parsed.list
   } catch {
@@ -738,6 +740,7 @@ const writePan115Cache = (list) => {
     sessionStorage.setItem(
       getPan115CacheKey(),
       JSON.stringify({
+        version: PAN115_CACHE_VERSION,
         ts: Date.now(),
         list: Array.isArray(list) ? list : []
       })
