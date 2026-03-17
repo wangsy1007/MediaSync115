@@ -2570,10 +2570,15 @@ async def unlock_hdhive_resource(payload: HDHiveUnlockRequest):
     try:
         result = await hdhive_service.unlock_resource(slug)
         return result
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code if exc.response else 502
-        raise HTTPException(status_code=502, detail=f"HDHive 解锁失败({status})")
     except Exception as exc:
+        from app.services.hdhive_service import HDHiveApiError
+
+        if isinstance(exc, HDHiveApiError):
+            status = int(exc.status_code or 500)
+            detail = str(exc)
+            if status in {400, 401, 402, 403, 404, 429}:
+                raise HTTPException(status_code=status, detail=detail)
+            raise HTTPException(status_code=502, detail=detail or f"HDHive 解锁失败({status})")
         raise HTTPException(status_code=500, detail=f"HDHive 解锁失败: {str(exc)}")
 
 

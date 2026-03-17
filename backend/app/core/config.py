@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     PAN115_COOKIE: Optional[str] = None
     HDHIVE_COOKIE: Optional[str] = None
+    HDHIVE_API_KEY: Optional[str] = None
     HDHIVE_BASE_URL: str = "https://hdhive.com/"
 
     PANSOU_BASE_URL: str = "http://192.168.10.139:8088/"

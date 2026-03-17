@@ -241,12 +241,12 @@
           </template>
 
           <el-form :model="hdhiveForm" label-width="120px">
-            <el-form-item label="Cookie">
+            <el-form-item label="API Key">
               <el-input
-                v-model="hdhiveForm.cookie"
+                v-model="hdhiveForm.apiKey"
                 type="textarea"
                 :rows="3"
-                placeholder="请输入 HDHive Cookie（示例：token=xxxx）"
+                placeholder="请输入 HDHive Open API Key"
               />
             </el-form-item>
             <el-form-item>
@@ -1192,7 +1192,7 @@ const nullbrForm = ref({
 })
 
 const hdhiveForm = ref({
-  cookie: '',
+  apiKey: '',
   autoCheckinEnabled: false,
   autoCheckinMode: 'normal',
   autoCheckinRunTime: '09:00'
@@ -2048,8 +2048,8 @@ const checkHdhive = async (notify = false) => {
     hdhiveStatus.valid = !!data.valid
     hdhiveStatus.user = data.user || null
     hdhiveStatus.message = data.valid
-      ? `连接成功：${data.user?.username || data.user?.nickname || '用户信息已获取'}`
-      : `连接失败：${data.message || '请检查 Cookie'}`
+      ? String(data.message || `连接成功：${data.user?.username || data.user?.nickname || 'API Key 有效'}`)
+      : `连接失败：${data.message || '请检查 API Key'}`
 
     if (notify) {
       if (data.valid) {
@@ -2062,7 +2062,7 @@ const checkHdhive = async (notify = false) => {
     hdhiveStatus.checked = true
     hdhiveStatus.valid = false
     hdhiveStatus.user = null
-    hdhiveStatus.message = error.response?.data?.detail || '连接失败，请检查 Cookie 配置'
+    hdhiveStatus.message = error.response?.data?.detail || '连接失败，请检查 API Key 配置'
     if (notify) {
       ElMessage.error(hdhiveStatus.message)
     }
@@ -2070,8 +2070,8 @@ const checkHdhive = async (notify = false) => {
 }
 
 const handleSaveHdhive = async () => {
-  if (!String(hdhiveForm.value.cookie || '').trim()) {
-    ElMessage.warning('请输入 HDHive Cookie')
+  if (!String(hdhiveForm.value.apiKey || '').trim()) {
+    ElMessage.warning('请输入 HDHive API Key')
     return
   }
   if (hdhiveForm.value.autoCheckinEnabled && !String(hdhiveForm.value.autoCheckinRunTime || '').trim()) {
@@ -2082,7 +2082,7 @@ const handleSaveHdhive = async () => {
   savingHdhive.value = true
   try {
     await settingsApi.updateRuntime({
-      hdhive_cookie: hdhiveForm.value.cookie,
+      hdhive_api_key: hdhiveForm.value.apiKey,
       hdhive_auto_checkin_enabled: hdhiveForm.value.autoCheckinEnabled,
       hdhive_auto_checkin_mode: hdhiveForm.value.autoCheckinMode || 'normal',
       hdhive_auto_checkin_run_time: hdhiveForm.value.autoCheckinRunTime || '09:00'
@@ -2108,8 +2108,8 @@ const handleTestHdhive = async () => {
 }
 
 const handleRunHdhiveCheckin = async () => {
-  if (!String(hdhiveForm.value.cookie || '').trim()) {
-    ElMessage.warning('请先填写 HDHive Cookie')
+  if (!String(hdhiveForm.value.apiKey || '').trim()) {
+    ElMessage.warning('请先填写 HDHive API Key')
     return
   }
 
@@ -2117,7 +2117,7 @@ const handleRunHdhiveCheckin = async () => {
   try {
     const { data } = await settingsApi.runHdhiveCheckin({
       mode: hdhiveForm.value.autoCheckinMode || 'normal',
-      cookie: hdhiveForm.value.cookie
+      api_key: hdhiveForm.value.apiKey
     })
     await checkHdhive(false)
     const modeLabel = hdhiveForm.value.autoCheckinMode === 'gamble' ? '赌狗签到' : '普通签到'
@@ -2759,7 +2759,7 @@ const fetchAppInfo = async () => {
 const fetchRuntimeSettings = async () => {
   try {
     const { data } = await settingsApi.getRuntime()
-    hdhiveForm.value.cookie = data.hdhive_cookie || ''
+    hdhiveForm.value.apiKey = data.hdhive_api_key || ''
     hdhiveForm.value.autoCheckinEnabled = !!data.hdhive_auto_checkin_enabled
     hdhiveForm.value.autoCheckinMode = data.hdhive_auto_checkin_mode || 'normal'
     hdhiveForm.value.autoCheckinRunTime = data.hdhive_auto_checkin_run_time || '09:00'
@@ -3232,7 +3232,7 @@ onMounted(() => {
   fetchAuthSession()
   fetchRuntimeSettings().then(() => {
     fetchAppInfo()
-    if (String(hdhiveForm.value.cookie || '').trim()) {
+    if (String(hdhiveForm.value.apiKey || '').trim()) {
       checkHdhive(false)
     }
     if (String(embyForm.value.url || '').trim() && String(embyForm.value.apiKey || '').trim()) {

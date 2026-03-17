@@ -50,30 +50,47 @@ class TestHDHiveService:
         }
 
     def test_get_user_info_merges_points_from_settings_page(self) -> None:
-        service = HDHiveService()
+        service = HDHiveService(api_key="test-key")
 
-        async def fake_fetch_text(path: str) -> str:
-            if path == "/user/settings":
-                return (
-                    'xxx"currentUser":{"username":"dave","nickname":"Dave","is_vip":true,'
-                    '"user_meta":{"points":502},"permissions":null}yyy'
-                )
-            if path == "/":
-                return (
-                    'xxx"currentUser":{"username":"dave","nickname":"Dave","is_vip":true,'
-                    '"permissions":[]}yyy'
-                )
-            return ""
+        async def fake_request_open_api(method: str, path: str, **kwargs):
+            assert method == "GET"
+            assert path == "/me"
+            return None, {
+                "success": True,
+                "code": "200",
+                "message": "success",
+                "data": {
+                    "id": 1,
+                    "username": "dave",
+                    "nickname": "Dave",
+                    "email": "dave@example.com",
+                    "avatar_url": "https://example.com/avatar.jpg",
+                    "is_vip": True,
+                    "user_meta": {
+                        "points": 502,
+                    },
+                },
+            }
 
-        service._fetch_text = fake_fetch_text  # type: ignore[method-assign]
+        service._request_open_api = fake_request_open_api  # type: ignore[method-assign]
 
         user = asyncio.run(service.get_user_info())
 
         assert user == {
+            "id": 1,
             "username": "dave",
             "nickname": "Dave",
+            "email": "dave@example.com",
+            "avatar_url": "https://example.com/avatar.jpg",
             "is_vip": True,
+            "vip_expiration_date": "",
+            "last_active_at": "",
             "points": 502,
+            "user_meta": {
+                "points": 502,
+            },
+            "telegram_user": None,
+            "created_at": "",
         }
 
     def test_extract_server_action_id_from_chunk(self) -> None:
@@ -110,22 +127,28 @@ class TestHDHiveService:
             "/_next/static/chunks/def456.js",
         ]
 
-    def test_resolve_unlock_action_id_ignores_uncached_fallback_id(self) -> None:
-        service = HDHiveService()
-        service._unlock_action_id = "40dbca7ab6f555dbd98c40945c8b970185c58e16d3"
-        service._unlock_action_id_cached_at = 0.0
+    def test_map_resource_row_marks_api_resource_as_locked_until_unlock(self) -> None:
+        service = HDHiveService(api_key="test-key")
 
-        async def fake_fetch_text(path: str, accept: str | None = None) -> str:
-            assert path == "/_next/static/chunks/runtime.js"
-            return (
-                '(0,e.createServerReference)("40104633e124c17495f8f0497d9a91bd9a5b843744",'
-                'e.callServer,void 0,e.findSourceMapURL,"unlockResource")'
-            )
-
-        service._fetch_text = fake_fetch_text  # type: ignore[method-assign]
-
-        action_id = asyncio.run(
-            service._resolve_unlock_action_id('"/_next/static/chunks/runtime.js"')
+        row = service._map_resource_row(
+            {
+                "slug": "a1b2c3d4e5f647898765432112345678",
+                "title": "Fight Club 4K REMUX",
+                "share_size": "58.3 GB",
+                "video_resolution": ["2160p"],
+                "source": ["REMUX"],
+                "remark": "杜比视界",
+                "unlock_points": 10,
+                "validate_status": "valid",
+                "validate_message": None,
+                "is_unlocked": False,
+                "is_official": True,
+            },
+            0,
         )
 
-        assert action_id == "40104633e124c17495f8f0497d9a91bd9a5b843744"
+        assert row["slug"] == "a1b2c3d4e5f647898765432112345678"
+        assert row["share_link"] == ""
+        assert row["unlock_points"] == 10
+        assert row["hdhive_locked"] is True
+        assert row["pan115_savable"] is False

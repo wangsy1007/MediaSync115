@@ -2,14 +2,30 @@ import asyncio
 import json
 import re
 import unicodedata
-from typing import Any
-from urllib.parse import quote_plus, unquote, urlencode
 from time import monotonic
+from typing import Any
 
 import httpx
 
 from app.core.config import settings
+from app.services.tmdb_service import tmdb_service
 from app.utils.proxy import proxy_manager
+
+
+class HDHiveApiError(Exception):
+    def __init__(
+        self,
+        status_code: int,
+        code: str = "",
+        message: str = "",
+        description: str = "",
+    ) -> None:
+        self.status_code = int(status_code or 500)
+        self.code = str(code or "").strip()
+        self.message = str(message or "").strip()
+        self.description = str(description or "").strip()
+        final_message = self.description or self.message or self.code or f"HTTP {self.status_code}"
+        super().__init__(final_message)
 
 
 class HDHiveService:
@@ -17,22 +33,19 @@ class HDHiveService:
         self,
         base_url: str | None = None,
         cookie: str | None = None,
+        api_key: str | None = None,
     ) -> None:
         self._base_url = str(base_url or settings.HDHIVE_BASE_URL or "https://hdhive.com/").strip().rstrip("/")
         self._cookie = str(cookie or settings.HDHIVE_COOKIE or "").strip()
+        self._api_key = str(api_key or settings.HDHIVE_API_KEY or "").strip()
         self._timeout = 20.0
         self._user_agent = (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         )
-        self._unlock_action_id = "40dbca7ab6f555dbd98c40945c8b970185c58e16d3"
-        self._checkin_action_id = ""
         self._unlock_locks: dict[str, asyncio.Lock] = {}
         self._unlock_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._unlock_cache_ttl_seconds = 120.0
-        self._unlock_action_id_cached_at = 0.0
-        self._checkin_action_id_cached_at = 0.0
-        self._unlock_action_id_ttl_seconds = 1800.0
 
     def set_base_url(self, base_url: str | None) -> None:
         value = str(base_url or "").strip()
@@ -43,31 +56,38 @@ class HDHiveService:
     def set_cookie(self, cookie: str | None) -> None:
         self._cookie = str(cookie or "").strip()
 
+    def set_api_key(self, api_key: str | None) -> None:
+        self._api_key = str(api_key or "").strip()
+
     def _create_client(self, **kwargs) -> httpx.AsyncClient:
-        """创建配置了代理的 httpx 客户端"""
         client_kwargs = {
             "timeout": self._timeout,
             "follow_redirects": True,
-            **kwargs
+            **kwargs,
         }
         return proxy_manager.create_httpx_client(**client_kwargs)
 
-    async def _fetch_text(self, path: str, accept: str | None = None) -> str:
+    def _get_open_api_key(self) -> str:
+        api_key = str(self._api_key or settings.HDHIVE_API_KEY or "").strip()
+        if api_key:
+            return api_key
+        raise ValueError("未配置 HDHive API Key")
+
+    def _build_open_api_headers(self, *, json_body: bool = False) -> dict[str, str]:
         headers = {
             "user-agent": self._user_agent,
-            "accept": accept or "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "accept": "application/json",
+            "x-api-key": self._get_open_api_key(),
         }
-        if self._cookie:
-            headers["cookie"] = self._cookie
+        if json_body:
+            headers["content-type"] = "application/json"
+        return headers
 
-        url = path if path.startswith("http") else f"{self._base_url}{path}"
-        client = self._create_client()
-        try:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            return response.text
-        finally:
-            await client.aclose()
+    def _build_open_api_url(self, path: str) -> str:
+        normalized_path = str(path or "").strip()
+        if not normalized_path.startswith("/"):
+            normalized_path = f"/{normalized_path}"
+        return f"{self._base_url}/api/open{normalized_path}"
 
     @staticmethod
     def _extract_first_int(raw_value: Any) -> int | None:
@@ -189,7 +209,6 @@ class HDHiveService:
     def _extract_next_static_chunk_paths(raw: str) -> list[str]:
         if not raw:
             return []
-
         matches = re.findall(r'/_next/static/chunks/[A-Za-z0-9._-]+\.js', raw)
         deduped: list[str] = []
         seen: set[str] = set()
@@ -205,11 +224,9 @@ class HDHiveService:
     def _extract_server_action_id_from_chunk(raw: str, action_name: str) -> str:
         if not raw:
             return ""
-
         normalized_action = str(action_name or "").strip()
         if not normalized_action:
             return ""
-
         escaped_action = re.escape(normalized_action)
         patterns = (
             rf'createServerReference\)\("([A-Za-z0-9]+)".{{0,200}}?,"{escaped_action}"\)',
@@ -225,15 +242,11 @@ class HDHiveService:
     @staticmethod
     def _decode_json_candidates(payload: str) -> list[Any]:
         candidates: list[str] = [payload]
-
         normalized = payload
         normalized = normalized.replace('\\"', '"')
         normalized = normalized.replace("\\/", "/")
         normalized = normalized.replace("\\u0026", "&")
         candidates.append(normalized)
-
-        # Some pages contain a trailing backslash before physical newline in script payload.
-        # Keep JSON escapes as-is to avoid mojibake on CJK text.
         candidates.append(normalized.replace("\\\n", ""))
         candidates.append(normalized.replace("\\\r\n", ""))
 
@@ -249,25 +262,6 @@ class HDHiveService:
             except Exception:
                 continue
         return parsed_values
-
-    @classmethod
-    def _extract_json_like_array(cls, raw: str, field_name: str) -> list[dict[str, Any]]:
-        # Next.js app-router payload is embedded in script strings.
-        tokens = [
-            f'"{field_name}":[',
-            f'\\"{field_name}\\":[',
-        ]
-
-        for token in tokens:
-            payload = cls._extract_bracket_payload(raw, token)
-            if not payload:
-                continue
-            for parsed in cls._decode_json_candidates(payload):
-                if isinstance(parsed, list):
-                    rows = [item for item in parsed if isinstance(item, dict)]
-                    if rows:
-                        return rows
-        return []
 
     @classmethod
     def _extract_current_user(cls, raw: str) -> dict[str, Any]:
@@ -300,7 +294,7 @@ class HDHiveService:
                     is_vip = int(raw_vip) > 0
                 elif isinstance(raw_vip, str):
                     raw_vip_text = raw_vip.strip().lower()
-                    is_vip = raw_vip_text == "true" or raw_vip_text.isdigit() and int(raw_vip_text) > 0
+                    is_vip = raw_vip_text == "true" or (raw_vip_text.isdigit() and int(raw_vip_text) > 0)
 
                 user_info = {
                     "username": username,
@@ -315,496 +309,52 @@ class HDHiveService:
 
         return {}
 
-    @staticmethod
-    def _merge_user_info(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
-        merged = dict(base or {})
-        if not isinstance(extra, dict):
-            return merged
-
-        for key in ("username", "nickname", "points"):
-            value = extra.get(key)
-            if value is None or value == "":
-                continue
-            merged[key] = value
-
-        if "is_vip" in extra:
-            merged["is_vip"] = bool(extra.get("is_vip"))
-
-        return merged
-
-    async def _resolve_unlock_action_id(self, resource_html: str) -> str:
-        now = monotonic()
-        if (
-            self._unlock_action_id
-            and self._unlock_action_id_cached_at > 0
-            and now - self._unlock_action_id_cached_at < self._unlock_action_id_ttl_seconds
-        ):
-            return self._unlock_action_id
-
-        chunk_paths = self._extract_next_static_chunk_paths(resource_html)
-        for path in chunk_paths:
-            try:
-                chunk_text = await self._fetch_text(path, accept="application/javascript,text/javascript,*/*;q=0.8")
-            except Exception:
-                continue
-
-            action_id = self._extract_server_action_id_from_chunk(chunk_text, "unlockResource")
-            if not action_id:
-                continue
-            self._unlock_action_id = action_id
-            self._unlock_action_id_cached_at = monotonic()
-            return action_id
-
-        return self._unlock_action_id
-
-    async def _resolve_checkin_action_id(self, page_html: str) -> str:
-        now = monotonic()
-        if (
-            self._checkin_action_id
-            and self._checkin_action_id_cached_at > 0
-            and now - self._checkin_action_id_cached_at < self._unlock_action_id_ttl_seconds
-        ):
-            return self._checkin_action_id
-
-        chunk_paths = self._extract_next_static_chunk_paths(page_html)
-        for path in chunk_paths:
-            try:
-                chunk_text = await self._fetch_text(path, accept="application/javascript,text/javascript,*/*;q=0.8")
-            except Exception:
-                continue
-
-            action_id = self._extract_server_action_id_from_chunk(chunk_text, "checkIn")
-            if not action_id:
-                continue
-            self._checkin_action_id = action_id
-            self._checkin_action_id_cached_at = monotonic()
-            return action_id
-
-        return self._checkin_action_id
-
-    @staticmethod
-    def _extract_media_slug_from_home(raw: str, tmdb_id: int, media_type: str) -> str:
-        escaped_tmdb = str(int(tmdb_id))
-        escaped_type = "tv" if media_type == "tv" else "movie"
-        pattern = re.compile(
-            rf'\\"slug\\":\\"([^\\"]+)\\",\\"tmdb_id\\":\\"{escaped_tmdb}\\".*?\\"type\\":\\"{escaped_type}\\"',
-            re.S,
-        )
-        match = pattern.search(raw)
-        if match:
-            return match.group(1).strip()
-
-        fallback_pattern = re.compile(
-            rf'\\"slug\\":\\"([^\\"]+)\\",\\"tmdb_id\\":\\"{escaped_tmdb}\\"',
-            re.S,
-        )
-        fallback_match = fallback_pattern.search(raw)
-        if fallback_match:
-            return fallback_match.group(1).strip()
-        return ""
-
-    @staticmethod
-    def _extract_next_redirect_share_link(raw: str) -> str:
-        patterns = [
-            r'NEXT_REDIRECT;replace;(https?://(?:115|share\.115|115cdn)[^;]+);307',
-            r'NEXT_REDIRECT;replace;(https?%3A%2F%2F(?:115|share\.115|115cdn)[^;]+);307',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, raw)
-            if not match:
-                continue
-            value = match.group(1).strip()
-            value = value.replace("\\/", "/")
-            value = value.replace("&amp;", "&")
-            value = unquote(value)
-            return value
-        return ""
-
-    @classmethod
-    def _extract_share_link(cls, raw: str) -> str:
-        patterns = [
-            r'\\"url\\":\\"(https?://(?:115|share\.115|115cdn)[^\\"]+)\\"',
-            r'"url":"(https?://(?:115|share\.115|115cdn)[^"]+)"',
-        ]
-        share_url = ""
-        for pattern in patterns:
-            match = re.search(pattern, raw)
-            if match:
-                share_url = match.group(1).replace("\\/", "/").strip()
-                break
-
-        if not share_url:
-            share_url = cls._extract_next_redirect_share_link(raw)
-            if not share_url:
-                return ""
-
-        code_match = re.search(r'\\"access_code\\":\\"([A-Za-z0-9]{4})\\"', raw)
-        if not code_match:
-            code_match = re.search(r'"access_code":"([A-Za-z0-9]{4})"', raw)
-        if not code_match:
-            return share_url
-
-        access_code = code_match.group(1).strip()
-        if not access_code:
-            return share_url
-        if "password=" in share_url or "pwd=" in share_url:
-            return share_url
-
-        joiner = "&" if "?" in share_url else "?"
-        return f"{share_url}{joiner}{urlencode({'password': access_code})}"
-
-    @staticmethod
-    def _extract_resource_payload(raw: str) -> dict[str, Any]:
-        marker = '\\"slug\\":\\"'
-        index = raw.find(marker)
-        if index < 0:
-            return {}
-
-        tail = raw[max(0, index - 2000):]
-        for pattern in (
-            r'\\"slug\\":\\"[^\\"]+\\".*?\\"data\\":(\{.*?\}),\\"error\\":(\{.*?\}),\\"poster\\":',
-            r'\\"slug\\":\\"[^\\"]+\\".*?\\"data\\":(\{.*?\}),\\"error\\":null,\\"poster\\":',
-        ):
-            match = re.search(pattern, tail, re.S)
-            if not match:
-                continue
-            data_raw = match.group(1)
-            error_raw = match.group(2) if match.lastindex and match.lastindex >= 2 else "null"
-            try:
-                data_obj = json.loads(data_raw.replace('\\"', '"').replace("\\/", "/"))
-            except Exception:
-                data_obj = {}
-            try:
-                error_obj = json.loads(error_raw.replace('\\"', '"').replace("\\/", "/")) if error_raw else {}
-            except Exception:
-                error_obj = {}
-            return {
-                "data": data_obj if isinstance(data_obj, dict) else {},
-                "error": error_obj if isinstance(error_obj, dict) else {},
-            }
-        return {}
-
-    @classmethod
-    def _extract_resource_meta(cls, raw: str) -> dict[str, Any]:
-        payload = cls._extract_resource_payload(raw)
-        data_obj = payload.get("data") if isinstance(payload, dict) else {}
-        error_obj = payload.get("error") if isinstance(payload, dict) else {}
-
-        data_obj = data_obj if isinstance(data_obj, dict) else {}
-        error_obj = error_obj if isinstance(error_obj, dict) else {}
-
-        lock_code = str(error_obj.get("code") or "").strip()
-        lock_message = str(error_obj.get("message") or "").strip()
-        unlock_points = int(data_obj.get("unlock_points") or 0)
-        access_code = str(data_obj.get("access_code") or "").strip()
-        resource_url = str(data_obj.get("url") or "").strip()
-        full_url = str(data_obj.get("full_url") or "").strip()
-        if not full_url and resource_url and access_code:
-            joiner = "&" if "?" in resource_url else "?"
-            full_url = f"{resource_url}{joiner}{urlencode({'password': access_code})}"
-        locked = bool(lock_code == "400404" or ("解锁" in lock_message and not access_code))
-
-        return {
-            "locked": locked,
-            "lock_code": lock_code,
-            "lock_message": lock_message,
-            "unlock_points": unlock_points,
-            "resource_url": resource_url,
-            "access_code": access_code,
-            "full_url": full_url,
-        }
-
-    async def _resolve_media_slug(self, tmdb_id: int, media_type: str) -> str:
-        try:
-            tmdb_route_html = await self._fetch_text(f"/tmdb/{media_type}/{int(tmdb_id)}")
-            redirect_match = re.search(
-                rf"NEXT_REDIRECT;replace;/{media_type}/([^;]+);307",
-                tmdb_route_html,
-            )
-            if redirect_match:
-                return redirect_match.group(1).strip()
-        except Exception:
-            pass
-
-        home_html = await self._fetch_text("/")
-        slug = self._extract_media_slug_from_home(home_html, tmdb_id, media_type)
-        if slug:
-            return slug
-        return str(int(tmdb_id))
-
-    async def get_user_info(self) -> dict[str, Any]:
-        candidate_paths = (
-            "/user/settings",
-            "/",
-        )
-        merged_user: dict[str, Any] = {}
-
-        for path in candidate_paths:
-            html = await self._fetch_text(path)
-            user = self._extract_current_user(html)
-            if not user:
-                continue
-            merged_user = self._merge_user_info(merged_user, user)
-            if merged_user.get("points") is not None:
-                return merged_user
-
-        if merged_user:
-            return merged_user
-        raise ValueError("未获取到 HDHive 用户信息，请检查 Cookie")
-
-    async def _fetch_resource_share_link(self, slug: str) -> str:
-        slug = str(slug or "").strip()
-        if not slug:
-            return ""
-        html = await self._fetch_text(f"/resource/115/{slug}")
-        return self._extract_share_link(html)
-
-    async def _fetch_resource_meta(self, slug: str) -> dict[str, Any]:
-        slug = str(slug or "").strip()
-        if not slug:
-            return {}
-        html = await self._fetch_text(f"/resource/115/{slug}")
-        meta = self._extract_resource_meta(html)
-        share_link = self._extract_share_link(html)
-        if share_link and not meta.get("full_url"):
-            meta["full_url"] = share_link
-        return meta
-
-    @staticmethod
-    def _parse_next_action_response(text: str) -> dict[str, Any]:
-        if not text:
-            return {"success": False, "message": "空响应"}
-
-        payload_line = ""
-        for line in text.splitlines():
-            if line.startswith("1:"):
-                payload_line = line[2:].strip()
-                break
-        if not payload_line:
-            return {"success": False, "message": "未获取到响应数据"}
-
-        try:
-            payload = json.loads(payload_line)
-        except Exception as exc:
-            return {"success": False, "message": f"解析响应失败: {exc}"}
-
-        if not isinstance(payload, dict):
-            return {"success": False, "message": "响应格式异常"}
-
-        if isinstance(payload.get("response"), dict):
-            response_obj = payload["response"]
-            return {
-                "success": bool(response_obj.get("success")),
-                "code": str(response_obj.get("code") or ""),
-                "message": str(response_obj.get("message") or ""),
-                "data": response_obj.get("data") if isinstance(response_obj.get("data"), dict) else {},
-            }
-        if isinstance(payload.get("error"), dict):
-            error_obj = payload["error"]
-            return {
-                "success": False,
-                "code": str(error_obj.get("code") or ""),
-                "message": str(error_obj.get("message") or error_obj.get("description") or "请求失败"),
-                "data": error_obj.get("data") if isinstance(error_obj.get("data"), dict) else {},
-            }
-        if isinstance(payload.get("digest"), str):
-            return {"success": False, "message": f"请求失败(digest={payload['digest']})"}
-        return {"success": False, "message": "请求未返回有效结果"}
-
-    async def _post_next_action(self, page_path: str, action_id: str, args: list[Any]) -> httpx.Response:
-        headers = {
-            "user-agent": self._user_agent,
-            "accept": "text/x-component",
-            "origin": self._base_url,
-            "referer": page_path if page_path.startswith("http") else f"{self._base_url}{page_path}",
-            "next-action": action_id,
-            "content-type": "text/plain;charset=UTF-8",
-        }
-        if self._cookie:
-            headers["cookie"] = self._cookie
-
+    async def _request_open_api(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> tuple[httpx.Response, dict[str, Any]]:
+        headers = self._build_open_api_headers(json_body=json_body is not None)
         client = self._create_client()
         try:
-            return await client.post(
-                page_path if page_path.startswith("http") else f"{self._base_url}{page_path}",
+            response = await client.request(
+                method.upper(),
+                self._build_open_api_url(path),
                 headers=headers,
-                content=json.dumps(args, ensure_ascii=False),
+                params=params,
+                json=json_body,
             )
         finally:
             await client.aclose()
 
-    async def _unlock_resource_via_next_action(self, slug: str, resource_html: str) -> dict[str, Any]:
-        slug = str(slug or "").strip()
-        if not slug:
-            return {"success": False, "message": "资源 slug 为空"}
-
-        page_path = f"/resource/115/{slug}"
-        action_id = await self._resolve_unlock_action_id(resource_html)
-        response = await self._post_next_action(page_path, action_id, [slug])
-        if response.status_code == 404 and "Server action not found" in response.text:
-            self._unlock_action_id_cached_at = 0.0
-            refreshed_action_id = await self._resolve_unlock_action_id(resource_html)
-            if refreshed_action_id and refreshed_action_id != action_id:
-                response = await self._post_next_action(page_path, refreshed_action_id, [slug])
-        response.raise_for_status()
-        parsed = self._parse_next_action_response(response.text)
-        parsed["raw"] = response.text[:2000]
-        return parsed
-
-    async def _load_checkin_page(self) -> tuple[str, str]:
-        candidate_paths = (
-            "/user/signin",
-            "/user/checkin",
-        )
-        for path in candidate_paths:
-            try:
-                html = await self._fetch_text(path)
-            except Exception:
-                continue
-            if html:
-                return path, html
-        raise ValueError("未获取到 HDHive 签到页面，请检查 Cookie")
-
-    async def check_in(self, gamble: bool = False) -> dict[str, Any]:
-        page_path, page_html = await self._load_checkin_page()
-        action_id = await self._resolve_checkin_action_id(page_html)
-        response = await self._post_next_action(page_path, action_id, [bool(gamble)])
-        if response.status_code == 404 and "Server action not found" in response.text:
-            self._checkin_action_id_cached_at = 0.0
-            refreshed_action_id = await self._resolve_checkin_action_id(page_html)
-            if refreshed_action_id and refreshed_action_id != action_id:
-                response = await self._post_next_action(page_path, refreshed_action_id, [bool(gamble)])
-        response.raise_for_status()
-
-        parsed = self._parse_next_action_response(response.text)
-        user_info: dict[str, Any] = {}
+        payload: dict[str, Any] = {}
         try:
-            user_info = await self.get_user_info()
+            raw_payload = response.json()
+            if isinstance(raw_payload, dict):
+                payload = raw_payload
         except Exception:
-            user_info = {}
+            payload = {}
 
-        result = {
-            "success": bool(parsed.get("success")),
-            "message": str(parsed.get("message") or "").strip() or ("签到成功" if parsed.get("success") else "签到失败"),
-            "mode": "gamble" if gamble else "normal",
-            "code": str(parsed.get("code") or "").strip(),
-            "data": parsed.get("data") if isinstance(parsed.get("data"), dict) else {},
-            "user": user_info,
-            "points": self._extract_first_int(user_info.get("points")) if isinstance(user_info, dict) else None,
-            "page_path": page_path,
-        }
-        return result
+        success = bool(payload.get("success")) if payload else response.is_success
+        if response.is_error or not success:
+            raise HDHiveApiError(
+                status_code=response.status_code or 500,
+                code=str(payload.get("code") or "").strip(),
+                message=str(payload.get("message") or "").strip(),
+                description=str(payload.get("description") or "").strip(),
+            )
+        return response, payload
 
-    async def unlock_resource(self, slug: str) -> dict[str, Any]:
-        slug = str(slug or "").strip()
-        if not slug:
-            return {"success": False, "message": "资源 slug 为空", "locked": True}
+    @staticmethod
+    def _normalize_media_type(media_type: str) -> str:
+        return "tv" if str(media_type or "").strip().lower() == "tv" else "movie"
 
-        cached = self._unlock_cache.get(slug)
-        now = monotonic()
-        if cached and (now - cached[0] < self._unlock_cache_ttl_seconds):
-            return cached[1]
-
-        lock = self._unlock_locks.setdefault(slug, asyncio.Lock())
-        async with lock:
-            cached = self._unlock_cache.get(slug)
-            now = monotonic()
-            if cached and (now - cached[0] < self._unlock_cache_ttl_seconds):
-                return cached[1]
-
-            resource_html = await self._fetch_text(f"/resource/115/{slug}")
-            action_result = await self._unlock_resource_via_next_action(slug, resource_html)
-            meta = self._extract_resource_meta(resource_html)
-            if bool(meta.get("locked")):
-                meta = await self._fetch_resource_meta(slug)
-            access_code = str(meta.get("access_code") or "").strip()
-            share_link = str(meta.get("full_url") or "").strip()
-            success = bool(action_result.get("success")) and bool(share_link or access_code)
-
-            result = {
-                "success": success,
-                "method": "next_action",
-                "message": (
-                    str(action_result.get("message") or "").strip()
-                    or ("资源解锁成功" if success else "资源解锁失败")
-                ),
-                "share_link": share_link,
-                "access_code": access_code,
-                "locked": bool(meta.get("locked")),
-                "lock_code": str(meta.get("lock_code") or ""),
-                "lock_message": str(meta.get("lock_message") or ""),
-                "unlock_points": int(meta.get("unlock_points") or 0),
-                "resource_url": str(meta.get("resource_url") or ""),
-            }
-            self._unlock_cache[slug] = (monotonic(), result)
-            return result
-
-    async def _build_pan115_rows(self, tmdb_id: int, media_type: str) -> list[dict[str, Any]]:
-        slug = await self._resolve_media_slug(tmdb_id, media_type)
-        detail_path = f"/{media_type}/{slug}" if not slug.isdigit() else f"/{media_type}/{int(tmdb_id)}"
-        detail_html = await self._fetch_text(detail_path)
-        rows = self._extract_json_like_array(detail_html, field_name="115")
-
-        if not rows and not slug.isdigit():
-            fallback_html = await self._fetch_text(f"/{media_type}/{int(tmdb_id)}")
-            rows = self._extract_json_like_array(fallback_html, field_name="115")
-
-        if not rows:
-            return []
-
-        tasks = [self._resolve_pan115_row(row, idx) for idx, row in enumerate(rows[:30])]
-        return await asyncio.gather(*tasks)
-
-    async def _resolve_pan115_row(self, row: dict[str, Any], index: int) -> dict[str, Any]:
-        resource_slug = str(row.get("slug") or "").strip()
-        unlock_points = int(row.get("unlock_points") or 0)
-        share_link = ""
-        lock_meta: dict[str, Any] = {}
-        if resource_slug:
-            try:
-                lock_meta = await self._fetch_resource_meta(resource_slug)
-                share_link = str(lock_meta.get("full_url") or "").strip()
-            except Exception:
-                share_link = ""
-                lock_meta = {}
-
-        title = str(row.get("title") or "").strip() or f"HDHive 资源 #{index + 1}"
-        resource_name = (
-            str(row.get("remark") or "").strip()
-            or str(row.get("name") or "").strip()
-            or title
-        )
-        size = str(row.get("share_size") or "").strip()
-        quality = row.get("source") if isinstance(row.get("source"), list) else []
-        resolution = row.get("video_resolution") if isinstance(row.get("video_resolution"), list) else []
-        validate_status = str(row.get("validate_status") or "").strip().lower()
-        validate_message = str(row.get("validate_message") or "").strip()
-        suspected_invalid = validate_status in {"invalid", "suspected_invalid", "suspect_invalid"}
-        savable = bool(share_link)
-        if unlock_points > 0 and not savable:
-            savable = False
-
-        return {
-            "id": row.get("id") or resource_slug or f"hdhive-{index}",
-            "slug": resource_slug,
-            "title": title,
-            "resource_name": resource_name,
-            "size": size,
-            "quality": quality,
-            "resolution": resolution,
-            "share_link": share_link,
-            "access_code": str(lock_meta.get("access_code") or ""),
-            "unlock_points": unlock_points,
-            "hdhive_locked": bool(lock_meta.get("locked")),
-            "hdhive_lock_code": str(lock_meta.get("lock_code") or ""),
-            "hdhive_lock_message": str(lock_meta.get("lock_message") or ""),
-            "hdhive_resource_url": str(lock_meta.get("resource_url") or ""),
-            "hdhive_validate_status": validate_status,
-            "hdhive_validate_message": validate_message,
-            "hdhive_suspected_invalid": suspected_invalid,
-            "source_service": "hdhive",
-            "pan115_savable": savable,
-        }
+    @staticmethod
+    def _normalize_slug(slug: str) -> str:
+        return re.sub(r"[^A-Za-z0-9]", "", str(slug or "").strip())
 
     @staticmethod
     def _normalize_keyword(text: str) -> str:
@@ -812,102 +362,251 @@ class HDHiveService:
         raw = "".join(ch for ch in raw if not unicodedata.combining(ch))
         return re.sub(r"[\s\-_·:：,.，。!！?？/\\\\'\"`()\\[\\]]+", "", raw.strip().lower())
 
-    def _search_media_candidates(self, raw: str, keyword: str, media_type: str) -> list[dict[str, Any]]:
-        rows = self._extract_json_like_array(raw, field_name="data")
-        if not rows:
+    async def check_connection(self) -> dict[str, Any]:
+        _, ping_payload = await self._request_open_api("GET", "/ping")
+        ping_data = ping_payload.get("data") if isinstance(ping_payload.get("data"), dict) else {}
+
+        user_info: dict[str, Any] | None = None
+        message = "HDHive API Key 可用"
+        try:
+            user_info = await self.get_user_info()
+            message = "HDHive API Key 可用，用户信息已获取"
+        except HDHiveApiError as exc:
+            if exc.status_code == 403 and exc.code == "VIP_REQUIRED":
+                message = "HDHive API Key 可用，当前账号未开通 Premium，无法读取用户详情"
+            else:
+                raise
+
+        return {
+            "valid": True,
+            "message": message,
+            "user": user_info,
+            "ping": ping_data,
+        }
+
+    async def get_user_info(self) -> dict[str, Any]:
+        _, payload = await self._request_open_api("GET", "/me")
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        if not data:
+            raise ValueError("未获取到 HDHive 用户信息，请检查 API Key")
+
+        return {
+            "id": data.get("id"),
+            "username": str(data.get("username") or "").strip(),
+            "nickname": str(data.get("nickname") or "").strip(),
+            "email": str(data.get("email") or "").strip(),
+            "avatar_url": str(data.get("avatar_url") or "").strip(),
+            "is_vip": bool(data.get("is_vip")),
+            "vip_expiration_date": str(data.get("vip_expiration_date") or "").strip(),
+            "last_active_at": str(data.get("last_active_at") or "").strip(),
+            "points": self._extract_user_points(data),
+            "user_meta": data.get("user_meta") if isinstance(data.get("user_meta"), dict) else {},
+            "telegram_user": data.get("telegram_user") if isinstance(data.get("telegram_user"), dict) else None,
+            "created_at": str(data.get("created_at") or "").strip(),
+        }
+
+    async def check_in(self, gamble: bool = False) -> dict[str, Any]:
+        _, payload = await self._request_open_api(
+            "POST",
+            "/checkin",
+            json_body={"is_gambler": bool(gamble)} if gamble else {},
+        )
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+
+        user_info: dict[str, Any] = {}
+        try:
+            user_info = await self.get_user_info()
+        except Exception:
+            user_info = {}
+
+        return {
+            "success": True,
+            "message": str(payload.get("message") or data.get("message") or "签到成功").strip(),
+            "mode": "gamble" if gamble else "normal",
+            "code": str(payload.get("code") or "200").strip(),
+            "data": data,
+            "user": user_info,
+            "points": self._extract_first_int(user_info.get("points")) if isinstance(user_info, dict) else None,
+            "checked_in": bool(data.get("checked_in")),
+        }
+
+    async def unlock_resource(self, slug: str) -> dict[str, Any]:
+        normalized_slug = self._normalize_slug(slug)
+        if not normalized_slug:
+            return {"success": False, "message": "资源 slug 为空", "locked": True}
+
+        cached = self._unlock_cache.get(normalized_slug)
+        now = monotonic()
+        if cached and (now - cached[0] < self._unlock_cache_ttl_seconds):
+            return cached[1]
+
+        lock = self._unlock_locks.setdefault(normalized_slug, asyncio.Lock())
+        async with lock:
+            cached = self._unlock_cache.get(normalized_slug)
+            now = monotonic()
+            if cached and (now - cached[0] < self._unlock_cache_ttl_seconds):
+                return cached[1]
+
+            _, payload = await self._request_open_api(
+                "POST",
+                "/resources/unlock",
+                json_body={"slug": normalized_slug},
+            )
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            share_link = str(data.get("full_url") or data.get("url") or "").strip()
+            access_code = str(data.get("access_code") or "").strip()
+            if not share_link and str(data.get("url") or "").strip() and access_code:
+                joiner = "&" if "?" in str(data.get("url") or "") else "?"
+                share_link = f"{str(data.get('url') or '').strip()}{joiner}password={access_code}"
+
+            result = {
+                "success": bool(share_link),
+                "method": "open_api",
+                "message": str(payload.get("message") or "").strip() or "资源解锁成功",
+                "share_link": share_link,
+                "access_code": access_code,
+                "full_url": share_link,
+                "already_owned": bool(data.get("already_owned")),
+                "locked": False,
+                "lock_code": "",
+                "lock_message": "",
+                "unlock_points": 0,
+                "resource_url": str(data.get("url") or "").strip(),
+            }
+            self._unlock_cache[normalized_slug] = (monotonic(), result)
+            return result
+
+    def _map_resource_row(self, row: dict[str, Any], index: int) -> dict[str, Any]:
+        resource_slug = self._normalize_slug(str(row.get("slug") or ""))
+        unlock_points = int(row.get("unlock_points") or 0)
+        title = str(row.get("title") or "").strip() or f"HDHive 资源 #{index + 1}"
+        resource_name = str(row.get("remark") or "").strip() or title
+        validate_status = str(row.get("validate_status") or "").strip().lower()
+        validate_message = str(row.get("validate_message") or "").strip()
+        suspected_invalid = validate_status in {"invalid", "suspected_invalid", "suspect_invalid"}
+        is_unlocked = bool(row.get("is_unlocked"))
+        locked = True
+        lock_message = "免费资源，解锁后可获取分享链接"
+        if unlock_points > 0:
+            lock_message = f"该资源需要 {unlock_points} 积分解锁"
+        elif is_unlocked:
+            lock_message = "已拥有该资源，点击后将获取分享链接"
+
+        return {
+            "id": resource_slug or f"hdhive-{index}",
+            "slug": resource_slug,
+            "title": title,
+            "resource_name": resource_name,
+            "size": str(row.get("share_size") or "").strip(),
+            "quality": row.get("source") if isinstance(row.get("source"), list) else [],
+            "resolution": row.get("video_resolution") if isinstance(row.get("video_resolution"), list) else [],
+            "share_link": "",
+            "access_code": "",
+            "unlock_points": unlock_points,
+            "hdhive_locked": locked,
+            "hdhive_lock_code": "",
+            "hdhive_lock_message": lock_message,
+            "hdhive_resource_url": "",
+            "hdhive_validate_status": validate_status,
+            "hdhive_validate_message": validate_message,
+            "hdhive_suspected_invalid": suspected_invalid,
+            "source_service": "hdhive",
+            "pan115_savable": False,
+            "is_official": bool(row.get("is_official")) if row.get("is_official") is not None else None,
+            "created_at": str(row.get("created_at") or "").strip(),
+            "hdhive_unlocked_users_count": self._extract_first_int(row.get("unlocked_users_count")),
+            "hdhive_is_unlocked": is_unlocked,
+            "user": row.get("user") if isinstance(row.get("user"), dict) else None,
+        }
+
+    async def _list_resources_by_tmdb(self, tmdb_id: int, media_type: str) -> list[dict[str, Any]]:
+        normalized_media_type = self._normalize_media_type(media_type)
+        _, payload = await self._request_open_api(
+            "GET",
+            f"/resources/{normalized_media_type}/{int(tmdb_id)}",
+        )
+        rows = payload.get("data")
+        if not isinstance(rows, list):
             return []
+        return [self._map_resource_row(row, idx) for idx, row in enumerate(rows) if isinstance(row, dict)]
 
-        keyword_normalized = self._normalize_keyword(keyword)
-        candidates: list[tuple[int, bool, dict[str, Any]]] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            slug = str(row.get("slug") or "").strip()
-            if not slug:
-                continue
-            row_media_type = str(row.get("type") or media_type).strip().lower()
-            if row_media_type and row_media_type not in {"movie", "tv"}:
-                row_media_type = media_type
-            title = str(row.get("title") or "").strip()
-            original_title = str(row.get("original_title") or "").strip()
-            merged_title = " ".join(part for part in [title, original_title] if part)
-            merged_normalized = self._normalize_keyword(merged_title)
-
-            score = 0
-            if row_media_type == media_type:
-                score += 20
-            if keyword_normalized and merged_normalized:
-                if keyword_normalized in merged_normalized:
-                    score += 120
-                elif merged_normalized in keyword_normalized:
-                    score += 80
-                elif any(part and part in merged_normalized for part in keyword_normalized.split()):
-                    score += 30
-            if title:
-                score += 5
-
-            has_keyword_hit = bool(keyword_normalized and merged_normalized and keyword_normalized in merged_normalized)
-            candidates.append((score, has_keyword_hit, row))
-
-        exact_hit_candidates = [item for item in candidates if item[1]]
-        selected_pool = exact_hit_candidates
-        if not selected_pool:
-            return []
-        selected_pool.sort(key=lambda item: item[0], reverse=True)
-        selected: list[dict[str, Any]] = []
-        seen_slugs: set[str] = set()
-        for _, _, row in selected_pool:
-            slug = str(row.get("slug") or "").strip()
-            if not slug or slug in seen_slugs:
-                continue
-            seen_slugs.add(slug)
-            selected.append(row)
-            if len(selected) >= 3:
-                break
-        return selected
-
-    async def get_pan115_by_keyword(self, keyword: str, media_type: str = "movie") -> list[dict[str, Any]]:
+    async def _search_tmdb_candidates(self, keyword: str, media_type: str) -> list[int]:
         normalized_keyword = str(keyword or "").strip()
         if not normalized_keyword:
             return []
 
-        target_media_type = "tv" if str(media_type or "").strip().lower() == "tv" else "movie"
-        search_path = f"/{target_media_type}?keyword={quote_plus(normalized_keyword)}"
-        search_html = await self._fetch_text(search_path)
-        candidates = self._search_media_candidates(search_html, normalized_keyword, target_media_type)
-        if not candidates:
+        try:
+            payload = await tmdb_service.search_by_media_type(
+                normalized_keyword,
+                self._normalize_media_type(media_type),
+                page=1,
+            )
+        except Exception:
             return []
 
-        merged: list[dict[str, Any]] = []
-        seen_key: set[str] = set()
-        for candidate in candidates:
-            slug = str(candidate.get("slug") or "").strip()
-            if not slug:
+        rows = payload.get("items") if isinstance(payload.get("items"), list) else []
+        keyword_fp = self._normalize_keyword(normalized_keyword)
+        scored: list[tuple[float, int]] = []
+        seen: set[int] = set()
+
+        for row in rows:
+            if not isinstance(row, dict):
                 continue
-            detail_html = await self._fetch_text(f"/{target_media_type}/{slug}")
-            rows = self._extract_json_like_array(detail_html, field_name="115")
-            if not rows:
+            try:
+                tmdb_id = int(row.get("tmdb_id") or row.get("id") or 0)
+            except Exception:
                 continue
-            tasks = [self._resolve_pan115_row(row, idx) for idx, row in enumerate(rows[:30])]
-            items = await asyncio.gather(*tasks)
-            media_title = str(candidate.get("title") or "").strip()
-            for item in items:
-                share_link = str(item.get("share_link") or "").strip()
-                dedupe_key = f"{str(item.get('slug') or '').strip()}|{share_link}"
-                if dedupe_key in seen_key:
+            if tmdb_id <= 0 or tmdb_id in seen:
+                continue
+            seen.add(tmdb_id)
+
+            title = str(row.get("title") or row.get("name") or "").strip()
+            title_fp = self._normalize_keyword(title)
+            score = 0.0
+            if keyword_fp and title_fp:
+                if keyword_fp == title_fp:
+                    score += 1000
+                elif keyword_fp in title_fp:
+                    score += 500
+                elif title_fp in keyword_fp:
+                    score += 300
+            vote_average = row.get("vote_average")
+            try:
+                score += float(vote_average or 0)
+            except Exception:
+                pass
+            scored.append((score, tmdb_id))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [tmdb_id for _, tmdb_id in scored[:5]]
+
+    async def get_pan115_by_keyword(self, keyword: str, media_type: str = "movie") -> list[dict[str, Any]]:
+        tmdb_candidates = await self._search_tmdb_candidates(keyword, media_type)
+        if not tmdb_candidates:
+            return []
+
+        deduped: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        for tmdb_id in tmdb_candidates:
+            try:
+                rows = await self._list_resources_by_tmdb(tmdb_id, media_type)
+            except Exception:
+                continue
+            for row in rows:
+                dedupe_key = str(row.get("slug") or "").strip().lower()
+                if not dedupe_key or dedupe_key in seen_keys:
                     continue
-                seen_key.add(dedupe_key)
-                if media_title and not str(item.get("title") or "").strip():
-                    item["title"] = media_title
-                item["matched_media_title"] = media_title
-                merged.append(item)
-        return merged
+                seen_keys.add(dedupe_key)
+                deduped.append(row)
+                if len(deduped) >= 30:
+                    return deduped
+        return deduped
 
     async def get_movie_pan115(self, tmdb_id: int) -> list[dict[str, Any]]:
-        return await self._build_pan115_rows(tmdb_id, "movie")
+        return await self._list_resources_by_tmdb(tmdb_id, "movie")
 
     async def get_tv_pan115(self, tmdb_id: int) -> list[dict[str, Any]]:
-        return await self._build_pan115_rows(tmdb_id, "tv")
+        return await self._list_resources_by_tmdb(tmdb_id, "tv")
 
 
 hdhive_service = HDHiveService()

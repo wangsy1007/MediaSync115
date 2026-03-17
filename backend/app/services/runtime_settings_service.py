@@ -22,6 +22,7 @@ class RuntimeSettingsService:
         "socks_proxy": "SOCKS_PROXY",
         "pan115_cookie": "PAN115_COOKIE",
         "hdhive_cookie": "HDHIVE_COOKIE",
+        "hdhive_api_key": "HDHIVE_API_KEY",
         "hdhive_base_url": "HDHIVE_BASE_URL",
         "pansou_base_url": "PANSOU_BASE_URL",
         "nullbr_app_id": "NULLBR_APP_ID",
@@ -71,6 +72,7 @@ class RuntimeSettingsService:
             "pan115_offline_folder_id": "0",
             "pan115_offline_folder_name": "根目录",
             "hdhive_cookie": settings.HDHIVE_COOKIE or "",
+            "hdhive_api_key": settings.HDHIVE_API_KEY or "",
             "hdhive_base_url": settings.HDHIVE_BASE_URL,
             "hdhive_auto_checkin_enabled": False,
             "hdhive_auto_checkin_mode": "normal",
@@ -184,6 +186,7 @@ class RuntimeSettingsService:
             "socks_proxy": settings.SOCKS_PROXY or "",
             "pan115_cookie": settings.PAN115_COOKIE or "",
             "hdhive_cookie": settings.HDHIVE_COOKIE or "",
+            "hdhive_api_key": settings.HDHIVE_API_KEY or "",
             "hdhive_base_url": settings.HDHIVE_BASE_URL or "",
             "pansou_base_url": settings.PANSOU_BASE_URL or "",
             "nullbr_app_id": settings.NULLBR_APP_ID or "",
@@ -299,6 +302,9 @@ class RuntimeSettingsService:
 
     def get_hdhive_cookie(self) -> str:
         return self._data["hdhive_cookie"]
+
+    def get_hdhive_api_key(self) -> str:
+        return str(self._data.get("hdhive_api_key") or "")
 
     def get_hdhive_base_url(self) -> str:
         return self._data["hdhive_base_url"]
@@ -645,6 +651,7 @@ class RuntimeSettingsService:
         settings.SOCKS_PROXY = str(self._data.get("socks_proxy") or "").strip() or None
         settings.PAN115_COOKIE = self.get_pan115_cookie() or None
         settings.HDHIVE_COOKIE = self.get_hdhive_cookie() or None
+        settings.HDHIVE_API_KEY = self.get_hdhive_api_key() or None
         settings.HDHIVE_BASE_URL = self.get_hdhive_base_url()
         settings.PANSOU_BASE_URL = self.get_pansou_base_url()
         settings.NULLBR_APP_ID = self.get_nullbr_app_id()
@@ -678,6 +685,7 @@ class RuntimeSettingsService:
 
         pan115_service.update_cookie(self.get_pan115_cookie())
         hdhive_service.set_cookie(self.get_hdhive_cookie())
+        hdhive_service.set_api_key(self.get_hdhive_api_key())
         hdhive_service.set_base_url(self.get_hdhive_base_url())
         pansou_service.set_base_url(self.get_pansou_base_url())
         nullbr_client.update_config(
@@ -710,6 +718,7 @@ class RuntimeSettingsService:
             "pan115_offline_folder_id": self.get_pan115_offline_folder()["folder_id"],
             "pan115_offline_folder_name": self.get_pan115_offline_folder()["folder_name"],
             "hdhive_cookie": self.get_hdhive_cookie(),
+            "hdhive_api_key": self.get_hdhive_api_key(),
             "hdhive_base_url": self.get_hdhive_base_url(),
             "hdhive_auto_checkin_enabled": self.get_hdhive_auto_checkin_enabled(),
             "hdhive_auto_checkin_mode": self.get_hdhive_auto_checkin_mode(),

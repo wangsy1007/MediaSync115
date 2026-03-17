@@ -44,6 +44,7 @@ class RuntimeSettingsRequest(BaseModel):
     all_proxy: Optional[str] = None
     socks_proxy: Optional[str] = None
     hdhive_cookie: Optional[str] = None
+    hdhive_api_key: Optional[str] = None
     hdhive_base_url: Optional[str] = None
     hdhive_auto_checkin_enabled: Optional[bool] = None
     hdhive_auto_checkin_mode: Optional[str] = None
@@ -114,6 +115,7 @@ class TgIndexBackfillRequest(BaseModel):
 class HDHiveCheckinRequest(BaseModel):
     mode: Optional[str] = None
     cookie: Optional[str] = None
+    api_key: Optional[str] = None
     base_url: Optional[str] = None
 
 
@@ -170,10 +172,10 @@ async def _validate_priority_source_config(merged_settings: dict) -> None:
             if not app_id or not api_key or not base_url:
                 errors.append("Nullbr 优先级已启用，但缺少 APP ID / API Key / Base URL 配置")
         elif source == "hdhive":
-            cookie = str(merged_settings.get("hdhive_cookie") or "").strip()
+            api_key = str(merged_settings.get("hdhive_api_key") or "").strip()
             base_url = str(merged_settings.get("hdhive_base_url") or "").strip()
-            if not cookie or not base_url:
-                errors.append("HDHive 优先级已启用，但缺少 Cookie 或 Base URL 配置")
+            if not api_key or not base_url:
+                errors.append("HDHive 优先级已启用，但缺少 API Key 或 Base URL 配置")
         elif source == "pansou":
             base_url = str(merged_settings.get("pansou_base_url") or "").strip()
             if not base_url:
@@ -202,10 +204,10 @@ def _validate_hdhive_unlock_settings(merged_settings: dict) -> None:
     if not enabled:
         return
 
-    cookie = str(merged_settings.get("hdhive_cookie") or "").strip()
+    api_key = str(merged_settings.get("hdhive_api_key") or "").strip()
     base_url = str(merged_settings.get("hdhive_base_url") or "").strip()
-    if not cookie or not base_url:
-        raise HTTPException(status_code=400, detail="启用 HDHive 自动解锁时必须配置 HDHive Cookie 和 Base URL")
+    if not api_key or not base_url:
+        raise HTTPException(status_code=400, detail="启用 HDHive 自动解锁时必须配置 HDHive API Key 和 Base URL")
 
     try:
         max_points_per_item = int(merged_settings.get("subscription_hdhive_unlock_max_points_per_item", 0) or 0)
@@ -227,10 +229,10 @@ def _validate_hdhive_checkin_settings(merged_settings: dict) -> None:
     if not enabled:
         return
 
-    cookie = str(merged_settings.get("hdhive_cookie") or "").strip()
+    api_key = str(merged_settings.get("hdhive_api_key") or "").strip()
     base_url = str(merged_settings.get("hdhive_base_url") or "").strip()
-    if not cookie or not base_url:
-        raise HTTPException(status_code=400, detail="启用 HDHive 自动签到时必须配置 HDHive Cookie 和 Base URL")
+    if not api_key or not base_url:
+        raise HTTPException(status_code=400, detail="启用 HDHive 自动签到时必须配置 HDHive API Key 和 Base URL")
 
     mode = str(merged_settings.get("hdhive_auto_checkin_mode") or "normal").strip().lower()
     if mode not in {"normal", "gamble"}:
@@ -390,11 +392,11 @@ async def _perform_nullbr_check() -> dict[str, Any]:
 
 async def _perform_hdhive_check() -> dict[str, Any]:
     try:
-        info = await hdhive_service.get_user_info()
+        payload = await hdhive_service.check_connection()
         return {
             "valid": True,
-            "message": "HDHive 凭证可用",
-            "user": info,
+            "message": str(payload.get("message") or "HDHive API Key 可用"),
+            "user": payload.get("user"),
         }
     except Exception as exc:
         return {
@@ -465,14 +467,14 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
         "subscription_hdhive_unlock_budget_points_per_run",
         "subscription_hdhive_unlock_threshold_inclusive",
     }
-    if any(key in payload for key in unlock_keys) or payload.get("hdhive_cookie") is not None:
+    if any(key in payload for key in unlock_keys) or payload.get("hdhive_api_key") is not None:
         _validate_hdhive_unlock_settings(merged_settings)
     checkin_keys = {
         "hdhive_auto_checkin_enabled",
         "hdhive_auto_checkin_mode",
         "hdhive_auto_checkin_run_time",
     }
-    if any(key in payload for key in checkin_keys) or payload.get("hdhive_cookie") is not None:
+    if any(key in payload for key in checkin_keys) or payload.get("hdhive_api_key") is not None:
         _validate_hdhive_checkin_settings(merged_settings)
     if any(key in payload for key in {"emby_url", "emby_api_key", "emby_sync_enabled", "emby_sync_interval_hours"}):
         _validate_emby_sync_settings(merged_settings)
@@ -534,22 +536,29 @@ async def run_hdhive_checkin(payload: HDHiveCheckinRequest):
         raise HTTPException(status_code=400, detail="HDHive 手动签到模式仅支持 normal 或 gamble")
 
     cookie = str(payload.cookie or "").strip()
+    api_key = str(payload.api_key or "").strip()
     base_url = str(payload.base_url or "").strip()
     service = hdhive_service
-    if cookie or base_url:
+    if cookie or api_key or base_url:
         from app.services.hdhive_service import HDHiveService
 
         service = HDHiveService(
             base_url=base_url or runtime_settings_service.get_hdhive_base_url(),
             cookie=cookie or runtime_settings_service.get_hdhive_cookie(),
+            api_key=api_key or runtime_settings_service.get_hdhive_api_key(),
         )
 
     try:
         return await service.check_in(gamble=(mode == "gamble"))
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code if exc.response else 502
-        raise HTTPException(status_code=502, detail=f"HDHive 手动签到失败({status})")
     except Exception as exc:
+        from app.services.hdhive_service import HDHiveApiError
+
+        if isinstance(exc, HDHiveApiError):
+            status = int(exc.status_code or 500)
+            detail = str(exc)
+            if status in {400, 401, 402, 403, 404, 429}:
+                raise HTTPException(status_code=status, detail=detail)
+            raise HTTPException(status_code=502, detail=detail or f"HDHive 手动签到失败({status})")
         raise HTTPException(status_code=500, detail=f"HDHive 手动签到失败: {str(exc)}")
 
 
