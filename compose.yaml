@@ -5,6 +5,8 @@ services:
     restart: unless-stopped
     ports:
       - "5173:80"
+    environment:
+      TZ: Asia/Shanghai
     volumes:
       - ./data:/app/data
     healthcheck:

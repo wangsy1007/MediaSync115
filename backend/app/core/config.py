@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "MediaSync115"
     APP_VERSION: str = "1.0.4"
     DEBUG: bool = True
+    TZ: str = "Asia/Shanghai"
 
     # Proxy Configuration
     HTTP_PROXY: Optional[str] = None
