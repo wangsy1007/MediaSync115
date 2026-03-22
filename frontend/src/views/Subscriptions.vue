@@ -4,9 +4,9 @@
       <h2>我的订阅</h2>
       <div class="header-actions">
         <el-radio-group v-if="activeTab === 'subscriptions'" v-model="filterType" @change="handleFilterChange">
-          <el-radio-button value="all">全部</el-radio-button>
-          <el-radio-button value="movie">电影</el-radio-button>
-          <el-radio-button value="tv">电视剧</el-radio-button>
+          <el-radio-button value="all">全部 ({{ countAll }})</el-radio-button>
+          <el-radio-button value="movie">电影 ({{ countMovie }})</el-radio-button>
+          <el-radio-button value="tv">电视剧 ({{ countTv }})</el-radio-button>
         </el-radio-group>
         <template v-else>
           <el-switch v-model="missingOnly" active-text="仅看缺集" @change="() => fetchTvMissingStatus(false)" />
@@ -20,8 +20,8 @@
     <el-tabs v-model="activeTab" class="main-tabs">
       <el-tab-pane label="订阅列表" name="subscriptions">
         <div class="subscriptions-grid" v-loading="loading">
-          <template v-if="subscriptions.length > 0">
-            <el-card v-for="sub in subscriptions" :key="sub.id" class="subscription-item">
+          <template v-if="filteredSubscriptions.length > 0">
+            <el-card v-for="sub in filteredSubscriptions" :key="sub.id" class="subscription-item">
               <div class="card-content" @click="goToDetail(sub)">
                 <div class="poster">
                   <div
@@ -125,15 +125,23 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { settingsApi, subscriptionApi } from '@/api'
 import { Star } from '@element-plus/icons-vue'
 
-const subscriptions = ref([])
+const allSubscriptions = ref([])
 const loading = ref(false)
 const filterType = ref('all')
+
+const filteredSubscriptions = computed(() => {
+  if (filterType.value === 'all') return allSubscriptions.value
+  return allSubscriptions.value.filter(s => s.media_type === filterType.value)
+})
+const countAll = computed(() => allSubscriptions.value.length)
+const countMovie = computed(() => allSubscriptions.value.filter(s => s.media_type === 'movie').length)
+const countTv = computed(() => allSubscriptions.value.filter(s => s.media_type === 'tv').length)
 const activeTab = ref('subscriptions')
 const missingRows = ref([])
 const missingLoading = ref(false)
@@ -201,9 +209,6 @@ const fetchSubscriptions = async () => {
       is_active: true,
       exclude_transferred_success: true
     }
-    if (filterType.value !== 'all') {
-      params.media_type = filterType.value
-    }
     const [listResp, runtimeResp] = await Promise.allSettled([
       subscriptionApi.list(params),
       settingsApi.getRuntime()
@@ -224,8 +229,8 @@ const fetchSubscriptions = async () => {
     const data = listResp.value?.data
     // 处理新的返回格式：{ items: [], douban_id_map: {}, imdb_id_map: {} }
     const items = Array.isArray(data) ? data : (data?.items || [])
-    subscriptions.value = items
-    resetPosterLoadedState(subscriptions.value)
+    allSubscriptions.value = items
+    resetPosterLoadedState(allSubscriptions.value)
   } catch (error) {
     ElMessage.error('获取订阅列表失败')
   } finally {
@@ -236,13 +241,13 @@ const fetchSubscriptions = async () => {
 }
 
 const handleFilterChange = () => {
-  fetchSubscriptions()
+  // 前端过滤，无需重新请求
 }
 
 const handleDelete = async (sub) => {
   try {
     await subscriptionApi.delete(sub.id)
-    subscriptions.value = subscriptions.value.filter(s => s.id !== sub.id)
+    allSubscriptions.value = allSubscriptions.value.filter(s => s.id !== sub.id)
     missingRows.value = missingRows.value.filter((row) => Number(row.subscription_id) !== Number(sub.id))
     ElMessage.success('已取消订阅')
   } catch (error) {
