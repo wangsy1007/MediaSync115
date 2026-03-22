@@ -483,11 +483,15 @@
               <el-input v-model="tgForm.phone" placeholder="例如: +8613812345678" />
             </el-form-item>
             <el-form-item label="频道列表">
-              <el-input
-                v-model="tgForm.channelsText"
-                type="textarea"
-                :rows="3"
-                placeholder="每行一个频道 username（不带 @）"
+              <el-select
+                v-model="tgForm.channelsList"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                :reserve-keyword="false"
+                placeholder="输入频道 username 后按回车添加（不带 @）"
+                style="width: 100%"
               />
             </el-form-item>
             <el-form-item label="搜索窗口(天)">
@@ -1226,7 +1230,7 @@ const tgForm = ref({
   apiHash: '',
   phone: '',
   session: '',
-  channelsText: '',
+  channelsList: [],
   searchDays: 30,
   maxMessagesPerChannel: 200
 })
@@ -2306,9 +2310,8 @@ const checkTg = async (notify = false) => {
   }
 }
 
-const parseChannelsText = () => {
-  const raw = String(tgForm.value.channelsText || '')
-  return raw.split(/\r?\n/).map(item => item.trim()).filter(Boolean)
+const parseChannelsList = () => {
+  return (tgForm.value.channelsList || []).map(item => String(item || '').trim().replace(/^@/, '')).filter(Boolean)
 }
 
 const handleSaveTg = async () => {
@@ -2320,7 +2323,7 @@ const handleSaveTg = async () => {
     ElMessage.warning('请输入 Telegram API HASH')
     return
   }
-  const channels = parseChannelsText()
+  const channels = parseChannelsList()
   if (!channels.length) {
     ElMessage.warning('请至少配置一个频道')
     return
@@ -2786,7 +2789,7 @@ const fetchRuntimeSettings = async () => {
     tgForm.value.session = data.tg_session || ''
     tgForm.value.searchDays = Number(data.tg_search_days || 30)
     tgForm.value.maxMessagesPerChannel = Number(data.tg_max_messages_per_channel || 200)
-    tgForm.value.channelsText = Array.isArray(data.tg_channel_usernames) ? data.tg_channel_usernames.join('\n') : ''
+    tgForm.value.channelsList = Array.isArray(data.tg_channel_usernames) ? data.tg_channel_usernames : []
     tgIndexForm.value.enabled = data.tg_index_enabled !== false
     tgIndexForm.value.realtimeFallbackEnabled = data.tg_index_realtime_fallback_enabled !== false
     tgIndexForm.value.queryLimitPerChannel = Number(data.tg_index_query_limit_per_channel || 120)
