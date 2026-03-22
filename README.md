@@ -12,6 +12,8 @@
   <img alt="Playwright" src="https://img.shields.io/badge/Tested%20with-Playwright-2ead33?style=for-the-badge&logo=playwright&logoColor=white">
 </p>
 
+tg群：https://t.me/+EkEBz7x7i9NlYzFl
+
 ## Overview
 
 MediaSync115 是一个面向个人媒体库管理的全栈应用，围绕“找片、找资源、转存、订阅、入库同步”构建。
