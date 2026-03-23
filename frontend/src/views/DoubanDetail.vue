@@ -50,9 +50,9 @@
       </div>
 
       <el-tabs v-model="activeTab" class="resource-tabs">
-        <el-tab-pane label="115网盘" name="pan115">
+        <el-tab-pane v-if="tabVisible('pan115')" label="115网盘" name="pan115">
           <el-tabs v-model="pan115SourceTab" class="source-tabs">
-            <el-tab-pane label="Nullbr" name="nullbr">
+            <el-tab-pane v-if="tabVisible('pan115_nullbr')" label="Nullbr" name="nullbr">
               <div class="resource-tools">
                 <el-button size="small" type="primary" plain :loading="pan115Loading" @click="fetchPan115Nullbr">
                   {{ nullbrTried ? '刷新 Nullbr' : '用 Nullbr 获取资源' }}
@@ -110,7 +110,7 @@
               </div>
             </el-tab-pane>
 
-            <el-tab-pane label="Pansou" name="pansou">
+            <el-tab-pane v-if="tabVisible('pan115_pansou')" label="Pansou" name="pansou">
               <div class="resource-tools">
                 <el-button size="small" type="primary" plain :loading="pansouLoading" @click="fetchPansouPan115">
                   {{ pansouTried ? '重新尝试 Pansou' : '用 Pansou 获取资源' }}
@@ -168,7 +168,7 @@
               </div>
             </el-tab-pane>
 
-            <el-tab-pane label="HDHive" name="hdhive">
+            <el-tab-pane v-if="tabVisible('pan115_hdhive')" label="HDHive" name="hdhive">
               <div class="resource-tools">
                 <el-button size="small" type="primary" plain :loading="hdhiveLoading" @click="fetchHdhivePan115">
                   {{ hdhiveTried ? '刷新 HDHive' : '用 HDHive 获取资源' }}
@@ -263,7 +263,7 @@
               </div>
             </el-tab-pane>
 
-            <el-tab-pane label="Telegram" name="tg">
+            <el-tab-pane v-if="tabVisible('pan115_tg')" label="Telegram" name="tg">
               <div class="resource-tools">
                 <el-button size="small" type="primary" plain :loading="tgLoading" @click="fetchTgPan115">
                   {{ tgTried ? '刷新 Telegram' : '用 Telegram 获取资源' }}
@@ -323,9 +323,9 @@
           </el-tabs>
         </el-tab-pane>
 
-        <el-tab-pane label="磁力链接" name="magnet">
+        <el-tab-pane v-if="tabVisible('magnet')" label="磁力链接" name="magnet">
           <el-tabs v-model="magnetSourceTab" class="source-tabs">
-            <el-tab-pane label="Nullbr" name="nullbr">
+            <el-tab-pane v-if="tabVisible('magnet_nullbr')" label="Nullbr" name="nullbr">
               <div class="resource-tools">
                 <el-button size="small" type="primary" plain :loading="magnetLoading" @click="fetchMagnetNullbr">
                   {{ nullbrMagnetTried ? '刷新 Nullbr' : '用 Nullbr 获取磁链' }}
@@ -360,7 +360,7 @@
               </div>
             </el-tab-pane>
 
-            <el-tab-pane label="SeedHub" name="seedhub">
+            <el-tab-pane v-if="tabVisible('magnet_seedhub')" label="SeedHub" name="seedhub">
               <div class="resource-tools">
                 <el-button size="small" type="primary" plain :loading="seedhubMagnetLoading" @click="fetchSeedhubMagnet">
                   {{ seedhubMagnetTried ? '重新尝试 SeedHub' : '用 SeedHub 获取磁链' }}
@@ -395,7 +395,7 @@
               </div>
             </el-tab-pane>
 
-            <el-tab-pane label="不太灵" name="butailing">
+            <el-tab-pane v-if="tabVisible('magnet_butailing')" label="不太灵" name="butailing">
               <div class="resource-tools">
                 <el-button size="small" type="primary" plain :loading="butailingMagnetLoading" @click="fetchButailingMagnet">
                   {{ butailingMagnetTried ? '刷新不太灵' : '用不太灵获取磁链' }}
@@ -435,7 +435,7 @@
           </el-tabs>
         </el-tab-pane>
 
-        <el-tab-pane label="ED2K" name="ed2k">
+        <el-tab-pane v-if="tabVisible('ed2k')" label="ED2K" name="ed2k">
           <div class="resource-tools">
             <el-button size="small" type="primary" plain :loading="ed2kLoading" @click="fetchEd2kResources">
               {{ ed2kTried ? '刷新 Nullbr' : '用 Nullbr 获取 ED2K' }}
@@ -528,6 +528,10 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { pansouApi, pan115Api, searchApi, subscriptionApi } from '@/api'
 import { Check } from '@element-plus/icons-vue'
+import { getVisibleTabs, isTabVisible } from '@/utils/detailTabs'
+
+const _visibleTabs = getVisibleTabs()
+const tabVisible = (key) => isTabVisible(_visibleTabs, key)
 
 const route = useRoute()
 const loading = ref(false)

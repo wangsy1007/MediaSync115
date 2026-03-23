@@ -1077,6 +1077,55 @@
         </el-card>
       </el-tab-pane>
 
+      <el-tab-pane label="界面设置" name="ui">
+        <el-card class="settings-card">
+          <template #header>
+            <span>影视详情页 Tab 显示设置</span>
+          </template>
+
+          <el-alert type="info" :closable="false" style="margin-bottom: 16px">
+            自定义影视详情页中显示的资源标签页，取消勾选后对应标签页将在所有详情页中隐藏。
+          </el-alert>
+
+          <el-form label-width="120px">
+            <el-divider content-position="left">115网盘</el-divider>
+            <el-form-item label="115网盘">
+              <el-checkbox v-model="detailTabsForm.pan115">显示整个 115网盘 标签页</el-checkbox>
+            </el-form-item>
+            <el-form-item label="子标签页" v-if="detailTabsForm.pan115">
+              <el-checkbox-group v-model="detailTabsForm.pan115_children">
+                <el-checkbox label="pan115_nullbr">Nullbr</el-checkbox>
+                <el-checkbox label="pan115_pansou">Pansou</el-checkbox>
+                <el-checkbox label="pan115_hdhive">HDHive</el-checkbox>
+                <el-checkbox label="pan115_tg">Telegram</el-checkbox>
+              </el-checkbox-group>
+            </el-form-item>
+
+            <el-divider content-position="left">磁力链接</el-divider>
+            <el-form-item label="磁力链接">
+              <el-checkbox v-model="detailTabsForm.magnet">显示整个磁力链接标签页</el-checkbox>
+            </el-form-item>
+            <el-form-item label="子标签页" v-if="detailTabsForm.magnet">
+              <el-checkbox-group v-model="detailTabsForm.magnet_children">
+                <el-checkbox label="magnet_nullbr">Nullbr</el-checkbox>
+                <el-checkbox label="magnet_seedhub">SeedHub</el-checkbox>
+                <el-checkbox label="magnet_butailing">不太灵</el-checkbox>
+              </el-checkbox-group>
+            </el-form-item>
+
+            <el-divider content-position="left">其他</el-divider>
+            <el-form-item label="ED2K">
+              <el-checkbox v-model="detailTabsForm.ed2k">显示 ED2K 标签页</el-checkbox>
+            </el-form-item>
+
+            <el-form-item>
+              <el-button type="primary" @click="handleSaveDetailTabs">保存设置</el-button>
+              <el-button @click="handleResetDetailTabs">恢复默认</el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </el-tab-pane>
+
       <el-tab-pane label="TG Bot" name="tgbot">
         <el-card class="settings-card">
           <template #header>
@@ -1297,6 +1346,7 @@ import { authApi, pan115Api, pansouApi, settingsApi, subscriptionApi } from '@/a
 import { resetAuthSessionCache } from '@/router'
 import { useRouter } from 'vue-router'
 import { formatBeijingDateTime, formatBeijingTableCell } from '@/utils/timezone'
+import { ALL_TABS, getVisibleTabs, saveVisibleTabs } from '@/utils/detailTabs'
 
 const router = useRouter()
 const activeSettingsTab = ref('pan115')
@@ -1435,6 +1485,16 @@ const serviceNameMap = {
 const savingProxy = ref(false)
 const testingProxy = ref(false)
 const savingAccount = ref(false)
+
+// Detail tabs visibility
+const _initVisible = getVisibleTabs()
+const detailTabsForm = reactive({
+  pan115: _initVisible.has('pan115'),
+  pan115_children: ['pan115_nullbr', 'pan115_pansou', 'pan115_hdhive', 'pan115_tg'].filter(k => _initVisible.has(k)),
+  magnet: _initVisible.has('magnet'),
+  magnet_children: ['magnet_nullbr', 'magnet_seedhub', 'magnet_butailing'].filter(k => _initVisible.has(k)),
+  ed2k: _initVisible.has('ed2k'),
+})
 
 // TG Bot state
 const tgBotForm = ref({
@@ -3007,6 +3067,32 @@ const handleCheckTgBotStatus = async () => {
   } catch (error) {
     ElMessage.error('检测失败')
   }
+}
+
+// Detail tabs visibility handlers
+const handleSaveDetailTabs = () => {
+  const keys = new Set()
+  if (detailTabsForm.pan115) {
+    keys.add('pan115')
+    detailTabsForm.pan115_children.forEach(k => keys.add(k))
+  }
+  if (detailTabsForm.magnet) {
+    keys.add('magnet')
+    detailTabsForm.magnet_children.forEach(k => keys.add(k))
+  }
+  if (detailTabsForm.ed2k) keys.add('ed2k')
+  saveVisibleTabs(keys)
+  ElMessage.success('详情页标签设置已保存，刷新详情页后生效')
+}
+
+const handleResetDetailTabs = () => {
+  detailTabsForm.pan115 = true
+  detailTabsForm.pan115_children = ['pan115_nullbr', 'pan115_pansou', 'pan115_hdhive', 'pan115_tg']
+  detailTabsForm.magnet = true
+  detailTabsForm.magnet_children = ['magnet_nullbr', 'magnet_seedhub', 'magnet_butailing']
+  detailTabsForm.ed2k = true
+  saveVisibleTabs(new Set(ALL_TABS.map(t => t.key)))
+  ElMessage.success('已恢复默认设置，刷新详情页后生效')
 }
 
 const fetchRuntimeSettings = async () => {

@@ -58,9 +58,9 @@
       </div>
 
       <el-tabs v-model="activeTab" class="resource-tabs">
-        <el-tab-pane label="115网盘" name="pan115">
+        <el-tab-pane v-if="tabVisible('pan115')" label="115网盘" name="pan115">
           <el-tabs v-model="pan115SourceTab" class="source-tabs">
-            <el-tab-pane label="Nullbr" name="nullbr">
+            <el-tab-pane v-if="tabVisible('pan115_nullbr')" label="Nullbr" name="nullbr">
               <div class="resource-tools">
                 <el-button
                   size="small"
@@ -143,7 +143,7 @@
               </div>
             </el-tab-pane>
 
-            <el-tab-pane label="Pansou" name="pansou">
+            <el-tab-pane v-if="tabVisible('pan115_pansou')" label="Pansou" name="pansou">
               <div class="resource-tools">
                 <el-button
                   size="small"
@@ -233,7 +233,7 @@
               </div>
             </el-tab-pane>
 
-            <el-tab-pane label="HDHive" name="hdhive">
+            <el-tab-pane v-if="tabVisible('pan115_hdhive')" label="HDHive" name="hdhive">
               <div class="resource-tools">
                 <el-button
                   size="small"
@@ -334,7 +334,7 @@
               </div>
             </el-tab-pane>
 
-            <el-tab-pane label="Telegram" name="tg">
+            <el-tab-pane v-if="tabVisible('pan115_tg')" label="Telegram" name="tg">
               <div class="resource-tools">
                 <el-button
                   size="small"
@@ -409,9 +409,9 @@
           </el-tabs>
         </el-tab-pane>
 
-        <el-tab-pane label="磁力链接" name="magnet">
+        <el-tab-pane v-if="tabVisible('magnet')" label="磁力链接" name="magnet">
           <el-tabs v-model="magnetSourceTab" class="source-tabs">
-            <el-tab-pane label="Nullbr" name="nullbr">
+            <el-tab-pane v-if="tabVisible('magnet_nullbr')" label="Nullbr" name="nullbr">
               <div class="resource-tools">
                 <el-button
                   size="small"
@@ -468,7 +468,7 @@
               </div>
             </el-tab-pane>
 
-            <el-tab-pane label="SeedHub" name="seedhub">
+            <el-tab-pane v-if="tabVisible('magnet_seedhub')" label="SeedHub" name="seedhub">
               <div class="resource-tools">
                 <el-button
                   size="small"
@@ -525,7 +525,7 @@
               </div>
             </el-tab-pane>
 
-            <el-tab-pane label="不太灵" name="butailing">
+            <el-tab-pane v-if="tabVisible('magnet_butailing')" label="不太灵" name="butailing">
               <div class="resource-tools">
                 <el-button
                   size="small"
@@ -589,7 +589,7 @@
           </el-tabs>
         </el-tab-pane>
 
-        <el-tab-pane label="ED2K" name="ed2k">
+        <el-tab-pane v-if="tabVisible('ed2k')" label="ED2K" name="ed2k">
           <div class="resource-tools">
             <el-button
               size="small"
@@ -709,6 +709,10 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { searchApi, subscriptionApi, pan115Api } from '@/api'
 import { Star, Plus, Check } from '@element-plus/icons-vue'
+import { getVisibleTabs, isTabVisible } from '@/utils/detailTabs'
+
+const _visibleTabs = getVisibleTabs()
+const tabVisible = (key) => isTabVisible(_visibleTabs, key)
 
 const route = useRoute()
 
