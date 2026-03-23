@@ -616,6 +616,18 @@ class RuntimeSettingsService:
                 except Exception:
                     continue
             elif isinstance(default_value, list):
+                # TG Bot 的用户 ID / Chat ID 列表直接保存为整数列表
+                if key in ("tg_bot_allowed_users", "tg_bot_notify_chat_ids"):
+                    if isinstance(value, list):
+                        int_list = []
+                        for item in value:
+                            try:
+                                int_list.append(int(item))
+                            except (ValueError, TypeError):
+                                continue
+                        normalized[key] = int_list
+                    continue
+
                 source_items: list[str] = []
                 if isinstance(value, str):
                     source_items = [part.strip() for part in value.split(",")]

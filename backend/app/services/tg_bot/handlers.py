@@ -804,6 +804,7 @@ async def _save_115_resource(
 
     try:
         from app.services.pan115_service import pan115_service
+        from app.services.runtime_settings_service import runtime_settings_service
 
         # Try to determine folder name from detail context
         detail = context.user_data.get("current_detail") or {}
@@ -811,9 +812,13 @@ async def _save_115_resource(
         if detail.get("year"):
             folder_name = f"{folder_name} ({detail['year']})"
 
+        default_folder = runtime_settings_service.get_pan115_default_folder()
+        parent_id = default_folder["folder_id"]
+
         result = await pan115_service.save_share_to_folder(
             share_url=share_link,
             folder_name=folder_name,
+            parent_id=parent_id,
         )
 
         state = result.get("state", False) if isinstance(result, dict) else False
@@ -860,7 +865,12 @@ async def _add_offline_task(
 
     try:
         from app.services.pan115_service import pan115_service
-        result = await pan115_service.offline_task_add(url=magnet)
+        from app.services.runtime_settings_service import runtime_settings_service
+
+        offline_folder = runtime_settings_service.get_pan115_offline_folder()
+        wp_path_id = offline_folder["folder_id"]
+
+        result = await pan115_service.offline_task_add(url=magnet, wp_path_id=wp_path_id)
 
         if isinstance(result, dict) and result.get("state", False):
             text = f"离线任务已添加: <b>{escape(name[:50])}</b>"

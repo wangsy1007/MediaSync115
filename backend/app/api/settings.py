@@ -93,6 +93,10 @@ class RuntimeSettingsRequest(BaseModel):
     subscription_hdhive_unlock_threshold_inclusive: Optional[bool] = None
     update_source_type: Optional[str] = None
     update_repository: Optional[str] = None
+    tg_bot_token: Optional[str] = None
+    tg_bot_enabled: Optional[bool] = None
+    tg_bot_allowed_users: Optional[list] = None
+    tg_bot_notify_chat_ids: Optional[list] = None
 
 
 class TgVerifyPasswordRequest(BaseModel):
