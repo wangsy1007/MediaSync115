@@ -19,6 +19,7 @@ from app.models.models import (
     SubscriptionStepLog,
 )
 from app.api.search import _normalize_pansou_pan115_list, _search_pansou_pan115_resources
+from app.services.butailing_service import butailing_service
 from app.services.operation_log_service import operation_log_service
 from app.services.emby_service import emby_service
 from app.services.hdhive_service import hdhive_service
@@ -26,6 +27,7 @@ from app.services.nullbr_service import nullbr_service
 from app.services.pan115_service import Pan115Service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
+from app.services.seedhub_service import seedhub_service
 from app.services.tg_service import tg_service
 from app.services.tv_missing_service import tv_missing_service
 from app.utils.resource_tags import sort_by_preference
@@ -786,6 +788,7 @@ class SubscriptionService:
             )
             return [], traces
 
+        primary_resources: list[dict[str, Any]] = []
         for source in active_order:
             source_resources: list[dict[str, Any]] = []
             source_traces: list[dict[str, Any]] = []
@@ -830,16 +833,25 @@ class SubscriptionService:
                 pref_fmt = runtime_settings_service.get_resource_preferred_formats()
                 if pref_res or pref_fmt:
                     source_resources = sort_by_preference(source_resources, pref_res, pref_fmt)
-                return source_resources, traces
+                primary_resources = source_resources
+                break
 
-        traces.append(
-            {
-                "step": "fetch_all_empty",
-                "status": "warning",
-                "message": "所有优先级来源都未命中可用资源",
-            }
-        )
-        return [], traces
+        if not primary_resources:
+            traces.append(
+                {
+                    "step": "fetch_all_empty",
+                    "status": "warning",
+                    "message": "所有优先级来源都未命中可用资源",
+                }
+            )
+
+        # 离线转存：追加磁力/ED2K 资源（Nullbr + SeedHub + 不太灵）
+        offline_resources, offline_traces = await self._fetch_offline_magnets(sub)
+        traces.extend(offline_traces)
+        if offline_resources:
+            primary_resources.extend(offline_resources)
+
+        return primary_resources, traces
 
     def _resolve_source_order(self, channel: str) -> list[str]:
         _ = channel
@@ -877,22 +889,6 @@ class SubscriptionService:
         )
         payload = await self._fetch_nullbr(sub.tmdb_id, sub.media_type)
         resources = self._extract_list(payload)
-
-        # 离线转存启用时，额外抓取磁力/ED2K 资源
-        offline_enabled = runtime_settings_service.get_subscription_offline_transfer_enabled()
-        if offline_enabled:
-            offline_resources = await self._fetch_nullbr_offline(sub.tmdb_id, sub.media_type)
-            if offline_resources:
-                resources.extend(offline_resources)
-                traces.append(
-                    {
-                        "step": "fetch_nullbr_offline",
-                        "status": "info",
-                        "message": f"Nullbr 额外抓取磁力/ED2K 资源 {len(offline_resources)} 条",
-                        "payload": {"count": len(offline_resources)},
-                    }
-                )
-
         traces.append(
             {
                 "step": "fetch_nullbr_done",
@@ -1108,6 +1104,67 @@ class SubscriptionService:
         except Exception:
             pass
         return results
+
+    async def _fetch_offline_magnets(
+        self,
+        sub: "SubscriptionSnapshot",
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """离线转存启用时，从 Nullbr / SeedHub / 不太灵并发抓取磁力和 ED2K 资源。"""
+        if not runtime_settings_service.get_subscription_offline_transfer_enabled():
+            return [], []
+
+        traces: list[dict[str, Any]] = []
+        keyword = self._build_pansou_keyword(sub)
+        media_type = "tv" if sub.media_type == MediaType.TV else "movie"
+
+        async def _nullbr() -> list[dict[str, Any]]:
+            if sub.tmdb_id is None:
+                return []
+            return await self._fetch_nullbr_offline(sub.tmdb_id, sub.media_type)
+
+        async def _seedhub() -> list[dict[str, Any]]:
+            if not keyword:
+                return []
+            return await seedhub_service.search_magnets_by_keyword(keyword, limit=20)
+
+        async def _butailing() -> list[dict[str, Any]]:
+            if not keyword:
+                return []
+            return await butailing_service.search_magnets(keyword, media_type=media_type)
+
+        nullbr_result, seedhub_result, butailing_result = await asyncio.gather(
+            _nullbr(),
+            _seedhub(),
+            _butailing(),
+            return_exceptions=True,
+        )
+
+        merged: list[dict[str, Any]] = []
+        for label, result in [("Nullbr", nullbr_result), ("SeedHub", seedhub_result), ("不太灵", butailing_result)]:
+            if isinstance(result, BaseException):
+                traces.append({
+                    "step": "fetch_offline_magnet_error",
+                    "status": "warning",
+                    "message": f"{label} 磁力抓取失败: {str(result)[:200]}",
+                })
+            elif result:
+                merged.extend(result)
+                traces.append({
+                    "step": "fetch_offline_magnet_done",
+                    "status": "info",
+                    "message": f"{label} 磁力资源 {len(result)} 条",
+                    "payload": {"source": label, "count": len(result)},
+                })
+
+        if merged:
+            traces.append({
+                "step": "fetch_offline_magnet_summary",
+                "status": "success",
+                "message": f"离线磁力/ED2K 资源合计 {len(merged)} 条",
+                "payload": {"total": len(merged)},
+            })
+
+        return merged, traces
 
     def _build_hdhive_unlock_context(self) -> dict[str, Any]:
         budget_total = runtime_settings_service.get_subscription_hdhive_unlock_budget_points_per_run()
