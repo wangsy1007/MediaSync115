@@ -103,6 +103,7 @@ class RuntimeSettingsRequest(BaseModel):
     tg_bot_notify_chat_ids: Optional[list] = None
     detail_visible_tabs: Optional[list[str]] = None
     license_key: Optional[str] = None
+    subscription_offline_transfer_enabled: Optional[bool] = None
     chart_subscription_enabled: Optional[bool] = None
     chart_subscription_sources: Optional[list] = None
     chart_subscription_limit: Optional[int] = None

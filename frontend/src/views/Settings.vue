@@ -982,6 +982,14 @@
               </el-text>
             </el-form-item>
 
+            <el-divider content-position="left">离线转存</el-divider>
+            <el-form-item label="启用离线转存">
+              <el-switch v-model="schedulerForm.offlineTransferEnabled" />
+              <el-text size="small" type="info" style="margin-left: 8px">
+                启用后，订阅转存除 115 分享链接外，还会使用磁力链接和 ED2K 资源进行离线下载（保存到离线下载目录）
+              </el-text>
+            </el-form-item>
+
             <el-divider content-position="left">Nullbr 渠道</el-divider>
             <el-form-item label="启用任务">
               <el-switch v-model="schedulerForm.nullbr.enabled" />
@@ -1604,6 +1612,7 @@ const tmdbForm = ref({
 })
 
 const schedulerForm = ref({
+  offlineTransferEnabled: false,
   nullbr: {
     enabled: false,
     intervalHours: 24,
@@ -3488,6 +3497,7 @@ const fetchRuntimeSettings = async () => {
       detailTabsForm.ed2k = s.has('ed2k')
     }
 
+    schedulerForm.value.offlineTransferEnabled = !!data.subscription_offline_transfer_enabled
     schedulerForm.value.nullbr.enabled = !!data.subscription_nullbr_enabled
     schedulerForm.value.nullbr.intervalHours = Number(data.subscription_nullbr_interval_hours || 24)
     schedulerForm.value.nullbr.runTime = data.subscription_nullbr_run_time || '03:00'
@@ -3655,6 +3665,7 @@ const handleSaveScheduler = async () => {
   try {
     const normalizedPriority = normalizeResourcePriority(resourcePriority.value)
     await settingsApi.updateRuntime({
+      subscription_offline_transfer_enabled: schedulerForm.value.offlineTransferEnabled,
       subscription_nullbr_enabled: schedulerForm.value.nullbr.enabled,
       subscription_nullbr_interval_hours: Number(schedulerForm.value.nullbr.intervalHours || 24),
       subscription_nullbr_run_time: schedulerForm.value.nullbr.runTime || '03:00',

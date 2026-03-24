@@ -877,6 +877,22 @@ class SubscriptionService:
         )
         payload = await self._fetch_nullbr(sub.tmdb_id, sub.media_type)
         resources = self._extract_list(payload)
+
+        # 离线转存启用时，额外抓取磁力/ED2K 资源
+        offline_enabled = runtime_settings_service.get_subscription_offline_transfer_enabled()
+        if offline_enabled:
+            offline_resources = await self._fetch_nullbr_offline(sub.tmdb_id, sub.media_type)
+            if offline_resources:
+                resources.extend(offline_resources)
+                traces.append(
+                    {
+                        "step": "fetch_nullbr_offline",
+                        "status": "info",
+                        "message": f"Nullbr 额外抓取磁力/ED2K 资源 {len(offline_resources)} 条",
+                        "payload": {"count": len(offline_resources)},
+                    }
+                )
+
         traces.append(
             {
                 "step": "fetch_nullbr_done",
@@ -1071,6 +1087,27 @@ class SubscriptionService:
         if media_type == MediaType.TV:
             return await asyncio.to_thread(nullbr_service.get_tv_pan115, tmdb_id, 1)
         return await asyncio.to_thread(nullbr_service.get_movie_pan115, tmdb_id, 1)
+
+    async def _fetch_nullbr_offline(self, tmdb_id: int, media_type: MediaType) -> list[dict[str, Any]]:
+        """从 Nullbr 额外抓取磁力和 ED2K 资源。"""
+        results: list[dict[str, Any]] = []
+        try:
+            if media_type == MediaType.TV:
+                magnet_payload = await asyncio.to_thread(nullbr_service.get_tv_magnet, tmdb_id)
+            else:
+                magnet_payload = await asyncio.to_thread(nullbr_service.get_movie_magnet, tmdb_id)
+            results.extend(self._extract_list(magnet_payload))
+        except Exception:
+            pass
+        try:
+            if media_type == MediaType.TV:
+                ed2k_payload = await asyncio.to_thread(nullbr_service.get_tv_ed2k, tmdb_id)
+            else:
+                ed2k_payload = await asyncio.to_thread(nullbr_service.get_movie_ed2k, tmdb_id)
+            results.extend(self._extract_list(ed2k_payload))
+        except Exception:
+            pass
+        return results
 
     def _build_hdhive_unlock_context(self) -> dict[str, Any]:
         budget_total = runtime_settings_service.get_subscription_hdhive_unlock_budget_points_per_run()
@@ -1368,12 +1405,18 @@ class SubscriptionService:
             )
         existing_urls = {str(row[0]) for row in existing_result.all() if row and row[0]}
 
+        offline_enabled = runtime_settings_service.get_subscription_offline_transfer_enabled()
         created_records: list[DownloadRecord] = []
         duplicate_urls: set[str] = set()
         duplicate_count = 0
         invalid_count = 0
         for item in resources:
             resource_url = self._extract_resource_url(item)
+            resource_type = "pan115"
+            if not resource_url and offline_enabled:
+                resource_url = self._extract_offline_url(item)
+                if resource_url:
+                    resource_type = self._determine_resource_type(resource_url)
             if not resource_url:
                 invalid_count += 1
                 continue
@@ -1386,7 +1429,7 @@ class SubscriptionService:
                 subscription_id=subscription_id,
                 resource_name=self._extract_resource_name(item),
                 resource_url=resource_url,
-                resource_type="pan115",
+                resource_type=resource_type,
                 status=MediaStatus.PENDING,
             )
             db.add(record)
@@ -1422,14 +1465,16 @@ class SubscriptionService:
 
         retryable: list[DownloadRecord] = []
         for row in failed_rows:
-            if not self._is_likely_115_share_identifier(row.resource_url):
+            is_offline = str(row.resource_type or "") in ("magnet", "ed2k")
+            if not is_offline and not self._is_likely_115_share_identifier(row.resource_url):
                 continue
             if not self._is_retryable_transfer_error(row.error_message or ""):
                 continue
             retryable.append(row)
 
         for row in pending_rows:
-            if not self._is_likely_115_share_identifier(row.resource_url):
+            is_offline = str(row.resource_type or "") in ("magnet", "ed2k")
+            if not is_offline and not self._is_likely_115_share_identifier(row.resource_url):
                 continue
             retryable.append(row)
 
@@ -1587,6 +1632,38 @@ class SubscriptionService:
                 },
             )
             try:
+                # 磁力/ED2K 离线下载路径
+                if str(record.resource_type or "") in ("magnet", "ed2k"):
+                    offline_folder_id = str(
+                        runtime_settings_service.get_pan115_offline_folder().get("folder_id", "0") or "0"
+                    )
+                    await pan_service.offline_task_add(
+                        url=record.resource_url,
+                        wp_path_id=offline_folder_id,
+                    )
+                    record.status = MediaStatus.COMPLETED
+                    record.completed_at = datetime.utcnow()
+                    record.error_message = None
+                    record.file_id = offline_folder_id
+                    saved += 1
+                    await self._create_step_log(
+                        db,
+                        run_id=run_id,
+                        channel=channel,
+                        subscription_id=sub.id,
+                        subscription_title=sub.title,
+                        step="auto_transfer_offline_done",
+                        status="success",
+                        message=f"[{source}] 离线下载已提交：{record.resource_name}",
+                        payload={
+                            "source": source,
+                            "record_id": record.id,
+                            "resource_type": record.resource_type,
+                            "target_folder_id": offline_folder_id,
+                        },
+                    )
+                    continue
+
                 share_link, receive_code = self._split_share_link_and_receive_code(record.resource_url)
                 if tv_missing_enabled and is_tv_subscription:
                     share_code = pan_service._extract_share_code(share_link)
@@ -1888,6 +1965,28 @@ class SubscriptionService:
             or ""
         ).strip()
         return SubscriptionService._normalize_share_url(raw_url)
+
+    @staticmethod
+    def _extract_offline_url(item: dict[str, Any]) -> str:
+        """从资源条目中提取磁力链接或 ED2K 链接。"""
+        for key in ("magnet", "magnet_link", "magnet_url"):
+            val = str(item.get(key) or "").strip()
+            if val and val.lower().startswith("magnet:"):
+                return val
+        for key in ("ed2k", "ed2k_link", "ed2k_url"):
+            val = str(item.get(key) or "").strip()
+            if val and val.lower().startswith("ed2k://"):
+                return val
+        return ""
+
+    @staticmethod
+    def _determine_resource_type(url: str) -> str:
+        lowered = url.lower()
+        if lowered.startswith("magnet:"):
+            return "magnet"
+        if lowered.startswith("ed2k://"):
+            return "ed2k"
+        return "pan115"
 
     @staticmethod
     def _extract_resource_name(item: dict[str, Any]) -> str:

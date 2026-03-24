@@ -138,6 +138,7 @@ class RuntimeSettingsService:
                 "ed2k",
             ],
             "license_key": "",
+            "subscription_offline_transfer_enabled": False,
             "chart_subscription_enabled": False,
             "chart_subscription_sources": [],
             "chart_subscription_limit": 20,
@@ -590,6 +591,9 @@ class RuntimeSettingsService:
     def get_subscription_hdhive_prefer_free(self) -> bool:
         return bool(self._data.get("subscription_hdhive_prefer_free", True))
 
+    def get_subscription_offline_transfer_enabled(self) -> bool:
+        return bool(self._data.get("subscription_offline_transfer_enabled", False))
+
     def get_resource_preferred_resolutions(self) -> list[str]:
         val = self._data.get("resource_preferred_resolutions")
         return list(val) if isinstance(val, list) else []
@@ -844,6 +848,7 @@ class RuntimeSettingsService:
             "tg_bot_notify_chat_ids": self._data.get("tg_bot_notify_chat_ids") or [],
             "detail_visible_tabs": self._data.get("detail_visible_tabs") or [],
             "license_key": str(self._data.get("license_key") or ""),
+            "subscription_offline_transfer_enabled": self.get_subscription_offline_transfer_enabled(),
             "chart_subscription_enabled": bool(self._data.get("chart_subscription_enabled", False)),
             "chart_subscription_sources": self._data.get("chart_subscription_sources") or [],
             "chart_subscription_limit": int(self._data.get("chart_subscription_limit", 20) or 20),
