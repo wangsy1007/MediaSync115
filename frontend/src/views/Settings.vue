@@ -1066,6 +1066,91 @@
         </el-card>
       </el-tab-pane>
 
+      <el-tab-pane label="榜单订阅" name="chartSubscription">
+        <el-card class="settings-card">
+          <template #header>
+            <span>影视榜单订阅</span>
+          </template>
+
+          <el-alert type="info" :closable="false" style="margin-bottom: 16px">
+            启用后，系统将定时抓取所选榜单中的影视内容，并自动创建订阅。新创建的订阅将由"订阅任务"中配置的转存渠道自动完成资源查找与转存。
+          </el-alert>
+
+          <el-form label-width="120px">
+            <el-form-item label="启用榜单订阅">
+              <el-switch v-model="chartSubForm.enabled" />
+            </el-form-item>
+            <el-form-item label="每榜单条数">
+              <el-input-number
+                v-model="chartSubForm.limit"
+                :min="1"
+                :max="50"
+                :disabled="!chartSubForm.enabled"
+              />
+              <el-text size="small" type="info" style="margin-left: 8px">
+                每个榜单最多订阅前 N 部影视
+              </el-text>
+            </el-form-item>
+            <el-form-item label="检查间隔(小时)">
+              <el-input-number
+                v-model="chartSubForm.intervalHours"
+                :min="1"
+                :max="72"
+                :disabled="!chartSubForm.enabled"
+              />
+            </el-form-item>
+            <el-form-item label="执行时间">
+              <el-time-picker
+                v-model="chartSubForm.runTime"
+                format="HH:mm"
+                value-format="HH:mm"
+                placeholder="选择时间"
+                :disabled="!chartSubForm.enabled"
+              />
+            </el-form-item>
+
+            <el-divider content-position="left">TMDB 榜单</el-divider>
+            <el-form-item label="选择榜单">
+              <el-checkbox-group v-model="chartSubForm.selectedKeys" :disabled="!chartSubForm.enabled">
+                <template v-for="chart in availableCharts.filter(c => c.source === 'tmdb')" :key="`tmdb:${chart.key}`">
+                  <el-checkbox :label="chart.title" :value="`tmdb:${chart.key}`" />
+                </template>
+              </el-checkbox-group>
+            </el-form-item>
+
+            <el-divider content-position="left">豆瓣榜单</el-divider>
+            <el-form-item label="选择榜单">
+              <el-checkbox-group v-model="chartSubForm.selectedKeys" :disabled="!chartSubForm.enabled">
+                <template v-for="chart in availableCharts.filter(c => c.source === 'douban')" :key="`douban:${chart.key}`">
+                  <el-checkbox :label="chart.title" :value="`douban:${chart.key}`" />
+                </template>
+              </el-checkbox-group>
+            </el-form-item>
+
+            <el-form-item>
+              <el-button type="primary" :loading="savingChartSub" @click="handleSaveChartSub">保存</el-button>
+              <el-button
+                type="success"
+                :loading="runningChartSub"
+                :disabled="!chartSubForm.enabled || chartSubForm.selectedKeys.length === 0"
+                @click="handleRunChartSub"
+              >
+                立即执行
+              </el-button>
+            </el-form-item>
+            <el-form-item v-if="chartSubResult">
+              <el-alert
+                :title="chartSubResult"
+                :type="chartSubResultType"
+                :closable="true"
+                show-icon
+                @close="chartSubResult = ''"
+              />
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </el-tab-pane>
+
       <el-tab-pane label="执行日志" name="taskLogs">
         <el-card class="settings-card">
           <template #header>
@@ -1226,7 +1311,7 @@
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane label="许可证" name="license">
+      <el-tab-pane v-if="false" label="许可证" name="license">
         <el-card class="settings-card">
           <template #header>
             <span>许可证管理</span>
@@ -1587,6 +1672,20 @@ const tgBotNewChatId = ref('')
 const tgBotStatus = ref({ checked: false, running: false })
 const savingTgBot = ref(false)
 const restartingTgBot = ref(false)
+
+// ── 榜单订阅 ──
+const chartSubForm = reactive({
+  enabled: false,
+  limit: 20,
+  intervalHours: 24,
+  runTime: '02:00',
+  selectedKeys: [],
+})
+const availableCharts = ref([])
+const savingChartSub = ref(false)
+const runningChartSub = ref(false)
+const chartSubResult = ref('')
+const chartSubResultType = ref('success')
 
 // ── 许可证 ──
 const licenseForm = reactive({ key: '' })
@@ -3037,6 +3136,72 @@ const fetchAuthSession = async () => {
   }
 }
 
+// ── 榜单订阅相关 ──
+const loadAvailableCharts = async () => {
+  try {
+    const { data } = await settingsApi.getAvailableCharts()
+    availableCharts.value = data.charts || []
+  } catch {}
+}
+
+const loadChartSubSettings = (settings) => {
+  chartSubForm.enabled = !!settings.chart_subscription_enabled
+  chartSubForm.limit = settings.chart_subscription_limit || 20
+  chartSubForm.intervalHours = settings.chart_subscription_interval_hours || 24
+  chartSubForm.runTime = settings.chart_subscription_run_time || '02:00'
+  const sources = settings.chart_subscription_sources || []
+  chartSubForm.selectedKeys = sources.map(s => `${s.source}:${s.key}`)
+}
+
+const handleSaveChartSub = async () => {
+  savingChartSub.value = true
+  try {
+    const sources = chartSubForm.selectedKeys.map(k => {
+      const [source, key] = k.split(':', 2)
+      return { source, key }
+    })
+    await settingsApi.updateRuntime({
+      chart_subscription_enabled: chartSubForm.enabled,
+      chart_subscription_sources: sources,
+      chart_subscription_limit: chartSubForm.limit,
+      chart_subscription_interval_hours: chartSubForm.intervalHours,
+      chart_subscription_run_time: chartSubForm.runTime,
+    })
+    ElMessage.success('榜单订阅设置已保存')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '保存失败')
+  } finally {
+    savingChartSub.value = false
+  }
+}
+
+const handleRunChartSub = async () => {
+  runningChartSub.value = true
+  chartSubResult.value = ''
+  try {
+    // 先保存再执行
+    const sources = chartSubForm.selectedKeys.map(k => {
+      const [source, key] = k.split(':', 2)
+      return { source, key }
+    })
+    await settingsApi.updateRuntime({
+      chart_subscription_enabled: true,
+      chart_subscription_sources: sources,
+      chart_subscription_limit: chartSubForm.limit,
+      chart_subscription_interval_hours: chartSubForm.intervalHours,
+      chart_subscription_run_time: chartSubForm.runTime,
+    })
+    const { data } = await settingsApi.runChartSubscription()
+    chartSubResult.value = data.message || '执行完成'
+    chartSubResultType.value = 'success'
+  } catch (error) {
+    chartSubResult.value = error.response?.data?.detail || '执行失败'
+    chartSubResultType.value = 'error'
+  } finally {
+    runningChartSub.value = false
+  }
+}
+
 // ── 许可证相关 ──
 const loadLicense = async () => {
   try {
@@ -3331,6 +3496,9 @@ const fetchRuntimeSettings = async () => {
     resourcePriority.value = deduped
     updateSourceForm.value.sourceType = data.update_source_type || 'official'
     updateSourceForm.value.repository = data.update_repository || officialUpdateRepository
+
+    // 榜单订阅
+    loadChartSubSettings(data)
   } catch (error) {
     console.error('Failed to fetch runtime settings:', error)
   }
@@ -3760,6 +3928,7 @@ onMounted(() => {
   fetchProxyStatus()
   fetchHealthStatus()
   loadLicense()
+  loadAvailableCharts()
 })
 
 onBeforeUnmount(() => {

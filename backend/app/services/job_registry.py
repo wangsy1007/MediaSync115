@@ -24,6 +24,7 @@ class JobRegistry:
             "subscription.check_hdhive": self._check_subscription_hdhive,
             "subscription.check_pansou": self._check_subscription_pansou,
             "subscription.check_tg": self._check_subscription_tg,
+            "chart_subscription.sync": self._chart_subscription_sync,
         }
 
     def get(self, job_key: str) -> Callable[..., Any] | None:
@@ -88,6 +89,10 @@ class JobRegistry:
     async def _check_subscription_tg(self, **kwargs) -> dict[str, Any]:
         async with async_session_maker() as db:
             return await subscription_service.run_channel_check(db, "tg")
+
+    async def _chart_subscription_sync(self, **kwargs) -> dict[str, Any]:
+        from app.services.chart_subscription_service import run_chart_subscription
+        return await run_chart_subscription()
 
 
 job_registry = JobRegistry()

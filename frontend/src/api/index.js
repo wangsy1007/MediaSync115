@@ -194,6 +194,9 @@ export const settingsApi = {
   getTgBotStatus: () => api.get('/settings/tg-bot/status'),
   restartTgBot: () => api.post('/settings/tg-bot/restart'),
   stopTgBot: () => api.post('/settings/tg-bot/stop'),
+  // 榜单订阅
+  getAvailableCharts: () => api.get('/settings/chart-subscription/charts'),
+  runChartSubscription: () => api.post('/settings/chart-subscription/run', null, { timeout: 120000 }),
 }
 
 export const licenseApi = {

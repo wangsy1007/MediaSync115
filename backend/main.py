@@ -53,6 +53,7 @@ async def lifespan(app: FastAPI):
     await operation_log_service.prune(days=30)
     await scheduler_manager.init()
     await subscription_scheduler_service.ensure_subscription_tasks()
+    await subscription_scheduler_service.ensure_chart_subscription_task()
     await hdhive_checkin_scheduler_service.ensure_checkin_task()
     await emby_sync_scheduler_service.ensure_sync_task()
     await explore_home_warmup_service.warmup(force_refresh=False)

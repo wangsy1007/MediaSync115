@@ -102,6 +102,11 @@ class RuntimeSettingsRequest(BaseModel):
     tg_bot_notify_chat_ids: Optional[list] = None
     detail_visible_tabs: Optional[list[str]] = None
     license_key: Optional[str] = None
+    chart_subscription_enabled: Optional[bool] = None
+    chart_subscription_sources: Optional[list] = None
+    chart_subscription_limit: Optional[int] = None
+    chart_subscription_interval_hours: Optional[int] = None
+    chart_subscription_run_time: Optional[str] = None
 
 
 class TgVerifyPasswordRequest(BaseModel):
@@ -492,6 +497,7 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
     try:
         updated = runtime_settings_service.update_bulk(payload)
         await subscription_scheduler_service.ensure_subscription_tasks()
+        await subscription_scheduler_service.ensure_chart_subscription_task()
         await hdhive_checkin_scheduler_service.ensure_checkin_task()
         await emby_sync_scheduler_service.ensure_sync_task()
     except ValueError as exc:
@@ -874,3 +880,21 @@ async def stop_tg_bot():
     from app.services.tg_bot import tg_bot_service
     await tg_bot_service.stop()
     return {"success": True, "running": False}
+
+
+# ── 榜单订阅 ────────────────────────────────────────────────
+
+@router.get("/chart-subscription/charts")
+async def get_available_charts():
+    from app.services.chart_subscription_service import get_available_charts
+    return {"charts": get_available_charts()}
+
+
+@router.post("/chart-subscription/run")
+async def run_chart_subscription_now():
+    from app.services.chart_subscription_service import run_chart_subscription
+    try:
+        result = await run_chart_subscription()
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"榜单订阅执行失败: {str(exc)}")

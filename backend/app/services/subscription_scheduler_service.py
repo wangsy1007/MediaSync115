@@ -58,6 +58,48 @@ class SubscriptionSchedulerService:
 
             await db.commit()
 
+    async def ensure_chart_subscription_task(self) -> None:
+        """确保榜单订阅定时任务存在。"""
+        settings_data = runtime_settings_service.get_all()
+        enabled = bool(settings_data.get("chart_subscription_enabled", False))
+        interval_hours = int(settings_data.get("chart_subscription_interval_hours", 24) or 24)
+        run_time = str(settings_data.get("chart_subscription_run_time", "02:00") or "02:00")
+        cron_expr = self._build_cron_expr(interval_hours, run_time)
+        job_key = "chart_subscription.sync"
+
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(SchedulerTask).where(SchedulerTask.job_key == job_key).limit(1)
+            )
+            task = result.scalar_one_or_none()
+            if not task:
+                task = SchedulerTask(
+                    name="榜单订阅同步",
+                    job_key=job_key,
+                    trigger_type="cron",
+                    cron_expr=cron_expr,
+                    interval_seconds=None,
+                    kwargs_json=json.dumps({}, ensure_ascii=False),
+                    enabled=enabled,
+                    state="W" if enabled else "P",
+                )
+                db.add(task)
+                await db.flush()
+            else:
+                task.name = "榜单订阅同步"
+                task.trigger_type = "cron"
+                task.cron_expr = cron_expr
+                task.interval_seconds = None
+                task.enabled = enabled
+                task.state = "W" if enabled else "P"
+
+            await db.flush()
+            await scheduler_manager.update_dynamic_job(task)
+            if not enabled:
+                await scheduler_manager.remove_dynamic_job(task.id)
+
+            await db.commit()
+
     @staticmethod
     def _build_cron_expr(interval_hours: int, run_time: str) -> str:
         hours = max(1, min(24, int(interval_hours or 24)))
