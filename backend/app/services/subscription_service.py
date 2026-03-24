@@ -849,6 +849,10 @@ class SubscriptionService:
         offline_resources, offline_traces = await self._fetch_offline_magnets(sub)
         traces.extend(offline_traces)
         if offline_resources:
+            pref_res = runtime_settings_service.get_resource_preferred_resolutions()
+            pref_fmt = runtime_settings_service.get_resource_preferred_formats()
+            if pref_res or pref_fmt:
+                offline_resources = sort_by_preference(offline_resources, pref_res, pref_fmt)
             primary_resources.extend(offline_resources)
 
         return primary_resources, traces
