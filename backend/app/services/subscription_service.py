@@ -1707,6 +1707,7 @@ class SubscriptionService:
                     record.error_message = None
                     record.file_id = offline_folder_id
                     saved += 1
+                    await self._notify_transfer_success(sub.title, record.resource_name, source, "离线下载")
                     await self._create_step_log(
                         db,
                         run_id=run_id,
@@ -1812,6 +1813,7 @@ class SubscriptionService:
                     record.error_message = None
                     record.file_id = parent_folder_id
                     saved += 1
+                    await self._notify_transfer_success(sub.title, record.resource_name, source, "精准转存")
                     await self._create_step_log(
                         db,
                         run_id=run_id,
@@ -1854,6 +1856,7 @@ class SubscriptionService:
                     record.error_message = None
                     record.file_id = parent_folder_id
                     saved += 1
+                    await self._notify_transfer_success(sub.title, record.resource_name, source, "分享转存")
                     await self._create_step_log(
                         db,
                         run_id=run_id,
@@ -2090,6 +2093,28 @@ class SubscriptionService:
         if sub.year:
             base_name = f"{base_name} ({sub.year})"
         return re.sub(r'[\\/:*?"<>|]+', "_", base_name)
+
+    @staticmethod
+    async def _notify_transfer_success(
+        sub_title: str,
+        resource_name: str,
+        source: str,
+        method: str,
+    ) -> None:
+        """转存成功时通过 TG Bot 发送通知。"""
+        try:
+            from html import escape
+            from app.services.tg_bot.notifications import tg_bot_notify
+
+            lines = [
+                f"<b>订阅转存成功</b>",
+                f"订阅：{escape(sub_title)}",
+                f"资源：{escape(resource_name)}",
+                f"来源：{escape(source)}　方式：{escape(method)}",
+            ]
+            await tg_bot_notify("\n".join(lines))
+        except Exception:
+            pass
 
     @staticmethod
     def _split_share_link_and_receive_code(raw_link: str) -> tuple[str, str]:
