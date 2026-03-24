@@ -136,6 +136,7 @@ class RuntimeSettingsService:
                 "magnet", "magnet_nullbr", "magnet_seedhub", "magnet_butailing",
                 "ed2k",
             ],
+            "license_key": "",
         }
         self._data = dict(self._defaults)
         self._load()
@@ -746,6 +747,8 @@ class RuntimeSettingsService:
             base_url=self.get_emby_url(),
             api_key=self.get_emby_api_key(),
         )
+        from app.services.license_service import license_service
+        license_service.set_license_key(str(self._data.get("license_key") or ""))
 
     def get(self, key: str, default: Any = None) -> Any:
         return self._data.get(key, default)
@@ -819,6 +822,7 @@ class RuntimeSettingsService:
             "tg_bot_allowed_users": self._data.get("tg_bot_allowed_users") or [],
             "tg_bot_notify_chat_ids": self._data.get("tg_bot_notify_chat_ids") or [],
             "detail_visible_tabs": self._data.get("detail_visible_tabs") or [],
+            "license_key": str(self._data.get("license_key") or ""),
         }
 
 

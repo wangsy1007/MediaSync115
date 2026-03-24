@@ -1226,6 +1226,57 @@
         </el-card>
       </el-tab-pane>
 
+      <el-tab-pane label="许可证" name="license">
+        <el-card class="settings-card">
+          <template #header>
+            <span>许可证管理</span>
+          </template>
+
+          <el-descriptions :column="1" border size="small" style="margin-bottom: 20px">
+            <el-descriptions-item label="当前等级">
+              <el-tag :type="licenseStatus.tier === 'pro' ? 'success' : 'info'" size="small">
+                {{ licenseStatus.tier === 'pro' ? 'Pro' : '免费版' }}
+              </el-tag>
+            </el-descriptions-item>
+            <el-descriptions-item label="许可证状态">
+              {{ licenseStatus.has_license_key ? '已激活' : '未激活' }}
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <el-form label-width="120px">
+            <el-form-item label="许可证密钥">
+              <el-input
+                v-model="licenseForm.key"
+                type="password"
+                show-password
+                placeholder="输入许可证密钥以激活 Pro 版"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingLicense" @click="handleActivateLicense">
+                激活
+              </el-button>
+              <el-button v-if="licenseStatus.has_license_key" @click="handleDeactivateLicense" :loading="savingLicense">
+                取消激活
+              </el-button>
+            </el-form-item>
+          </el-form>
+
+          <el-divider />
+
+          <div>
+            <h4 style="margin: 0 0 12px 0">功能可用性</h4>
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item v-for="(available, feature) in licenseStatus.features" :key="feature" :label="featureLabel(feature)">
+                <el-tag :type="available ? 'success' : 'danger'" size="small">
+                  {{ available ? '可用' : '需要 Pro' }}
+                </el-tag>
+              </el-descriptions-item>
+            </el-descriptions>
+          </div>
+        </el-card>
+      </el-tab-pane>
+
       <el-tab-pane label="关于" name="about">
         <el-card class="settings-card">
           <template #header>
@@ -1363,7 +1414,7 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount, reactive, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { authApi, pan115Api, pansouApi, settingsApi, subscriptionApi } from '@/api'
+import { authApi, pan115Api, pansouApi, settingsApi, subscriptionApi, licenseApi } from '@/api'
 import { resetAuthSessionCache } from '@/router'
 import { useRouter } from 'vue-router'
 import { formatBeijingDateTime, formatBeijingTableCell } from '@/utils/timezone'
@@ -1536,6 +1587,24 @@ const tgBotNewChatId = ref('')
 const tgBotStatus = ref({ checked: false, running: false })
 const savingTgBot = ref(false)
 const restartingTgBot = ref(false)
+
+// ── 许可证 ──
+const licenseForm = reactive({ key: '' })
+const savingLicense = ref(false)
+const licenseStatus = reactive({ tier: 'free', has_license_key: false, features: {} })
+const featureLabelMap = {
+  explore: '影视探索',
+  subscription: '订阅管理',
+  transfer: '资源转存',
+  scheduler: '定时任务',
+  workflow: '工作流',
+  hdhive: 'HDHive',
+  telegram: 'Telegram',
+  quality_preference: '画质偏好',
+  emby_sync: 'Emby 同步',
+  tg_bot: 'TG Bot',
+}
+const featureLabel = (f) => featureLabelMap[f] || f
 
 const testing = ref(false)
 const testingRiskHealth = ref(false)
@@ -2968,6 +3037,39 @@ const fetchAuthSession = async () => {
   }
 }
 
+// ── 许可证相关 ──
+const loadLicense = async () => {
+  try {
+    const { data } = await licenseApi.getStatus()
+    Object.assign(licenseStatus, data)
+  } catch {}
+}
+const handleActivateLicense = async () => {
+  savingLicense.value = true
+  try {
+    const { data } = await licenseApi.activate(licenseForm.key)
+    Object.assign(licenseStatus, { tier: data.tier, has_license_key: data.has_license_key, features: data.features })
+    ElMessage.success(data.tier === 'pro' ? 'Pro 许可证已激活' : '许可证已保存')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '激活失败')
+  } finally {
+    savingLicense.value = false
+  }
+}
+const handleDeactivateLicense = async () => {
+  savingLicense.value = true
+  try {
+    const { data } = await licenseApi.activate('')
+    Object.assign(licenseStatus, { tier: data.tier, has_license_key: data.has_license_key, features: data.features })
+    licenseForm.key = ''
+    ElMessage.success('许可证已取消激活')
+  } catch {
+    ElMessage.error('操作失败')
+  } finally {
+    savingLicense.value = false
+  }
+}
+
 const handleSaveAccount = async () => {
   const currentUsername = String(accountForm.value.currentUsername || '').trim()
   const username = String(accountForm.value.newUsername || '').trim() || currentUsername
@@ -3657,6 +3759,7 @@ onMounted(() => {
   fetchSubscriptionLogs()
   fetchProxyStatus()
   fetchHealthStatus()
+  loadLicense()
 })
 
 onBeforeUnmount(() => {

@@ -196,6 +196,12 @@ export const settingsApi = {
   stopTgBot: () => api.post('/settings/tg-bot/stop'),
 }
 
+export const licenseApi = {
+  getStatus: () => api.get('/license/status'),
+  activate: (licenseKey) => api.put('/license/activate', { license_key: licenseKey }),
+  checkFeature: (feature) => api.post('/license/check-feature', null, { params: { feature } }),
+}
+
 export const logsApi = {
   list: (params) => api.get('/logs', { params }),
   modules: () => api.get('/logs/modules'),

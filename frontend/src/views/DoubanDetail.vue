@@ -70,6 +70,24 @@
                       <el-tag size="small" type="info">{{ row.source_service || 'nullbr' }}</el-tag>
                     </template>
                   </el-table-column>
+                  <el-table-column label="画质" width="160" align="center">
+                    <template #default="{ row }">
+                      <template v-if="row.quality && (Array.isArray(row.quality) ? row.quality.length : row.quality)">
+                        <el-tag size="small">{{ Array.isArray(row.quality) ? row.quality.join(', ') : row.quality }}</el-tag>
+                      </template>
+                      <template v-else-if="getRowTags(row).formats.length">
+                        <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
+                      </template>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="分辨率" width="100" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" type="info" v-if="row.resolution">{{ Array.isArray(row.resolution) ? row.resolution.join(', ') : row.resolution }}</el-tag>
+                      <el-tag size="small" type="info" v-else-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
                   <el-table-column label="大小" width="110" align="center">
                     <template #default="{ row }">{{ row.size || '-' }}</template>
                   </el-table-column>
@@ -126,6 +144,24 @@
                   <el-table-column label="来源" width="100" align="center">
                     <template #default="{ row }">
                       <el-tag size="small" type="info">{{ row.source_service || 'pansou' }}</el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="画质" width="160" align="center">
+                    <template #default="{ row }">
+                      <template v-if="row.quality && (Array.isArray(row.quality) ? row.quality.length : row.quality)">
+                        <el-tag size="small">{{ Array.isArray(row.quality) ? row.quality.join(', ') : row.quality }}</el-tag>
+                      </template>
+                      <template v-else-if="getRowTags(row).formats.length">
+                        <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
+                      </template>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="分辨率" width="100" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" type="info" v-if="row.resolution">{{ Array.isArray(row.resolution) ? row.resolution.join(', ') : row.resolution }}</el-tag>
+                      <el-tag size="small" type="info" v-else-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
+                      <span v-else class="text-muted">-</span>
                     </template>
                   </el-table-column>
                   <el-table-column label="大小" width="110" align="center">
@@ -285,6 +321,24 @@
                       <span>{{ row.tg_channel || '-' }}</span>
                     </template>
                   </el-table-column>
+                  <el-table-column label="画质" width="160" align="center">
+                    <template #default="{ row }">
+                      <template v-if="row.quality && (Array.isArray(row.quality) ? row.quality.length : row.quality)">
+                        <el-tag size="small">{{ Array.isArray(row.quality) ? row.quality.join(', ') : row.quality }}</el-tag>
+                      </template>
+                      <template v-else-if="getRowTags(row).formats.length">
+                        <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
+                      </template>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="分辨率" width="100" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" type="info" v-if="row.resolution">{{ Array.isArray(row.resolution) ? row.resolution.join(', ') : row.resolution }}</el-tag>
+                      <el-tag size="small" type="info" v-else-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
                   <el-table-column label="大小" width="110" align="center">
                     <template #default="{ row }">{{ row.size || '-' }}</template>
                   </el-table-column>
@@ -340,6 +394,20 @@
                   <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
                     <template #default="{ row }">{{ row.name || '-' }}</template>
                   </el-table-column>
+                  <el-table-column label="画质" width="160" align="center">
+                    <template #default="{ row }">
+                      <template v-if="getRowTags(row).formats.length">
+                        <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
+                      </template>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="分辨率" width="100" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" type="info" v-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
                   <el-table-column label="大小" width="120" align="center">
                     <template #default="{ row }">{{ formatSize(row.size) || '-' }}</template>
                   </el-table-column>
@@ -374,6 +442,20 @@
                 <el-table v-if="seedhubMagnetResources.length" :data="pagedSeedhubMagnetResources" stripe class="resource-table">
                   <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
                     <template #default="{ row }">{{ row.name || '-' }}</template>
+                  </el-table-column>
+                  <el-table-column label="画质" width="160" align="center">
+                    <template #default="{ row }">
+                      <template v-if="getRowTags(row).formats.length">
+                        <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
+                      </template>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="分辨率" width="100" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" type="info" v-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
+                      <span v-else class="text-muted">-</span>
+                    </template>
                   </el-table-column>
                   <el-table-column label="大小" width="120" align="center">
                     <template #default="{ row }">{{ formatSize(row.size) || '-' }}</template>
@@ -415,11 +497,19 @@
                   </el-table-column>
                   <el-table-column label="画质" width="160" align="center">
                     <template #default="{ row }">
-                      <template v-if="row.quality">{{ row.quality }}</template>
+                      <template v-if="row.quality">
+                        <el-tag size="small">{{ row.quality }}</el-tag>
+                      </template>
                       <template v-else-if="getRowTags(row).formats.length">
                         <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
                       </template>
-                      <span v-else>-</span>
+                      <span v-else class="text-muted">-</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="分辨率" width="100" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" type="info" v-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
+                      <span v-else class="text-muted">-</span>
                     </template>
                   </el-table-column>
                   <el-table-column label="操作" width="180" align="center" fixed="right">
@@ -455,6 +545,20 @@
             <el-table v-if="ed2kResources.length" :data="pagedEd2kResources" stripe class="resource-table">
               <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
                 <template #default="{ row }">{{ row.title || row.name || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="画质" width="160" align="center">
+                <template #default="{ row }">
+                  <template v-if="getRowTags(row).formats.length">
+                    <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
+                  </template>
+                  <span v-else class="text-muted">-</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="分辨率" width="100" align="center">
+                <template #default="{ row }">
+                  <el-tag size="small" type="info" v-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
+                  <span v-else class="text-muted">-</span>
+                </template>
               </el-table-column>
               <el-table-column label="操作" width="180" align="center" fixed="right">
                 <template #default="{ row }">
