@@ -269,8 +269,19 @@
                 v-model="hdhiveForm.apiKey"
                 type="textarea"
                 :rows="3"
-                placeholder="请输入 HDHive Open API Key"
+                placeholder="请输入 HDHive Open API Key（仅 Premium 会员需要）"
               />
+            </el-form-item>
+            <el-form-item label="Cookie">
+              <el-input
+                v-model="hdhiveForm.cookie"
+                type="textarea"
+                :rows="3"
+                placeholder="请输入 HDHive Cookie（用于 Cookie 签到）"
+              />
+              <el-text size="small" type="info" style="margin-top: 4px">
+                从浏览器登录 HDHive 后，在开发者工具中复制 Cookie 粘贴到此处
+              </el-text>
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingHdhive" @click="handleSaveHdhive">保存</el-button>
@@ -1538,6 +1549,7 @@ const nullbrForm = ref({
 
 const hdhiveForm = ref({
   apiKey: '',
+  cookie: '',
   autoCheckinEnabled: false,
   autoCheckinMode: 'normal',
   autoCheckinMethod: 'api',
@@ -2530,6 +2542,7 @@ const handleSaveHdhive = async () => {
   try {
     await settingsApi.updateRuntime({
       hdhive_api_key: hdhiveForm.value.apiKey,
+      hdhive_cookie: hdhiveForm.value.cookie,
       hdhive_auto_checkin_enabled: hdhiveForm.value.autoCheckinEnabled,
       hdhive_auto_checkin_mode: hdhiveForm.value.autoCheckinMode || 'normal',
       hdhive_auto_checkin_method: hdhiveForm.value.autoCheckinMethod || 'api',
@@ -3420,6 +3433,7 @@ const fetchRuntimeSettings = async () => {
       accountForm.value.newUsername = data.auth_username || 'admin'
     }
     hdhiveForm.value.apiKey = data.hdhive_api_key || ''
+    hdhiveForm.value.cookie = data.hdhive_cookie || ''
     hdhiveForm.value.autoCheckinEnabled = !!data.hdhive_auto_checkin_enabled
     hdhiveForm.value.autoCheckinMode = data.hdhive_auto_checkin_mode || 'normal'
     hdhiveForm.value.autoCheckinMethod = data.hdhive_auto_checkin_method || 'api'
