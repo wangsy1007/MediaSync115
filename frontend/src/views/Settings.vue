@@ -284,6 +284,19 @@
             <el-form-item label="启用自动签到">
               <el-switch v-model="hdhiveForm.autoCheckinEnabled" />
             </el-form-item>
+            <el-form-item label="签到方式">
+              <el-select
+                v-model="hdhiveForm.autoCheckinMethod"
+                style="width: 220px"
+                :disabled="!hdhiveForm.autoCheckinEnabled"
+              >
+                <el-option label="API Key（仅 Premium）" value="api" />
+                <el-option label="Cookie（所有用户）" value="cookie" />
+              </el-select>
+              <el-text size="small" type="info" style="margin-left: 8px">
+                {{ hdhiveForm.autoCheckinMethod === 'cookie' ? '使用浏览器 Cookie 签到，无需 Premium 会员' : '使用 Open API 签到，需要 Premium 会员' }}
+              </el-text>
+            </el-form-item>
             <el-form-item label="签到模式">
               <el-select
                 v-model="hdhiveForm.autoCheckinMode"
@@ -1527,6 +1540,7 @@ const hdhiveForm = ref({
   apiKey: '',
   autoCheckinEnabled: false,
   autoCheckinMode: 'normal',
+  autoCheckinMethod: 'api',
   autoCheckinRunTime: '09:00'
 })
 const embyForm = ref({
@@ -2507,10 +2521,6 @@ const checkHdhive = async (notify = false) => {
 }
 
 const handleSaveHdhive = async () => {
-  if (!String(hdhiveForm.value.apiKey || '').trim()) {
-    ElMessage.warning('请输入 HDHive API Key')
-    return
-  }
   if (hdhiveForm.value.autoCheckinEnabled && !String(hdhiveForm.value.autoCheckinRunTime || '').trim()) {
     ElMessage.warning('请选择 HDHive 自动签到执行时间')
     return
@@ -2522,6 +2532,7 @@ const handleSaveHdhive = async () => {
       hdhive_api_key: hdhiveForm.value.apiKey,
       hdhive_auto_checkin_enabled: hdhiveForm.value.autoCheckinEnabled,
       hdhive_auto_checkin_mode: hdhiveForm.value.autoCheckinMode || 'normal',
+      hdhive_auto_checkin_method: hdhiveForm.value.autoCheckinMethod || 'api',
       hdhive_auto_checkin_run_time: hdhiveForm.value.autoCheckinRunTime || '09:00'
     })
     await fetchRuntimeSettings()
@@ -2545,7 +2556,8 @@ const handleTestHdhive = async () => {
 }
 
 const handleRunHdhiveCheckin = async () => {
-  if (!String(hdhiveForm.value.apiKey || '').trim()) {
+  const method = hdhiveForm.value.autoCheckinMethod || 'api'
+  if (method === 'api' && !String(hdhiveForm.value.apiKey || '').trim()) {
     ElMessage.warning('请先填写 HDHive API Key')
     return
   }
@@ -2554,11 +2566,13 @@ const handleRunHdhiveCheckin = async () => {
   try {
     const { data } = await settingsApi.runHdhiveCheckin({
       mode: hdhiveForm.value.autoCheckinMode || 'normal',
+      method,
       api_key: hdhiveForm.value.apiKey
     })
-    await checkHdhive(false)
+    if (method === 'api') await checkHdhive(false)
     const modeLabel = hdhiveForm.value.autoCheckinMode === 'gamble' ? '赌狗签到' : '普通签到'
-    ElMessage.success(data?.message || `${modeLabel}执行成功`)
+    const methodLabel = method === 'cookie' ? '（Cookie）' : '（API）'
+    ElMessage.success(data?.message || `${modeLabel}${methodLabel}执行成功`)
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || 'HDHive 手动签到失败')
   } finally {
@@ -3408,6 +3422,7 @@ const fetchRuntimeSettings = async () => {
     hdhiveForm.value.apiKey = data.hdhive_api_key || ''
     hdhiveForm.value.autoCheckinEnabled = !!data.hdhive_auto_checkin_enabled
     hdhiveForm.value.autoCheckinMode = data.hdhive_auto_checkin_mode || 'normal'
+    hdhiveForm.value.autoCheckinMethod = data.hdhive_auto_checkin_method || 'api'
     hdhiveForm.value.autoCheckinRunTime = data.hdhive_auto_checkin_run_time || '09:00'
     tgForm.value.apiId = data.tg_api_id || ''
     tgForm.value.apiHash = data.tg_api_hash || ''

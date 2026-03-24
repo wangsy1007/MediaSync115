@@ -48,6 +48,7 @@ class RuntimeSettingsRequest(BaseModel):
     hdhive_base_url: Optional[str] = None
     hdhive_auto_checkin_enabled: Optional[bool] = None
     hdhive_auto_checkin_mode: Optional[str] = None
+    hdhive_auto_checkin_method: Optional[str] = None
     hdhive_auto_checkin_run_time: Optional[str] = None
     pansou_base_url: Optional[str] = None
     nullbr_app_id: Optional[str] = None
@@ -128,6 +129,7 @@ class TgIndexBackfillRequest(BaseModel):
 
 class HDHiveCheckinRequest(BaseModel):
     mode: Optional[str] = None
+    method: Optional[str] = None
     cookie: Optional[str] = None
     api_key: Optional[str] = None
     base_url: Optional[str] = None
@@ -243,10 +245,17 @@ def _validate_hdhive_checkin_settings(merged_settings: dict) -> None:
     if not enabled:
         return
 
-    api_key = str(merged_settings.get("hdhive_api_key") or "").strip()
+    method = str(merged_settings.get("hdhive_auto_checkin_method") or "api").strip().lower()
     base_url = str(merged_settings.get("hdhive_base_url") or "").strip()
-    if not api_key or not base_url:
-        raise HTTPException(status_code=400, detail="启用 HDHive 自动签到时必须配置 HDHive API Key 和 Base URL")
+
+    if method == "cookie":
+        cookie = str(merged_settings.get("hdhive_cookie") or "").strip()
+        if not cookie or not base_url:
+            raise HTTPException(status_code=400, detail="使用 Cookie 签到时必须配置 HDHive Cookie 和 Base URL")
+    else:
+        api_key = str(merged_settings.get("hdhive_api_key") or "").strip()
+        if not api_key or not base_url:
+            raise HTTPException(status_code=400, detail="使用 API Key 签到时必须配置 HDHive API Key 和 Base URL")
 
     mode = str(merged_settings.get("hdhive_auto_checkin_mode") or "normal").strip().lower()
     if mode not in {"normal", "gamble"}:
@@ -486,6 +495,7 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
     checkin_keys = {
         "hdhive_auto_checkin_enabled",
         "hdhive_auto_checkin_mode",
+        "hdhive_auto_checkin_method",
         "hdhive_auto_checkin_run_time",
     }
     if any(key in payload for key in checkin_keys) or payload.get("hdhive_api_key") is not None:
@@ -550,6 +560,10 @@ async def run_hdhive_checkin(payload: HDHiveCheckinRequest):
     if mode not in {"normal", "gamble"}:
         raise HTTPException(status_code=400, detail="HDHive 手动签到模式仅支持 normal 或 gamble")
 
+    method = str(payload.method or runtime_settings_service.get_hdhive_auto_checkin_method()).strip().lower()
+    if method not in {"api", "cookie"}:
+        method = "api"
+
     cookie = str(payload.cookie or "").strip()
     api_key = str(payload.api_key or "").strip()
     base_url = str(payload.base_url or "").strip()
@@ -564,6 +578,8 @@ async def run_hdhive_checkin(payload: HDHiveCheckinRequest):
         )
 
     try:
+        if method == "cookie":
+            return await service.check_in_by_cookie(gamble=(mode == "gamble"))
         return await service.check_in(gamble=(mode == "gamble"))
     except Exception as exc:
         from app.services.hdhive_service import HDHiveApiError

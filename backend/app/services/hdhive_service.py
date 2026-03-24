@@ -419,6 +419,7 @@ class HDHiveService:
         }
 
     async def check_in(self, gamble: bool = False) -> dict[str, Any]:
+        """使用 Open API（需要 API Key，仅 Premium）签到。"""
         _, payload = await self._request_open_api(
             "POST",
             "/checkin",
@@ -436,11 +437,71 @@ class HDHiveService:
             "success": True,
             "message": str(payload.get("message") or data.get("message") or "签到成功").strip(),
             "mode": "gamble" if gamble else "normal",
+            "method": "api",
             "code": str(payload.get("code") or "200").strip(),
             "data": data,
             "user": user_info,
             "points": self._extract_first_int(user_info.get("points")) if isinstance(user_info, dict) else None,
             "checked_in": bool(data.get("checked_in")),
+        }
+
+    def _get_cookie(self) -> str:
+        cookie = str(self._cookie or settings.HDHIVE_COOKIE or "").strip()
+        if cookie:
+            return cookie
+        raise ValueError("未配置 HDHive Cookie")
+
+    def _build_cookie_headers(self, *, json_body: bool = False) -> dict[str, str]:
+        headers = {
+            "user-agent": self._user_agent,
+            "accept": "application/json",
+            "cookie": self._get_cookie(),
+        }
+        if json_body:
+            headers["content-type"] = "application/json"
+        return headers
+
+    async def check_in_by_cookie(self, gamble: bool = False) -> dict[str, Any]:
+        """使用 Cookie（所有用户均可）签到。"""
+        headers = self._build_cookie_headers(json_body=True)
+        url = f"{self._base_url}/api/checkin"
+        body = {"is_gambler": True} if gamble else {}
+
+        client = self._create_client()
+        try:
+            response = await client.post(url, headers=headers, json=body)
+        finally:
+            await client.aclose()
+
+        payload: dict[str, Any] = {}
+        try:
+            raw = response.json()
+            if isinstance(raw, dict):
+                payload = raw
+        except Exception:
+            payload = {}
+
+        success = bool(payload.get("success")) if payload else response.is_success
+        if response.is_error or not success:
+            raise HDHiveApiError(
+                status_code=response.status_code or 500,
+                code=str(payload.get("code") or "").strip(),
+                message=str(payload.get("message") or "").strip(),
+                description=str(payload.get("description") or "").strip(),
+            )
+
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+
+        return {
+            "success": True,
+            "message": str(payload.get("message") or data.get("message") or "签到成功").strip(),
+            "mode": "gamble" if gamble else "normal",
+            "method": "cookie",
+            "code": str(payload.get("code") or "200").strip(),
+            "data": data,
+            "user": {},
+            "points": None,
+            "checked_in": True,
         }
 
     async def unlock_resource(self, slug: str) -> dict[str, Any]:

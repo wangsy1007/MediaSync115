@@ -76,6 +76,7 @@ class RuntimeSettingsService:
             "hdhive_base_url": settings.HDHIVE_BASE_URL,
             "hdhive_auto_checkin_enabled": False,
             "hdhive_auto_checkin_mode": "normal",
+            "hdhive_auto_checkin_method": "api",
             "hdhive_auto_checkin_run_time": "09:00",
             "pansou_base_url": settings.PANSOU_BASE_URL,
             "nullbr_app_id": settings.NULLBR_APP_ID,
@@ -335,6 +336,12 @@ class RuntimeSettingsService:
         if value == "gamble":
             return "gamble"
         return "normal"
+
+    def get_hdhive_auto_checkin_method(self) -> str:
+        value = str(self._data.get("hdhive_auto_checkin_method") or "api").strip().lower()
+        if value == "cookie":
+            return "cookie"
+        return "api"
 
     def get_hdhive_auto_checkin_run_time(self) -> str:
         return str(self._data.get("hdhive_auto_checkin_run_time", "09:00") or "09:00")
@@ -781,6 +788,7 @@ class RuntimeSettingsService:
             "hdhive_base_url": self.get_hdhive_base_url(),
             "hdhive_auto_checkin_enabled": self.get_hdhive_auto_checkin_enabled(),
             "hdhive_auto_checkin_mode": self.get_hdhive_auto_checkin_mode(),
+            "hdhive_auto_checkin_method": self.get_hdhive_auto_checkin_method(),
             "hdhive_auto_checkin_run_time": self.get_hdhive_auto_checkin_run_time(),
             "pansou_base_url": self.get_pansou_base_url(),
             "nullbr_app_id": self.get_nullbr_app_id(),

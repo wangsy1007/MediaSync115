@@ -69,7 +69,11 @@ class JobRegistry:
 
     async def _hdhive_checkin(self, **kwargs) -> dict[str, Any]:
         gamble = runtime_settings_service.get_hdhive_auto_checkin_mode() == "gamble"
-        result = await hdhive_service.check_in(gamble=gamble)
+        method = runtime_settings_service.get_hdhive_auto_checkin_method()
+        if method == "cookie":
+            result = await hdhive_service.check_in_by_cookie(gamble=gamble)
+        else:
+            result = await hdhive_service.check_in(gamble=gamble)
         if not bool(result.get("success")):
             raise ValueError(str(result.get("message") or "HDHive 自动签到失败"))
         return result
