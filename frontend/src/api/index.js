@@ -223,6 +223,7 @@ export const subscriptionApi = {
   create: (data) => api.post('/subscriptions', data),
   update: (id, data) => api.put(`/subscriptions/${id}`, data),
   delete: (id) => api.delete(`/subscriptions/${id}`),
+  deleteByType: (mediaType) => api.delete(`/subscriptions/batch/${mediaType}`),
   
   // 下载记录相关
   getDownloads: (id, status = null) => api.get(`/subscriptions/${id}/downloads`, { params: { status } }),

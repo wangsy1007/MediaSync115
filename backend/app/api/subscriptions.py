@@ -4,7 +4,7 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_, and_
+from sqlalchemy import delete as sa_delete, select, or_, and_
 from sqlalchemy.exc import IntegrityError
 from app.core.database import get_db
 from app.models.models import (
@@ -610,6 +610,28 @@ async def update_subscription(
     await db.commit()
     await db.refresh(subscription)
     return subscription
+
+
+@router.delete("/batch/{media_type}")
+async def delete_subscriptions_by_type(media_type: str, db: AsyncSession = Depends(get_db)):
+    if media_type not in ("movie", "tv"):
+        raise HTTPException(status_code=400, detail="media_type 必须为 movie 或 tv")
+
+    subs_result = await db.execute(
+        select(Subscription.id).where(Subscription.media_type == media_type)
+    )
+    sub_ids = [row[0] for row in subs_result.all()]
+    if not sub_ids:
+        return {"deleted_count": 0}
+
+    await db.execute(
+        sa_delete(DownloadRecord).where(DownloadRecord.subscription_id.in_(sub_ids))
+    )
+    await db.execute(
+        sa_delete(Subscription).where(Subscription.id.in_(sub_ids))
+    )
+    await db.commit()
+    return {"deleted_count": len(sub_ids)}
 
 
 @router.delete("/{subscription_id}")

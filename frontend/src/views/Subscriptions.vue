@@ -8,6 +8,14 @@
           <el-radio-button value="movie">电影 ({{ countMovie }})</el-radio-button>
           <el-radio-button value="tv">电视剧 ({{ countTv }})</el-radio-button>
         </el-radio-group>
+        <template v-if="activeTab === 'subscriptions' && countAll > 0">
+          <el-button v-if="countMovie > 0" type="danger" plain size="small" @click="handleClearByType('movie')">
+            清空电影订阅
+          </el-button>
+          <el-button v-if="countTv > 0" type="danger" plain size="small" @click="handleClearByType('tv')">
+            清空电视剧订阅
+          </el-button>
+        </template>
         <template v-else>
           <el-switch v-model="missingOnly" active-text="仅看缺集" @change="() => fetchTvMissingStatus(false)" />
           <el-button type="primary" :loading="missingLoading" @click="() => fetchTvMissingStatus(true)">
@@ -127,7 +135,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { settingsApi, subscriptionApi } from '@/api'
 import { Star } from '@element-plus/icons-vue'
 
@@ -252,6 +260,29 @@ const handleDelete = async (sub) => {
     ElMessage.success('已取消订阅')
   } catch (error) {
     ElMessage.error('操作失败')
+  }
+}
+
+const handleClearByType = async (mediaType) => {
+  const label = mediaType === 'movie' ? '电影' : '电视剧'
+  const count = mediaType === 'movie' ? countMovie.value : countTv.value
+  try {
+    await ElMessageBox.confirm(
+      `确定要清空全部 ${count} 条${label}订阅吗？此操作不可撤销。`,
+      `清空${label}订阅`,
+      { confirmButtonText: '确定清空', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  try {
+    const { data } = await subscriptionApi.deleteByType(mediaType)
+    const deleted = data?.deleted_count || 0
+    allSubscriptions.value = allSubscriptions.value.filter(s => s.media_type !== mediaType)
+    missingRows.value = mediaType === 'tv' ? [] : missingRows.value
+    ElMessage.success(`已清空 ${deleted} 条${label}订阅`)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '清空失败')
   }
 }
 
