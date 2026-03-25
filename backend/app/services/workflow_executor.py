@@ -2,6 +2,8 @@ import asyncio
 from collections import defaultdict, deque
 from typing import Any
 
+from app.services.operation_log_service import operation_log_service
+
 
 class WorkflowExecutor:
     def __init__(self):
@@ -38,6 +40,13 @@ class WorkflowExecutor:
         if not queue:
             queue = deque(actions_map.keys())
 
+        await operation_log_service.log_background_event(
+            source_type="background_task", module="workflow",
+            action="workflow.execute.start", status="info",
+            message=f"工作流开始执行（ID: {workflow_id}，共 {len(actions_map)} 个动作）",
+            extra={"workflow_id": workflow_id, "action_count": len(actions_map)},
+        )
+
         visited = 0
         while queue:
             node = queue.popleft()
@@ -47,6 +56,12 @@ class WorkflowExecutor:
 
             ok, message = await self._execute_action(workflow_id, action, context_data)
             if not ok:
+                await operation_log_service.log_background_event(
+                    source_type="background_task", module="workflow",
+                    action="workflow.execute.action_failed", status="failed",
+                    message=f"工作流动作执行失败（ID: {workflow_id}）：{message[:200]}",
+                    extra={"workflow_id": workflow_id, "action_id": node, "error": message[:300]},
+                )
                 return False, message, context_data
 
             visited += 1
@@ -56,8 +71,20 @@ class WorkflowExecutor:
                     queue.append(nxt)
 
         if visited == 0:
+            await operation_log_service.log_background_event(
+                source_type="background_task", module="workflow",
+                action="workflow.execute.empty", status="warning",
+                message=f"工作流未执行任何动作（ID: {workflow_id}）",
+                extra={"workflow_id": workflow_id},
+            )
             return False, "工作流未执行任何动作", context_data
 
+        await operation_log_service.log_background_event(
+            source_type="background_task", module="workflow",
+            action="workflow.execute.success", status="success",
+            message=f"工作流执行成功（ID: {workflow_id}，执行 {visited} 个动作）",
+            extra={"workflow_id": workflow_id, "executed_actions": visited},
+        )
         return True, "工作流执行成功", context_data
 
     async def _execute_action(self, workflow_id: int, action: dict[str, Any], context: dict[str, Any]) -> tuple[bool, str]:

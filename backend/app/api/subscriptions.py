@@ -16,6 +16,7 @@ from app.models.models import (
     SubscriptionExecutionLog,
     SubscriptionStepLog,
 )
+from app.services.operation_log_service import operation_log_service
 from app.services.subscription_service import subscription_service
 from app.services.subscription_run_task_service import subscription_run_task_service
 from app.services.tmdb_service import tmdb_service
@@ -631,6 +632,13 @@ async def delete_subscriptions_by_type(media_type: str, db: AsyncSession = Depen
         sa_delete(Subscription).where(Subscription.id.in_(sub_ids))
     )
     await db.commit()
+    label = "电影" if media_type == "movie" else "电视剧"
+    await operation_log_service.log_background_event(
+        source_type="api", module="subscriptions",
+        action="subscription.batch_delete", status="success",
+        message=f"批量清空{label}订阅：共删除 {len(sub_ids)} 条",
+        extra={"media_type": media_type, "deleted_count": len(sub_ids)},
+    )
     return {"deleted_count": len(sub_ids)}
 
 

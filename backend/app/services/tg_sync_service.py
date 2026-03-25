@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.core.database import async_session_maker
 from app.models.models import TgSyncState
+from app.services.operation_log_service import operation_log_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.tg_index_service import tg_index_service
 from app.services.tg_service import FloodWaitError, tg_service
@@ -179,6 +180,12 @@ class TgSyncService:
 
             channels = runtime_settings_service.get_tg_channel_usernames() or []
             batch_size = runtime_settings_service.get_tg_backfill_batch_size()
+            await operation_log_service.log_background_event(
+                source_type="background_task", module="tg_sync",
+                action="tg.sync.backfill.start", status="info",
+                message=f"TG 全量回填开始（{'重建索引' if rebuild else '增量回填'}，{len(channels)} 个频道）",
+                extra={"job_id": job_id, "rebuild": rebuild, "channels": channels},
+            )
             total_processed = 0
             total_indexed = 0
             errors: list[str] = []
@@ -202,14 +209,22 @@ class TgSyncService:
                     errors.append(f"{channel}: {exc}")
                     await self._touch_state(channel=channel, error_message=str(exc))
 
+            status = "success" if not errors else "partial"
+            msg = "全量回填完成" if not errors else "全量回填完成（部分频道失败）"
             await self._set_job(
                 job_id,
-                status="success" if not errors else "partial",
-                message="全量回填完成" if not errors else "全量回填完成（部分频道失败）",
+                status=status,
+                message=msg,
                 finished_at=datetime.now(timezone.utc).isoformat(),
                 processed_messages=total_processed,
                 indexed_rows=total_indexed,
                 errors=errors,
+            )
+            await operation_log_service.log_background_event(
+                source_type="background_task", module="tg_sync",
+                action="tg.sync.backfill.finish", status=status,
+                message=f"TG 全量回填{msg}：处理 {total_processed} 条消息，索引 {total_indexed} 行",
+                extra={"job_id": job_id, "processed": total_processed, "indexed": total_indexed, "errors": errors[:5]},
             )
         except Exception as exc:
             await self._set_job(
@@ -218,12 +233,24 @@ class TgSyncService:
                 message=str(exc),
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
+            await operation_log_service.log_background_event(
+                source_type="background_task", module="tg_sync",
+                action="tg.sync.backfill.error", status="failed",
+                message=f"TG 全量回填失败：{str(exc)[:200]}",
+                extra={"job_id": job_id, "error": str(exc)[:300]},
+            )
 
     async def _run_incremental(self, job_id: str) -> None:
         try:
             tg_service._ensure_search_config()
             channels = runtime_settings_service.get_tg_channel_usernames() or []
             batch_size = runtime_settings_service.get_tg_backfill_batch_size()
+            await operation_log_service.log_background_event(
+                source_type="background_task", module="tg_sync",
+                action="tg.sync.incremental.start", status="info",
+                message=f"TG 增量同步开始（{len(channels)} 个频道）",
+                extra={"job_id": job_id, "channels": channels},
+            )
             total_processed = 0
             total_indexed = 0
             errors: list[str] = []
@@ -249,14 +276,22 @@ class TgSyncService:
                     errors.append(f"{channel}: {exc}")
                     await self._touch_state(channel=channel, error_message=str(exc))
 
+            status = "success" if not errors else "partial"
+            msg = "增量同步完成" if not errors else "增量同步完成（部分频道失败）"
             await self._set_job(
                 job_id,
-                status="success" if not errors else "partial",
-                message="增量同步完成" if not errors else "增量同步完成（部分频道失败）",
+                status=status,
+                message=msg,
                 finished_at=datetime.now(timezone.utc).isoformat(),
                 processed_messages=total_processed,
                 indexed_rows=total_indexed,
                 errors=errors,
+            )
+            await operation_log_service.log_background_event(
+                source_type="background_task", module="tg_sync",
+                action="tg.sync.incremental.finish", status=status,
+                message=f"TG 增量同步{msg}：处理 {total_processed} 条消息，索引 {total_indexed} 行",
+                extra={"job_id": job_id, "processed": total_processed, "indexed": total_indexed, "errors": errors[:5]},
             )
         except Exception as exc:
             await self._set_job(
@@ -264,6 +299,12 @@ class TgSyncService:
                 status="failed",
                 message=str(exc),
                 finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            await operation_log_service.log_background_event(
+                source_type="background_task", module="tg_sync",
+                action="tg.sync.incremental.error", status="failed",
+                message=f"TG 增量同步失败：{str(exc)[:200]}",
+                extra={"job_id": job_id, "error": str(exc)[:300]},
             )
 
     async def start_backfill(self, *, rebuild: bool = False) -> dict[str, Any]:

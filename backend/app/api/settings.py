@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from app.services.hdhive_service import hdhive_service
 from app.services.nullbr_service import nullbr_service
+from app.services.operation_log_service import operation_log_service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.app_metadata_service import app_metadata_service
@@ -513,6 +514,17 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
         await emby_sync_scheduler_service.ensure_sync_task()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    _secret_keys = {"hdhive_cookie", "hdhive_api_key", "nullbr_api_key", "tg_session", "tg_api_hash", "tmdb_api_key", "emby_api_key", "tg_bot_token", "license_key"}
+    safe_keys = [k for k in payload.keys() if k not in _secret_keys]
+    redacted_keys = [k for k in payload.keys() if k in _secret_keys]
+    summary_parts = safe_keys + [f"{k}(已脱敏)" for k in redacted_keys]
+    await operation_log_service.log_background_event(
+        source_type="api", module="settings",
+        action="settings.update", status="success",
+        message=f"运行时设置已更新：{', '.join(summary_parts[:10])}{'...' if len(summary_parts) > 10 else ''}",
+        extra={"updated_keys": list(payload.keys())},
+    )
     return {
         "success": True,
         "settings": updated,

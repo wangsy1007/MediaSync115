@@ -4,6 +4,7 @@ import re
 from typing import Any
 from urllib.parse import unquote
 
+from app.services.operation_log_service import operation_log_service
 from app.services.pan115_service import pan115_service
 from app.services.emby_service import emby_service
 from app.utils.name_parser import name_parser
@@ -75,6 +76,12 @@ class SyncService:
         """
         基于 Emby 查漏补缺的 115 转存策略
         """
+        await operation_log_service.log_background_event(
+            source_type="background_task", module="sync",
+            action="sync.tv_show.start", status="info",
+            message=f"开始同步剧集 (TMDB ID: {tmdb_id})",
+            extra={"tmdb_id": tmdb_id},
+        )
         try:
             # 1. 查询 Emby 媒体库
             existing_episodes = await emby_service.get_downloaded_episodes(tmdb_id)
@@ -151,6 +158,12 @@ class SyncService:
             if success:
                 # 6. 触发 Emby 刷新 (不阻塞等待)
                 asyncio.create_task(emby_service.refresh_library())
+                await operation_log_service.log_background_event(
+                    source_type="background_task", module="sync",
+                    action="sync.tv_show.success", status="success",
+                    message=f"剧集同步完成：成功转存 {len(missing_fids)} 集 (TMDB ID: {tmdb_id})",
+                    extra={"tmdb_id": tmdb_id, "saved_count": len(missing_fids), "files": matched_files[:10]},
+                )
                 return {
                     "success": True,
                     "message": f"成功转存 {len(missing_fids)} 集",
@@ -158,6 +171,12 @@ class SyncService:
                     "files": matched_files
                 }
             else:
+                await operation_log_service.log_background_event(
+                    source_type="background_task", module="sync",
+                    action="sync.tv_show.failed", status="failed",
+                    message=f"剧集转存失败 (TMDB ID: {tmdb_id})：{str(save_result)[:200]}",
+                    extra={"tmdb_id": tmdb_id},
+                )
                 return {
                     "success": False,
                     "message": f"转存失败: {save_result}",
@@ -165,6 +184,12 @@ class SyncService:
                 }
 
         except Exception as e:
+            await operation_log_service.log_background_event(
+                source_type="background_task", module="sync",
+                action="sync.tv_show.error", status="failed",
+                message=f"剧集同步异常 (TMDB ID: {tmdb_id})：{str(e)[:200]}",
+                extra={"tmdb_id": tmdb_id, "error": str(e)[:300]},
+            )
             return {"success": False, "message": f"同步过程中发生异常: {str(e)}", "saved_count": 0}
 
 

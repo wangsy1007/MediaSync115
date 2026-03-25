@@ -7,6 +7,7 @@ from app.services.emby_sync_index_service import emby_sync_index_service
 from app.services.explore_home_warmup_service import explore_home_warmup_service
 from app.core.database import async_session_maker
 from app.services.hdhive_service import hdhive_service
+from app.services.operation_log_service import operation_log_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.subscription_service import subscription_service
 
@@ -70,12 +71,30 @@ class JobRegistry:
     async def _hdhive_checkin(self, **kwargs) -> dict[str, Any]:
         gamble = runtime_settings_service.get_hdhive_auto_checkin_mode() == "gamble"
         method = runtime_settings_service.get_hdhive_auto_checkin_method()
+        method_label = "Cookie" if method == "cookie" else "API Key"
+        await operation_log_service.log_background_event(
+            source_type="scheduler", module="hdhive",
+            action="hdhive.checkin.start", status="info",
+            message=f"HDHive 自动签到开始（方式：{method_label}，模式：{'赌博' if gamble else '普通'}）",
+        )
         if method == "cookie":
             result = await hdhive_service.check_in_by_cookie(gamble=gamble)
         else:
             result = await hdhive_service.check_in(gamble=gamble)
         if not bool(result.get("success")):
+            await operation_log_service.log_background_event(
+                source_type="scheduler", module="hdhive",
+                action="hdhive.checkin.failed", status="failed",
+                message=f"HDHive 签到失败：{result.get('message') or '未知错误'}",
+                extra={"method": method, "gamble": gamble},
+            )
             raise ValueError(str(result.get("message") or "HDHive 自动签到失败"))
+        await operation_log_service.log_background_event(
+            source_type="scheduler", module="hdhive",
+            action="hdhive.checkin.success", status="success",
+            message=f"HDHive 签到成功（{method_label}）：{result.get('message') or ''}",
+            extra={"method": method, "gamble": gamble, "result": result},
+        )
         return result
 
     async def _check_subscription_nullbr(self, **kwargs) -> dict[str, Any]:

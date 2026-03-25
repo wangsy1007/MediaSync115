@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.database import async_session_maker
 from app.models.models import MediaType, Subscription
+from app.services.operation_log_service import operation_log_service
 from app.services.runtime_settings_service import runtime_settings_service
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,11 @@ async def run_chart_subscription() -> dict[str, Any]:
     settings_data = runtime_settings_service.get_all()
     enabled = bool(settings_data.get("chart_subscription_enabled", False))
     if not enabled:
+        await operation_log_service.log_background_event(
+            source_type="background_task", module="chart_subscription",
+            action="chart_subscription.skip", status="info",
+            message="榜单订阅未启用，跳过执行",
+        )
         return {"success": True, "message": "榜单订阅未启用", "skipped": True}
 
     sources: list[dict[str, str]] = settings_data.get("chart_subscription_sources") or []
@@ -103,6 +109,12 @@ async def run_chart_subscription() -> dict[str, Any]:
                 "existing": existing_count,
                 "failed": failed_count,
             })
+            await operation_log_service.log_background_event(
+                source_type="background_task", module="chart_subscription",
+                action="chart_subscription.chart_done", status="success",
+                message=f"榜单 {source_type}:{section_key} 处理完成：抓取 {len(items)} 条，新增 {new_count}，已有 {existing_count}，失败 {failed_count}",
+                extra={"source": source_type, "key": section_key, "fetched": len(items), "new": new_count},
+            )
         except Exception as exc:
             logger.exception("榜单 %s:%s 抓取失败: %s", source_type, section_key, exc)
             chart_results.append({
@@ -110,10 +122,22 @@ async def run_chart_subscription() -> dict[str, Any]:
                 "key": section_key,
                 "error": str(exc),
             })
+            await operation_log_service.log_background_event(
+                source_type="background_task", module="chart_subscription",
+                action="chart_subscription.chart_failed", status="failed",
+                message=f"榜单 {source_type}:{section_key} 抓取失败：{str(exc)[:200]}",
+                extra={"source": source_type, "key": section_key, "error": str(exc)[:300]},
+            )
 
     finished_at = datetime.now(timezone.utc).isoformat()
     message = f"榜单订阅完成：新增 {total_new}，已有 {total_existing}，失败 {total_failed}"
     logger.info(message)
+    await operation_log_service.log_background_event(
+        source_type="background_task", module="chart_subscription",
+        action="chart_subscription.finish", status="success" if total_failed == 0 else "warning",
+        message=message,
+        extra={"total_new": total_new, "total_existing": total_existing, "total_failed": total_failed},
+    )
 
     return {
         "success": True,

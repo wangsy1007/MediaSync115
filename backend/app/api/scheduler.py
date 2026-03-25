@@ -10,6 +10,7 @@ from app.core.database import get_db
 from app.models.scheduler_task import SchedulerTask
 from app.scheduler import scheduler_manager
 from app.services.job_registry import job_registry
+from app.services.operation_log_service import operation_log_service
 
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
 
@@ -46,6 +47,12 @@ async def list_scheduler_jobs():
 
 @router.post("/run/{job_id}")
 async def run_scheduler_job(job_id: str):
+    await operation_log_service.log_background_event(
+        source_type="api", module="scheduler",
+        action="scheduler.job.run_manual", status="info",
+        message=f"手动执行定时任务：{job_id}",
+        extra={"job_id": job_id},
+    )
     result = await scheduler_manager.run_now(job_id)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message") or "run failed")
@@ -78,6 +85,12 @@ async def create_dynamic_task(payload: SchedulerTaskCreate, db: AsyncSession = D
     await db.refresh(task)
 
     await scheduler_manager.update_dynamic_job(task)
+    await operation_log_service.log_background_event(
+        source_type="api", module="scheduler",
+        action="scheduler.task.create", status="success",
+        message=f"创建定时任务：{task.name}（{task.job_key}，{'启用' if task.enabled else '暂停'}）",
+        extra={"task_id": task.id, "job_key": task.job_key, "enabled": task.enabled},
+    )
     return task
 
 
@@ -108,6 +121,12 @@ async def update_dynamic_task(task_id: int, payload: SchedulerTaskUpdate, db: As
     await scheduler_manager.update_dynamic_job(task)
     if not task.enabled:
         await scheduler_manager.remove_dynamic_job(task.id)
+    await operation_log_service.log_background_event(
+        source_type="api", module="scheduler",
+        action="scheduler.task.update", status="success",
+        message=f"更新定时任务：{task.name}（{task.job_key}）",
+        extra={"task_id": task.id, "job_key": task.job_key, "updated_fields": list(data.keys())},
+    )
     return task
 
 
@@ -121,6 +140,12 @@ async def enable_dynamic_task(task_id: int, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(task)
     await scheduler_manager.update_dynamic_job(task)
+    await operation_log_service.log_background_event(
+        source_type="api", module="scheduler",
+        action="scheduler.task.enable", status="success",
+        message=f"启用定时任务：{task.name}（{task.job_key}）",
+        extra={"task_id": task.id, "job_key": task.job_key},
+    )
     return {"success": True}
 
 
@@ -134,6 +159,12 @@ async def pause_dynamic_task(task_id: int, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(task)
     await scheduler_manager.remove_dynamic_job(task.id)
+    await operation_log_service.log_background_event(
+        source_type="api", module="scheduler",
+        action="scheduler.task.pause", status="success",
+        message=f"暂停定时任务：{task.name}（{task.job_key}）",
+        extra={"task_id": task.id, "job_key": task.job_key},
+    )
     return {"success": True}
 
 
@@ -143,7 +174,15 @@ async def delete_dynamic_task(task_id: int, db: AsyncSession = Depends(get_db)):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    task_name = task.name
+    task_job_key = task.job_key
     await db.delete(task)
     await db.commit()
     await scheduler_manager.remove_dynamic_job(task_id)
+    await operation_log_service.log_background_event(
+        source_type="api", module="scheduler",
+        action="scheduler.task.delete", status="success",
+        message=f"删除定时任务：{task_name}（{task_job_key}）",
+        extra={"task_id": task_id, "job_key": task_job_key},
+    )
     return {"success": True}

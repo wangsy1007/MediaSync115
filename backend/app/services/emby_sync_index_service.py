@@ -13,6 +13,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.core.database import async_session_maker, ensure_tables_exist, is_missing_table_error
 from app.models.emby_sync_index import EmbyMediaIndex, EmbySyncState, EmbyTvEpisodeIndex
+from app.services.operation_log_service import operation_log_service
 from app.services.runtime_settings_service import runtime_settings_service
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,12 @@ class EmbySyncIndexService:
         async with self._lock:
             started_ts = time.perf_counter()
             started_at = datetime.utcnow()
+            await operation_log_service.log_background_event(
+                source_type="background_task", module="emby_sync",
+                action="emby.index.sync.start", status="info",
+                message=f"Emby 全量索引同步开始（触发方式：{trigger}）",
+                extra={"trigger": trigger},
+            )
             async with async_session_maker() as db:
                 state = await self._get_or_create_state(db)
                 state.status = "running"
@@ -171,12 +178,22 @@ class EmbySyncIndexService:
                 sync_payload = await self._collect_emby_snapshot()
                 await self._replace_snapshot(sync_payload, started_at, trigger, started_ts)
                 await self._clear_runtime_caches()
+                movie_count = len(sync_payload["movie_rows"])
+                tv_count = len(sync_payload["tv_rows"])
+                episode_count = len(sync_payload["episode_rows"])
+                elapsed_ms = int((time.perf_counter() - started_ts) * 1000)
+                await operation_log_service.log_background_event(
+                    source_type="background_task", module="emby_sync",
+                    action="emby.index.sync.success", status="success",
+                    message=f"Emby 全量索引同步完成：电影 {movie_count}，剧集 {tv_count}，单集 {episode_count}，耗时 {elapsed_ms}ms",
+                    extra={"trigger": trigger, "movie_count": movie_count, "tv_count": tv_count, "episode_count": episode_count, "elapsed_ms": elapsed_ms},
+                )
                 return {
                     "success": True,
                     "message": "Emby 全量同步完成",
-                    "movie_count": len(sync_payload["movie_rows"]),
-                    "tv_count": len(sync_payload["tv_rows"]),
-                    "episode_count": len(sync_payload["episode_rows"]),
+                    "movie_count": movie_count,
+                    "tv_count": tv_count,
+                    "episode_count": episode_count,
                 }
             except Exception as exc:
                 logger.exception("emby sync index failed")
@@ -191,6 +208,12 @@ class EmbySyncIndexService:
                     state.last_sync_duration_ms = elapsed_ms
                     state.last_sync_error = str(exc)[:2000]
                     await db.commit()
+                await operation_log_service.log_background_event(
+                    source_type="background_task", module="emby_sync",
+                    action="emby.index.sync.failed", status="failed",
+                    message=f"Emby 全量索引同步失败：{str(exc)[:200]}",
+                    extra={"trigger": trigger, "elapsed_ms": elapsed_ms, "error": str(exc)[:300]},
+                )
                 return {
                     "success": False,
                     "message": str(exc),

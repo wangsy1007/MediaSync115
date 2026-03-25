@@ -1708,6 +1708,13 @@ class SubscriptionService:
                     record.file_id = offline_folder_id
                     saved += 1
                     await self._notify_transfer_success(sub.title, record.resource_name, source, "离线下载")
+                    await operation_log_service.log_background_event(
+                        source_type="background_task", module="subscriptions",
+                        action="subscription.offline_transfer",
+                        status="success",
+                        message=f"[{sub.title}] 离线下载已提交：{record.resource_name}（{record.resource_type}）",
+                        extra={"subscription_id": sub.id, "resource_type": record.resource_type, "source": source},
+                    )
                     await self._create_step_log(
                         db,
                         run_id=run_id,
