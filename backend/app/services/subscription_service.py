@@ -232,6 +232,18 @@ class SubscriptionService:
                     status="info",
                     message=f"资源抓取完成，候选 {len(resources)} 条",
                 )
+                # 为每部影视记录资源抓取汇总
+                fetch_sources_tried = [t.get("payload", {}).get("source", t.get("step", "")) for t in fetch_trace if t.get("step") == "fetch_source_selected"]
+                await operation_log_service.log_background_event(
+                    source_type="background_task", module="subscriptions",
+                    action="subscription.item.fetch_done", status="success" if resources else "warning",
+                    message=(
+                        f"[{sub_title}] 资源抓取完成：候选 {len(resources)} 条"
+                        + (f"（命中来源：{', '.join(fetch_sources_tried)}）" if fetch_sources_tried else "（无命中来源）")
+                    ),
+                    trace_id=run_id,
+                    extra={"subscription_id": sub_id, "title": sub_title, "resource_count": len(resources), "sources_hit": fetch_sources_tried},
+                )
                 store_stats = await self._store_new_resources(db, sub_id, resources)
                 created_records = store_stats["created_records"]
                 duplicate_urls = store_stats["duplicate_urls"]
@@ -257,6 +269,17 @@ class SubscriptionService:
                         "duplicate_count": store_stats["duplicate_count"],
                         "invalid_count": store_stats["invalid_count"],
                     },
+                )
+                await operation_log_service.log_background_event(
+                    source_type="background_task", module="subscriptions",
+                    action="subscription.item.store_done",
+                    status="success" if created_records else "info",
+                    message=(
+                        f"[{sub_title}] 资源入库：新增 {len(created_records)} 条，"
+                        f"重复 {store_stats['duplicate_count']} 条，无效 {store_stats['invalid_count']} 条"
+                    ),
+                    trace_id=run_id,
+                    extra={"subscription_id": sub_id, "title": sub_title, "new": len(created_records), "dup": store_stats["duplicate_count"]},
                 )
 
                 should_auto_download = force_auto_download or bool(sub.auto_download)
@@ -286,6 +309,13 @@ class SubscriptionService:
                             step="auto_transfer_new_start",
                             status="info",
                             message=f"开始自动转存新资源 {len(created_records)} 条",
+                        )
+                        await operation_log_service.log_background_event(
+                            source_type="background_task", module="subscriptions",
+                            action="subscription.item.transfer_new_start", status="info",
+                            message=f"[{sub_title}] 开始自动转存新资源 {len(created_records)} 条",
+                            trace_id=run_id,
+                            extra={"subscription_id": sub_id, "title": sub_title, "count": len(created_records)},
                         )
                         new_auto_stats = await self._auto_save_resources(
                             db,
@@ -317,6 +347,14 @@ class SubscriptionService:
                                 f"失败 {new_auto_stats['failed']} 条"
                             ),
                         )
+                        await operation_log_service.log_background_event(
+                            source_type="background_task", module="subscriptions",
+                            action="subscription.item.transfer_new_done",
+                            status="success" if new_auto_stats["failed"] == 0 else "warning",
+                            message=f"[{sub_title}] 新资源转存完成：成功 {new_auto_stats['saved']} 条，失败 {new_auto_stats['failed']} 条",
+                            trace_id=run_id,
+                            extra={"subscription_id": sub_id, "title": sub_title, "saved": new_auto_stats["saved"], "failed": new_auto_stats["failed"]},
+                        )
                         if new_auto_stats.get("subscription_completed"):
                             cleanup_after_auto = new_auto_stats
 
@@ -330,6 +368,13 @@ class SubscriptionService:
                             step="auto_transfer_retry_start",
                             status="info",
                             message=f"开始重试历史记录 {len(retry_records)} 条",
+                        )
+                        await operation_log_service.log_background_event(
+                            source_type="background_task", module="subscriptions",
+                            action="subscription.item.transfer_retry_start", status="info",
+                            message=f"[{sub_title}] 开始重试历史记录 {len(retry_records)} 条",
+                            trace_id=run_id,
+                            extra={"subscription_id": sub_id, "title": sub_title, "count": len(retry_records)},
                         )
                         retry_auto_stats = await self._auto_save_resources(
                             db,
@@ -361,6 +406,14 @@ class SubscriptionService:
                                 f"失败 {retry_auto_stats['failed']} 条"
                             ),
                         )
+                        await operation_log_service.log_background_event(
+                            source_type="background_task", module="subscriptions",
+                            action="subscription.item.transfer_retry_done",
+                            status="success" if retry_auto_stats["failed"] == 0 else "warning",
+                            message=f"[{sub_title}] 历史重试完成：成功 {retry_auto_stats['saved']} 条，失败 {retry_auto_stats['failed']} 条",
+                            trace_id=run_id,
+                            extra={"subscription_id": sub_id, "title": sub_title, "saved": retry_auto_stats["saved"], "failed": retry_auto_stats["failed"]},
+                        )
                         if retry_auto_stats.get("subscription_completed"):
                             cleanup_after_auto = retry_auto_stats
 
@@ -379,6 +432,13 @@ class SubscriptionService:
                     )
                     if cleanup_after_auto is not None:
                         await self._delete_subscription_with_records(db, sub_id)
+                        await operation_log_service.log_background_event(
+                            source_type="background_task", module="subscriptions",
+                            action="subscription.item.cleanup_after_transfer", status="success",
+                            message=f"[{sub_title}] 转存完成后自动清理订阅：{str(cleanup_after_auto.get('cleanup_message') or '订阅已自动清理')}",
+                            trace_id=run_id,
+                            extra={"subscription_id": sub_id, "title": sub_title, "reason": cleanup_after_auto.get("cleanup_step")},
+                        )
                         await self._create_step_log(
                             db,
                             run_id=run_id,
@@ -667,6 +727,13 @@ class SubscriptionService:
                     message="电影订阅已有成功转存记录，已自动删除",
                     payload={"reason": "successful_transfer"},
                 )
+                await operation_log_service.log_background_event(
+                    source_type="background_task", module="subscriptions",
+                    action="subscription.item.cleanup_pre_scan", status="success",
+                    message=f"[{sub.title}] 预扫描清理：电影已有成功转存记录，自动删除订阅",
+                    trace_id=run_id,
+                    extra={"subscription_id": sub.id, "title": sub.title, "reason": "successful_transfer"},
+                )
                 return {"deleted": True}
 
             if sub.tmdb_id is None:
@@ -702,6 +769,13 @@ class SubscriptionService:
                         status="success",
                         message="电影已存在于 Emby，已自动删除订阅",
                         payload={"tmdb_id": sub.tmdb_id, "matched_item_ids": movie_status.get("item_ids") or []},
+                    )
+                    await operation_log_service.log_background_event(
+                        source_type="background_task", module="subscriptions",
+                        action="subscription.item.cleanup_pre_scan", status="success",
+                        message=f"[{sub.title}] 预扫描清理：电影已存在于 Emby，自动删除订阅",
+                        trace_id=run_id,
+                        extra={"subscription_id": sub.id, "title": sub.title, "reason": "emby_exists", "tmdb_id": sub.tmdb_id},
                     )
                     return {"deleted": True}
             elif status_text:
@@ -764,6 +838,13 @@ class SubscriptionService:
                     status="success",
                     message="剧集已不缺集，已自动删除订阅",
                     payload={"tmdb_id": sub.tmdb_id, "missing_count": 0},
+                )
+                await operation_log_service.log_background_event(
+                    source_type="background_task", module="subscriptions",
+                    action="subscription.item.cleanup_pre_scan", status="success",
+                    message=f"[{sub.title}] 预扫描清理：剧集已不缺集，自动删除订阅",
+                    trace_id=run_id,
+                    extra={"subscription_id": sub.id, "title": sub.title, "reason": "tv_no_missing", "tmdb_id": sub.tmdb_id},
                 )
                 return {"deleted": True, "tv_missing_snapshot": tv_missing_result}
             return {"deleted": False, "tv_missing_snapshot": tv_missing_result}
@@ -845,6 +926,13 @@ class SubscriptionService:
                 source_resources = []
 
             traces.extend(source_traces)
+            await operation_log_service.log_background_event(
+                source_type="background_task", module="subscriptions",
+                action="subscription.item.fetch_source",
+                status="success" if source_resources else "info",
+                message=f"[{sub.title}] 来源 {source} 返回 {len(source_resources)} 条资源",
+                extra={"subscription_id": sub.id, "title": sub.title, "source": source, "count": len(source_resources)},
+            )
             if source_resources:
                 traces.append(
                     {
@@ -1183,6 +1271,12 @@ class SubscriptionService:
                     "status": "warning",
                     "message": f"{label} 磁力抓取失败: {str(result)[:200]}",
                 })
+                await operation_log_service.log_background_event(
+                    source_type="background_task", module="subscriptions",
+                    action="subscription.item.fetch_offline_source", status="warning",
+                    message=f"[{sub.title}] 离线来源 {label} 抓取失败：{str(result)[:200]}",
+                    extra={"subscription_id": sub.id, "title": sub.title, "source": label, "error": str(result)[:300]},
+                )
             elif result:
                 merged.extend(result)
                 traces.append({
@@ -1191,6 +1285,12 @@ class SubscriptionService:
                     "message": f"{label} 磁力资源 {len(result)} 条",
                     "payload": {"source": label, "count": len(result)},
                 })
+                await operation_log_service.log_background_event(
+                    source_type="background_task", module="subscriptions",
+                    action="subscription.item.fetch_offline_source", status="success",
+                    message=f"[{sub.title}] 离线来源 {label} 返回 {len(result)} 条磁力资源",
+                    extra={"subscription_id": sub.id, "title": sub.title, "source": label, "count": len(result)},
+                )
 
         if merged:
             traces.append({
@@ -1872,6 +1972,13 @@ class SubscriptionService:
                             "save_mode": "direct",
                         },
                     )
+                    await operation_log_service.log_background_event(
+                        source_type="background_task", module="subscriptions",
+                        action="subscription.record.transfer_ok", status="success",
+                        message=f"[{sub.title}] [{source}] 精准转存成功：{record.resource_name}（选中 {len(selected_file_ids)} 个文件，剩余缺集 {len(missing_episodes)} 集）",
+                        trace_id=run_id,
+                        extra={"subscription_id": sub.id, "record_id": record.id, "source": source, "selected_count": len(selected_file_ids), "remaining_missing": len(missing_episodes)},
+                    )
                     if not missing_episodes:
                         subscription_completed = True
                         cleanup_step = "subscription_cleanup_tv_completed_after_transfer"
@@ -1912,6 +2019,13 @@ class SubscriptionService:
                             "save_mode": "direct",
                         },
                     )
+                    await operation_log_service.log_background_event(
+                        source_type="background_task", module="subscriptions",
+                        action="subscription.record.transfer_ok", status="success",
+                        message=f"[{sub.title}] [{source}] 分享转存成功：{record.resource_name}",
+                        trace_id=run_id,
+                        extra={"subscription_id": sub.id, "record_id": record.id, "source": source, "save_mode": "direct"},
+                    )
                     subscription_completed = True
                     cleanup_step = "subscription_cleanup_movie_transferred"
                     cleanup_message = "电影转存成功，已自动删除订阅"
@@ -1948,6 +2062,13 @@ class SubscriptionService:
                             "reason": "already_received",
                         },
                     )
+                    await operation_log_service.log_background_event(
+                        source_type="background_task", module="subscriptions",
+                        action="subscription.record.transfer_ok", status="success",
+                        message=f"[{sub.title}] [{source}] 资源已在网盘中：{record.resource_name}",
+                        trace_id=run_id,
+                        extra={"subscription_id": sub.id, "record_id": record.id, "source": source, "reason": "already_received"},
+                    )
                     if not is_tv_subscription:
                         subscription_completed = True
                         cleanup_step = "subscription_cleanup_movie_transferred"
@@ -1978,6 +2099,13 @@ class SubscriptionService:
                         "record_id": record.id,
                         "error": str(exc)[:500],
                     },
+                )
+                await operation_log_service.log_background_event(
+                    source_type="background_task", module="subscriptions",
+                    action="subscription.record.transfer_fail", status="failed",
+                    message=f"[{sub.title}] [{source}] 转存失败：{record.resource_name}（{str(exc)[:200]}）",
+                    trace_id=run_id,
+                    extra={"subscription_id": sub.id, "record_id": record.id, "source": source, "error": str(exc)[:300]},
                 )
                 errors.append(
                     {
