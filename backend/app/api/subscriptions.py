@@ -335,6 +335,13 @@ async def create_subscription(
         await db.rollback()
         raise HTTPException(status_code=400, detail="Subscription already exists")
     await db.refresh(new_subscription)
+    media_label = "电影" if subscription.media_type == MediaType.MOVIE else "电视剧"
+    await operation_log_service.log_background_event(
+        source_type="api", module="subscriptions",
+        action="subscription.create", status="success",
+        message=f"新增{media_label}订阅：{new_subscription.title}（TMDB: {new_subscription.tmdb_id or '无'}）",
+        extra={"subscription_id": new_subscription.id, "title": new_subscription.title, "media_type": media_label, "tmdb_id": new_subscription.tmdb_id},
+    )
     return new_subscription
 
 
@@ -651,6 +658,9 @@ async def delete_subscription(subscription_id: int, db: AsyncSession = Depends(g
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
 
+    sub_title = subscription.title
+    media_label = "电影" if subscription.media_type == MediaType.MOVIE else "电视剧"
+
     # 先删除关联下载记录，避免外键约束导致 500。
     downloads = await db.execute(
         select(DownloadRecord).where(DownloadRecord.subscription_id == subscription_id)
@@ -660,6 +670,12 @@ async def delete_subscription(subscription_id: int, db: AsyncSession = Depends(g
 
     await db.delete(subscription)
     await db.commit()
+    await operation_log_service.log_background_event(
+        source_type="api", module="subscriptions",
+        action="subscription.delete", status="success",
+        message=f"删除{media_label}订阅：{sub_title}",
+        extra={"subscription_id": subscription_id, "title": sub_title, "media_type": media_label},
+    )
     return {"message": "Subscription deleted"}
 
 
@@ -895,6 +911,12 @@ async def mark_download_failed(
 @router.post("/actions/run")
 @router.post("/system/run")
 async def run_subscription_check(payload: SubscriptionRunRequest, db: AsyncSession = Depends(get_db)):
+    await operation_log_service.log_background_event(
+        source_type="api", module="subscriptions",
+        action="subscription.run.manual", status="info",
+        message=f"手动触发订阅检查（频道：{payload.channel}，强制转存：{'是' if payload.force_auto_download else '否'}）",
+        extra={"channel": payload.channel, "force_auto_download": payload.force_auto_download},
+    )
     try:
         return await subscription_service.run_channel_check(
             db,
@@ -908,6 +930,12 @@ async def run_subscription_check(payload: SubscriptionRunRequest, db: AsyncSessi
 @router.post("/actions/run/background")
 @router.post("/system/run/background")
 async def start_subscription_check_background(payload: SubscriptionRunRequest):
+    await operation_log_service.log_background_event(
+        source_type="api", module="subscriptions",
+        action="subscription.run.background", status="info",
+        message=f"后台启动订阅检查（频道：{payload.channel}，强制转存：{'是' if payload.force_auto_download else '否'}）",
+        extra={"channel": payload.channel, "force_auto_download": payload.force_auto_download},
+    )
     try:
         return await subscription_run_task_service.start(
             payload.channel,

@@ -45,6 +45,13 @@ class SubscriptionService:
         normalized_channel = self._normalize_channel(channel)
         run_id = uuid4().hex
         started_at = datetime.utcnow()
+        await operation_log_service.log_background_event(
+            source_type="background_task", module="subscriptions",
+            action="subscription.check.start", status="info",
+            message=f"订阅检查任务启动（频道：{normalized_channel}）",
+            trace_id=run_id,
+            extra={"channel": normalized_channel, "force_auto_download": force_auto_download},
+        )
 
         result = {
             "channel": normalized_channel,
@@ -507,6 +514,31 @@ class SubscriptionService:
         result["finished_at"] = finished_at.isoformat()
         result["status"] = status.value
         result["message"] = message
+
+        await operation_log_service.log_background_event(
+            source_type="background_task", module="subscriptions",
+            action="subscription.check.finish", status=status.value,
+            message=(
+                f"订阅检查任务完成（频道：{normalized_channel}）：检查 {result['checked_count']} 项，"
+                f"新增资源 {result['new_resource_count']} 条，"
+                f"转存成功 {result['auto_saved_count']} 条，转存失败 {result['auto_failed_count']} 条，"
+                f"自动清理 {result['cleanup_deleted_count']} 项，"
+                f"失败 {result['failed_count']} 项"
+            ),
+            trace_id=run_id,
+            extra={
+                "channel": normalized_channel,
+                "checked_count": result["checked_count"],
+                "new_resource_count": result["new_resource_count"],
+                "auto_saved_count": result["auto_saved_count"],
+                "auto_failed_count": result["auto_failed_count"],
+                "cleanup_deleted_count": result["cleanup_deleted_count"],
+                "failed_count": result["failed_count"],
+                "hdhive_unlock_attempted_count": result["hdhive_unlock_attempted_count"],
+                "hdhive_unlock_success_count": result["hdhive_unlock_success_count"],
+                "hdhive_unlock_points_spent": result["hdhive_unlock_points_spent"],
+            },
+        )
 
         finalize_error = ""
         try:
