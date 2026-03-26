@@ -1863,6 +1863,17 @@ class SubscriptionService:
                             "target_folder_id": offline_folder_id,
                         },
                     )
+                    if sub.media_type != MediaType.TV:
+                        subscription_completed = True
+                        cleanup_step = "subscription_cleanup_movie_transferred"
+                        cleanup_message = "电影离线下载已提交，已自动删除订阅"
+                        cleanup_payload = {
+                            "source": source,
+                            "record_id": record.id,
+                            "resource_type": record.resource_type,
+                            "target_folder_id": offline_folder_id,
+                        }
+                        break
                     continue
 
                 share_link, receive_code = self._split_share_link_and_receive_code(record.resource_url)
@@ -2027,8 +2038,8 @@ class SubscriptionService:
                         extra={"subscription_id": sub.id, "record_id": record.id, "source": source, "save_mode": "direct"},
                     )
                     subscription_completed = True
-                    cleanup_step = "subscription_cleanup_movie_transferred"
-                    cleanup_message = "电影转存成功，已自动删除订阅"
+                    cleanup_step = "subscription_cleanup_transferred"
+                    cleanup_message = "转存成功，已自动删除订阅"
                     cleanup_payload = {
                         "source": source,
                         "record_id": record.id,
@@ -2071,8 +2082,8 @@ class SubscriptionService:
                     )
                     if not is_tv_subscription:
                         subscription_completed = True
-                        cleanup_step = "subscription_cleanup_movie_transferred"
-                        cleanup_message = "电影资源已在网盘中，已自动删除订阅"
+                        cleanup_step = "subscription_cleanup_transferred"
+                        cleanup_message = "资源已在网盘中，已自动删除订阅"
                         cleanup_payload = {
                             "source": source,
                             "record_id": record.id,
