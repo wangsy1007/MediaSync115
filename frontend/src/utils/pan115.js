@@ -16,6 +16,7 @@ const pickFirstString = (source, keys) => {
 const isFolderLikeItem = (item) => {
   if (!item || typeof item !== 'object') return false
   if (toTrimmedString(item.cid)) return true
+  if (toTrimmedString(item.is_directory) === '1') return true
 
   const folderFlags = [item.is_dir, item.isdir, item.is_folder, item.folder, item.directory]
   if (folderFlags.some(value => value === true || value === 1 || value === '1' || value === 'true')) {
@@ -25,7 +26,23 @@ const isFolderLikeItem = (item) => {
   const typeValue = pickFirstString(item, ['type', 'item_type', 'file_type', 'kind', 'category']).toLowerCase()
   if (FOLDER_TYPE_VALUES.has(typeValue)) return true
 
-  return !toTrimmedString(item.fid) && !toTrimmedString(item.pick_code) && !!pickFirstString(item, ['id', 'folder_id', 'file_id'])
+  const fileMarkers = [
+    item.sha1,
+    item.fs,
+    item.size,
+    item.file_size,
+    item.pick_code,
+    item.pc,
+    item.ico,
+    item.ftype,
+    item.play_long
+  ]
+  const hasStrongFileMarker = fileMarkers.some(value => toTrimmedString(value))
+  if (hasStrongFileMarker) {
+    return !toTrimmedString(item.sha1) && !toTrimmedString(item.fs) && !toTrimmedString(item.size) && !toTrimmedString(item.file_size) && !toTrimmedString(item.ico) && !toTrimmedString(item.ftype)
+  }
+
+  return !!pickFirstString(item, ['cid', 'fid', 'id', 'folder_id', 'file_id'])
 }
 
 export const normalizePan115FolderOptions = (list = []) => {
@@ -34,8 +51,8 @@ export const normalizePan115FolderOptions = (list = []) => {
   for (const item of Array.isArray(list) ? list : []) {
     if (!isFolderLikeItem(item)) continue
 
-    const id = pickFirstString(item, ['cid', 'id', 'folder_id', 'file_id'])
-    const name = pickFirstString(item, ['n', 'name', 'folder_name', 'file_name'])
+    const id = pickFirstString(item, ['cid', 'fid', 'id', 'folder_id', 'file_id'])
+    const name = pickFirstString(item, ['n', 'fn', 'name', 'folder_name', 'file_name'])
     if (!id || !name) continue
     if (id === '0') continue
 
