@@ -41,6 +41,28 @@
     <el-card>
       <div class="table-wrap">
         <el-table :data="logs" v-loading="loading" size="small">
+          <el-table-column type="expand" width="44">
+            <template #default="{ row }">
+              <div class="log-detail">
+                <div class="log-detail__block">
+                  <div class="log-detail__title">详细说明</div>
+                  <pre>{{ row.message || '-' }}</pre>
+                </div>
+                <div class="log-detail__block">
+                  <div class="log-detail__title">请求详情</div>
+                  <pre>{{ formatSummaryBlock(row.request_summary) }}</pre>
+                </div>
+                <div class="log-detail__block">
+                  <div class="log-detail__title">响应详情</div>
+                  <pre>{{ formatSummaryBlock(row.response_summary) }}</pre>
+                </div>
+                <div class="log-detail__block">
+                  <div class="log-detail__title">额外信息</div>
+                  <pre>{{ formatSummaryBlock(row.extra) }}</pre>
+                </div>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column prop="created_at" label="时间" min-width="170" :formatter="formatBeijingTableCell" />
           <el-table-column label="类型" width="130">
             <template #default="{ row }">{{ translateLabel(row.source_type, sourceTypeLabels) }}</template>
@@ -145,6 +167,9 @@ const actionLabels = {
   'explore.queue.subscribe.finish': '探索订阅完成',
   'explore.queue.save.start': '探索转存开始',
   'explore.queue.save.finish': '探索转存完成',
+  'api.request.start': '接口请求开始',
+  'api.request.finish': '接口请求完成',
+  'api.request.exception': '接口请求异常',
 }
 
 const translateLabel = (value, map) => {
@@ -220,6 +245,22 @@ const stringifySummary = (value) => {
   if (typeof value === 'string') return value
   try {
     return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+const formatSummaryBlock = (value) => {
+  if (!value) return '-'
+  if (typeof value === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2)
+    } catch {
+      return value
+    }
+  }
+  try {
+    return JSON.stringify(value, null, 2)
   } catch {
     return String(value)
   }
@@ -350,6 +391,35 @@ onMounted(async () => {
     }
   }
 
+  .log-detail {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(280px, 1fr));
+    gap: 12px;
+
+    &__block {
+      background: #f7f8fa;
+      border: 1px solid #ebeef5;
+      border-radius: 10px;
+      padding: 12px;
+
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 12px;
+        line-height: 1.6;
+        color: var(--ms-text-regular);
+      }
+    }
+
+    &__title {
+      margin-bottom: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ms-text-primary);
+    }
+  }
+
   .pager-wrap {
     margin-top: 16px;
     display: flex;
@@ -377,6 +447,10 @@ onMounted(async () => {
           width: 100%;
         }
       }
+    }
+
+    .log-detail {
+      grid-template-columns: 1fr;
     }
 
     .pager-wrap {
