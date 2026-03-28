@@ -1,6 +1,7 @@
 services:
   mediasync115:
-    image: wangsy1007/mediasync115:latest
+    build: .
+    image: mediasync115:latest
     container_name: mediasync115
     restart: unless-stopped
     ports:
