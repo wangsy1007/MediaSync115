@@ -1537,6 +1537,7 @@ import { useRouter } from 'vue-router'
 import { formatBeijingDateTime, formatBeijingTableCell } from '@/utils/timezone'
 import { ALL_TABS, saveVisibleTabs } from '@/utils/detailTabs'
 import { ALL_RESOLUTIONS, ALL_FORMATS } from '@/utils/resourceTags'
+import { normalizePan115FolderOptions } from '@/utils/pan115'
 
 const router = useRouter()
 const activeSettingsTab = ref('pan115')
@@ -3828,15 +3829,7 @@ const handleRunAllChannels = async () => {
 const fetchFolders = async (cid = '0') => {
   try {
     const { data } = await pan115Api.getFileList(cid, 0, 50)
-    // API 返回 data.data 是数组，文件夹用 cid 字段标识
-    const list = data.data || []
-    return list
-      .filter(item => item.cid) // 只要有 cid 就是文件夹
-      .map(item => ({
-        id: String(item.cid),
-        name: item.n,
-        isLeaf: false
-      }))
+    return normalizePan115FolderOptions(data.data)
   } catch (error) {
     console.error('Failed to fetch folders:', error)
     return []

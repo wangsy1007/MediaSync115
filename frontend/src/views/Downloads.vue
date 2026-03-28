@@ -132,6 +132,7 @@ import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { pan115Api } from '@/api'
 import { Refresh } from '@element-plus/icons-vue'
+import { normalizePan115FolderOptions } from '@/utils/pan115'
 
 const offlineTasks = ref([])
 const loading = ref(false)
@@ -223,14 +224,7 @@ const normalizeTasks = (data) => {
 const fetchFolders = async (cid = '0') => {
   try {
     const { data } = await pan115Api.getFileList(cid, 0, 50)
-    const list = data.data || []
-    return list
-      .filter(item => item.cid)
-      .map(item => ({
-        id: String(item.cid),
-        name: item.n,
-        isLeaf: false
-      }))
+    return normalizePan115FolderOptions(data.data)
   } catch (error) {
     return []
   }
