@@ -701,12 +701,6 @@
             <el-form-item label="地区">
               <el-input v-model="tmdbForm.region" placeholder="例如: CN" />
             </el-form-item>
-            <el-form-item label="API 地址">
-              <el-input v-model="tmdbForm.baseUrl" placeholder="例如: https://api.themoviedb.org/3" />
-            </el-form-item>
-            <el-form-item label="图片地址">
-              <el-input v-model="tmdbForm.imageBaseUrl" placeholder="例如: https://image.tmdb.org/t/p/w500" />
-            </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingTmdb" @click="handleSaveTmdb">保存</el-button>
             </el-form-item>
@@ -1523,6 +1517,8 @@ import { normalizePan115FolderOptions } from '@/utils/pan115'
 const router = useRouter()
 const activeSettingsTab = ref('pan115')
 const officialUpdateRepository = 'wangsy1007/mediasync115'
+const TMDB_DEFAULT_BASE_URL = 'https://api.themoviedb.org/3'
+const TMDB_DEFAULT_IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/w500'
 const accountForm = ref({
   currentUsername: 'admin',
   newUsername: '',
@@ -1586,9 +1582,7 @@ const tgQrState = reactive({
 const tmdbForm = ref({
   apiKey: '',
   language: 'zh-CN',
-  region: 'CN',
-  baseUrl: 'https://api.themoviedb.org/3',
-  imageBaseUrl: 'https://image.tmdb.org/t/p/w500'
+  region: 'CN'
 })
 
 const schedulerForm = ref({
@@ -3077,22 +3071,14 @@ const handleSaveTmdb = () => {
     ElMessage.warning('请输入 TMDB 地区')
     return
   }
-  if (!String(tmdbForm.value.baseUrl || '').trim()) {
-    ElMessage.warning('请输入 TMDB API 地址')
-    return
-  }
-  if (!String(tmdbForm.value.imageBaseUrl || '').trim()) {
-    ElMessage.warning('请输入 TMDB 图片地址')
-    return
-  }
 
   savingTmdb.value = true
   settingsApi.updateRuntime({
     tmdb_api_key: tmdbForm.value.apiKey,
     tmdb_language: tmdbForm.value.language,
     tmdb_region: tmdbForm.value.region,
-    tmdb_base_url: tmdbForm.value.baseUrl,
-    tmdb_image_base_url: tmdbForm.value.imageBaseUrl
+    tmdb_base_url: TMDB_DEFAULT_BASE_URL,
+    tmdb_image_base_url: TMDB_DEFAULT_IMAGE_BASE_URL
   }).then(() => {
     ElMessage.success('TMDB 配置已保存')
   }).catch((error) => {
@@ -3409,8 +3395,6 @@ const fetchRuntimeSettings = async () => {
     tmdbForm.value.apiKey = data.tmdb_api_key || ''
     tmdbForm.value.language = data.tmdb_language || 'zh-CN'
     tmdbForm.value.region = data.tmdb_region || 'CN'
-    tmdbForm.value.baseUrl = data.tmdb_base_url || 'https://api.themoviedb.org/3'
-    tmdbForm.value.imageBaseUrl = data.tmdb_image_base_url || 'https://image.tmdb.org/t/p/w500'
     proxyForm.value.httpProxy = data.http_proxy || ''
     proxyForm.value.httpsProxy = data.https_proxy || ''
     proxyForm.value.allProxy = data.all_proxy || ''
