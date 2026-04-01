@@ -96,6 +96,14 @@ _image_proxy_cache_lock = asyncio.Lock()
 EMBY_BADGE_CACHE_TTL_SECONDS = 60 * 10
 _emby_badge_cache: dict[str, dict[str, Any]] = {}
 _emby_badge_cache_lock = asyncio.Lock()
+
+TMDB_DETAIL_CACHE_TTL_SECONDS = 60 * 60
+_tmdb_detail_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_tmdb_detail_cache_lock = asyncio.Lock()
+
+IMDB_BRIDGE_CACHE_TTL_SECONDS = 60 * 60
+_imdb_bridge_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_imdb_bridge_cache_lock = asyncio.Lock()
 _pan115_share_url_pattern = re.compile(
     r"(https?://(?:115(?:cdn)?\.com/s/[A-Za-z0-9]+(?:[^\s\"'<>]*)?|share\.115\.com/[A-Za-z0-9]+(?:[^\s\"'<>]*)?))",
     re.IGNORECASE,
@@ -218,6 +226,54 @@ async def _set_cached_emby_badge_status(
                 key=lambda item: float(item[1].get("expires_at") or 0),
             )[0]
             _emby_badge_cache.pop(oldest_key, None)
+
+
+async def _get_cached_tmdb_detail(cache_key: str) -> dict[str, Any] | None:
+    now = time.time()
+    async with _tmdb_detail_cache_lock:
+        cached = _tmdb_detail_cache.get(cache_key)
+        if not cached:
+            return None
+        expires_at = cached[0]
+        if expires_at <= now:
+            _tmdb_detail_cache.pop(cache_key, None)
+            return None
+        return dict(cached[1])
+
+
+async def _set_cached_tmdb_detail(cache_key: str, payload: dict[str, Any]) -> None:
+    async with _tmdb_detail_cache_lock:
+        _tmdb_detail_cache[cache_key] = (
+            time.time() + TMDB_DETAIL_CACHE_TTL_SECONDS,
+            dict(payload),
+        )
+        if len(_tmdb_detail_cache) > 2000:
+            oldest_key = min(_tmdb_detail_cache.items(), key=lambda item: item[1][0])[0]
+            _tmdb_detail_cache.pop(oldest_key, None)
+
+
+async def _get_cached_imdb_bridge(cache_key: str) -> dict[str, Any] | None:
+    now = time.time()
+    async with _imdb_bridge_cache_lock:
+        cached = _imdb_bridge_cache.get(cache_key)
+        if not cached:
+            return None
+        expires_at = cached[0]
+        if expires_at <= now:
+            _imdb_bridge_cache.pop(cache_key, None)
+            return None
+        return dict(cached[1])
+
+
+async def _set_cached_imdb_bridge(cache_key: str, payload: dict[str, Any]) -> None:
+    async with _imdb_bridge_cache_lock:
+        _imdb_bridge_cache[cache_key] = (
+            time.time() + IMDB_BRIDGE_CACHE_TTL_SECONDS,
+            dict(payload),
+        )
+        if len(_imdb_bridge_cache) > 1000:
+            oldest_key = min(_imdb_bridge_cache.items(), key=lambda item: item[1][0])[0]
+            _imdb_bridge_cache.pop(oldest_key, None)
 
 
 async def _resolve_emby_status_payload(media_type: str, tmdb_id: int) -> dict[str, Any]:
@@ -1754,8 +1810,14 @@ def get_list(
 
 @router.get("/movie/{tmdb_id}")
 async def get_movie(tmdb_id: int):
+    cache_key = f"movie:{tmdb_id}"
+    cached = await _get_cached_tmdb_detail(cache_key)
+    if cached:
+        return cached
     try:
-        return await tmdb_service.get_movie_detail(tmdb_id)
+        result = await tmdb_service.get_movie_detail(tmdb_id)
+        await _set_cached_tmdb_detail(cache_key, result)
+        return result
     except ValueError as exc:
         if "TMDB_API_KEY is not configured" in str(exc):
             raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
@@ -2549,8 +2611,14 @@ def get_movie_video(tmdb_id: int):
 
 @router.get("/tv/{tmdb_id}")
 async def get_tv(tmdb_id: int):
+    cache_key = f"tv:{tmdb_id}"
+    cached = await _get_cached_tmdb_detail(cache_key)
+    if cached:
+        return cached
     try:
-        return await tmdb_service.get_tv_detail(tmdb_id)
+        result = await tmdb_service.get_tv_detail(tmdb_id)
+        await _set_cached_tmdb_detail(cache_key, result)
+        return result
     except ValueError as exc:
         if "TMDB_API_KEY is not configured" in str(exc):
             raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
@@ -3212,75 +3280,83 @@ async def get_bridge_by_imdb_id(
         raise HTTPException(status_code=400, detail="无效的 IMDB ID")
 
     normalized_type = "tv" if media_type == "tv" else "movie"
+    cache_key = f"imdb_bridge:{normalized_imdb}:{normalized_type}"
+    cached = await _get_cached_imdb_bridge(cache_key)
+    if cached:
+        return cached
 
-    # 1. 从 TMDB 查找
-    tmdb_result = {"found": False, "data": None}
-    try:
-        tmdb_find_result = await tmdb_service.find_by_imdb_id(normalized_imdb)
-        if tmdb_find_result.get("found"):
-            tmdb_item = (
-                tmdb_find_result.get("movie")
-                if normalized_type == "movie"
-                else tmdb_find_result.get("tv")
-            )
-            if not tmdb_item:
-                # 如果没有找到对应类型的结果，尝试使用另一个类型
+    async def _fetch_tmdb_result():
+        tmdb_result = {"found": False, "data": None}
+        try:
+            tmdb_find_result = await tmdb_service.find_by_imdb_id(normalized_imdb)
+            if tmdb_find_result.get("found"):
                 tmdb_item = (
-                    tmdb_find_result.get("tv")
+                    tmdb_find_result.get("movie")
                     if normalized_type == "movie"
-                    else tmdb_find_result.get("movie")
+                    else tmdb_find_result.get("tv")
                 )
+                if not tmdb_item:
+                    tmdb_item = (
+                        tmdb_find_result.get("tv")
+                        if normalized_type == "movie"
+                        else tmdb_find_result.get("movie")
+                    )
+                if tmdb_item:
+                    tmdb_result = {
+                        "found": True,
+                        "tmdb_id": tmdb_item.get("tmdb_id"),
+                        "title": tmdb_item.get("title") or tmdb_item.get("name"),
+                        "poster_path": tmdb_item.get("poster_path"),
+                        "overview": tmdb_item.get("overview"),
+                        "vote_average": tmdb_item.get("vote_average"),
+                        "release_date": tmdb_item.get("release_date")
+                        or tmdb_item.get("first_air_date"),
+                        "media_type": tmdb_item.get("media_type"),
+                    }
+        except Exception as exc:
+            tmdb_result["error"] = str(exc)
+        return tmdb_result
 
-            if tmdb_item:
-                tmdb_result = {
-                    "found": True,
-                    "tmdb_id": tmdb_item.get("tmdb_id"),
-                    "title": tmdb_item.get("title") or tmdb_item.get("name"),
-                    "poster_path": tmdb_item.get("poster_path"),
-                    "overview": tmdb_item.get("overview"),
-                    "vote_average": tmdb_item.get("vote_average"),
-                    "release_date": tmdb_item.get("release_date")
-                    or tmdb_item.get("first_air_date"),
-                    "media_type": tmdb_item.get("media_type"),
-                }
-    except Exception as exc:
-        tmdb_result["error"] = str(exc)
-
-    # 2. 尝试从 Wikidata 查找豆瓣 ID
-    douban_result = {"found": False, "data": None}
-    try:
-        # 查询 Wikidata 获取豆瓣 ID
-        query = f'''
+    async def _fetch_douban_result():
+        douban_result = {"found": False, "data": None}
+        try:
+            query = f'''
 SELECT ?doubanId WHERE {{
   ?item wdt:P345 "{normalized_imdb}" .
   OPTIONAL {{ ?item wdt:P4529 ?doubanId . }}
 }}
 LIMIT 1
 '''.strip()
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(
+                    "https://query.wikidata.org/sparql",
+                    params={"query": query, "format": "json"},
+                    headers={"Accept": "application/sparql-results+json"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                bindings = ((payload or {}).get("results") or {}).get("bindings") or []
+                if bindings:
+                    douban_id = (bindings[0].get("doubanId") or {}).get("value")
+                    if douban_id:
+                        douban_result = {
+                            "found": True,
+                            "douban_id": douban_id,
+                            "source": "wikidata",
+                        }
+        except Exception:
+            pass
+        return douban_result
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(
-                "https://query.wikidata.org/sparql",
-                params={"query": query, "format": "json"},
-                headers={"Accept": "application/sparql-results+json"},
-            )
-            response.raise_for_status()
-            payload = response.json()
-            bindings = ((payload or {}).get("results") or {}).get("bindings") or []
-            if bindings:
-                douban_id = (bindings[0].get("doubanId") or {}).get("value")
-                if douban_id:
-                    douban_result = {
-                        "found": True,
-                        "douban_id": douban_id,
-                        "source": "wikidata",
-                    }
-    except Exception:
-        pass
+    tmdb_result, douban_result = await asyncio.gather(
+        _fetch_tmdb_result(), _fetch_douban_result()
+    )
 
-    return {
+    result = {
         "imdb_id": normalized_imdb,
         "media_type": normalized_type,
         "tmdb": tmdb_result,
         "douban": douban_result,
     }
+    await _set_cached_imdb_bridge(cache_key, result)
+    return result

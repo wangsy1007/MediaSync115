@@ -156,7 +156,7 @@ const missingLoading = ref(false)
 const missingOnly = ref(true)
 const router = useRouter()
 
-const tmdbImageBaseUrl = ref('https://image.tmdb.org/t/p/w500')
+const tmdbImageBaseUrl = ref('https://image.tmdb.org/t/p/w342')
 let activeFetchToken = 0
 const posterLoadedState = ref({})
 const posterFailedState = ref({})

@@ -116,7 +116,7 @@ const remoteTotal = ref(0)
 const nextOffset = ref(0)
 const fetchedOnce = ref(false)
 const isLoadAnchorIntersecting = ref(false)
-const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
+const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342'
 const PRIORITY_POSTER_COUNT = 8
 const API_BATCH_SIZE = 30
 const RENDER_BATCH_SIZE = EXPLORE_SPEED_MODE === 'extreme' ? 30 : 24
@@ -455,7 +455,7 @@ const goToDoubanDetail = (item) => {
 }
 
 const rewriteTmdbPosterSize = (url, compact = false) => {
-  const targetSegment = compact ? '/t/p/w342/' : '/t/p/w500/'
+  const targetSegment = compact ? '/t/p/w185/' : '/t/p/w342/'
   return String(url).replace(/\/t\/p\/[^/]+\//, targetSegment)
 }
 
@@ -873,6 +873,7 @@ const setupLoadObserver = () => {
   loadObserver.observe(loadAnchorRef.value)
 }
 
+const INITIAL_PARALLEL_BATCHES = 3
 const fetchSection = async () => {
   const sectionKey = route.params.key
   if (!sectionKey) return
@@ -880,9 +881,14 @@ const fetchSection = async () => {
   loading.value = true
   resetSectionState()
   try {
-    await refreshSubscribedMap()
-    const appended = await fetchNextBatch({ refresh: false })
-    if (appended > 0) {
+    const [_, ...batchResults] = await Promise.all([
+      refreshSubscribedMap(),
+      ...Array.from({ length: INITIAL_PARALLEL_BATCHES }, (_, i) =>
+        fetchNextBatch({ refresh: false, silent: i > 0 }).catch(() => 0)
+      ),
+    ])
+    const totalAppended = batchResults.reduce((sum, n) => sum + (n || 0), 0)
+    if (totalAppended > 0) {
       displayCount.value = Math.min(RENDER_BATCH_SIZE, allItems.value.length)
     }
     prefetchCursor = Math.max(prefetchCursor, nextOffset.value)

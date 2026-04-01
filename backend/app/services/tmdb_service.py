@@ -1,9 +1,15 @@
+import asyncio
+import time
 from typing import Any
 
 import httpx
 
 from app.core.config import settings
 from app.utils.proxy import proxy_manager
+
+_TMDB_CACHE_TTL_SECONDS = 60 * 60
+_TMDB_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_TMDB_CACHE_LOCK = asyncio.Lock()
 
 
 class TmdbService:
@@ -23,13 +29,9 @@ class TmdbService:
     @staticmethod
     def _check_api_key_error(response: httpx.Response) -> None:
         if response.status_code == 401:
-            raise ValueError(
-                "TMDB API Key 无效，请前往设置页重新配置正确的 API Key"
-            )
+            raise ValueError("TMDB API Key 无效，请前往设置页重新配置正确的 API Key")
         if response.status_code == 403:
-            raise ValueError(
-                "TMDB API Key 权限不足或已被禁用，请检查后重新配置"
-            )
+            raise ValueError("TMDB API Key 权限不足或已被禁用，请检查后重新配置")
 
     async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         url = f"{settings.TMDB_BASE_URL}{path}"
@@ -51,7 +53,9 @@ class TmdbService:
             await client.aclose()
 
         # Fallback without verification
-        insecure_client = proxy_manager.create_httpx_client(timeout=15.0, http2=True, verify=False)
+        insecure_client = proxy_manager.create_httpx_client(
+            timeout=15.0, http2=True, verify=False
+        )
         try:
             response = await insecure_client.get(url, params=params)
             self._check_api_key_error(response)
@@ -68,7 +72,9 @@ class TmdbService:
         change_keys = payload.get("change_keys")
         return {
             "images_configured": isinstance(image_config, dict) and bool(image_config),
-            "change_keys_count": len(change_keys) if isinstance(change_keys, list) else 0,
+            "change_keys_count": len(change_keys)
+            if isinstance(change_keys, list)
+            else 0,
             "configuration": payload,
         }
 
@@ -85,13 +91,37 @@ class TmdbService:
         )
         return any(token in text for token in tokens)
 
+    async def _get_cached(
+        self, cache_key: str, path: str, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        now = time.time()
+        async with _TMDB_CACHE_LOCK:
+            cached = _TMDB_CACHE.get(cache_key)
+            if cached and cached[0] > now:
+                return dict(cached[1])
+
+        result = await self._get(path, params)
+
+        async with _TMDB_CACHE_LOCK:
+            _TMDB_CACHE[cache_key] = (
+                time.time() + _TMDB_CACHE_TTL_SECONDS,
+                dict(result),
+            )
+            if len(_TMDB_CACHE) > 2000:
+                oldest_key = min(_TMDB_CACHE.items(), key=lambda item: item[1][0])[0]
+                _TMDB_CACHE.pop(oldest_key)
+
+        return result
+
     async def search_multi(self, query: str, page: int = 1) -> dict[str, Any]:
         params = self._required_params(page=page)
         params["query"] = query
         params["include_adult"] = False
 
         payload = await self._get("/search/multi", params)
-        raw_items = payload.get("results") if isinstance(payload.get("results"), list) else []
+        raw_items = (
+            payload.get("results") if isinstance(payload.get("results"), list) else []
+        )
 
         items: list[dict[str, Any]] = []
         for raw in raw_items:
@@ -149,7 +179,9 @@ class TmdbService:
                 params["first_air_date_year"] = year
 
         payload = await self._get(f"/search/{normalized_type}", params)
-        raw_items = payload.get("results") if isinstance(payload.get("results"), list) else []
+        raw_items = (
+            payload.get("results") if isinstance(payload.get("results"), list) else []
+        )
 
         items: list[dict[str, Any]] = []
         for raw in raw_items:
@@ -185,7 +217,9 @@ class TmdbService:
             "attempts": [{"service": "tmdb", "status": "ok", "count": len(items)}],
         }
 
-    async def find_by_external_id(self, external_id: str, external_source: str) -> dict[str, Any]:
+    async def find_by_external_id(
+        self, external_id: str, external_source: str
+    ) -> dict[str, Any]:
         normalized_id = str(external_id or "").strip()
         if not normalized_id:
             return {
@@ -249,20 +283,34 @@ class TmdbService:
     async def get_movie_detail(self, tmdb_id: int) -> dict[str, Any]:
         params = self._required_params()
         params["append_to_response"] = "credits,release_dates,videos"
-        return await self._get(f"/movie/{tmdb_id}", params)
+        cache_key = f"movie:{tmdb_id}"
+        return await self._get_cached(cache_key, f"/movie/{tmdb_id}", params)
 
     async def get_tv_detail(self, tmdb_id: int) -> dict[str, Any]:
         params = self._required_params()
         params["append_to_response"] = "aggregate_credits,content_ratings,videos"
-        return await self._get(f"/tv/{tmdb_id}", params)
+        cache_key = f"tv:{tmdb_id}"
+        return await self._get_cached(cache_key, f"/tv/{tmdb_id}", params)
 
-    async def get_tv_season_detail(self, tmdb_id: int, season_number: int) -> dict[str, Any]:
+    async def get_tv_season_detail(
+        self, tmdb_id: int, season_number: int
+    ) -> dict[str, Any]:
         params = self._required_params()
-        return await self._get(f"/tv/{tmdb_id}/season/{season_number}", params)
+        cache_key = f"tv_season:{tmdb_id}:{season_number}"
+        return await self._get_cached(
+            cache_key, f"/tv/{tmdb_id}/season/{season_number}", params
+        )
 
-    async def get_tv_episode_detail(self, tmdb_id: int, season_number: int, episode_number: int) -> dict[str, Any]:
+    async def get_tv_episode_detail(
+        self, tmdb_id: int, season_number: int, episode_number: int
+    ) -> dict[str, Any]:
         params = self._required_params()
-        return await self._get(f"/tv/{tmdb_id}/season/{season_number}/episode/{episode_number}", params)
+        cache_key = f"tv_episode:{tmdb_id}:{season_number}:{episode_number}"
+        return await self._get_cached(
+            cache_key,
+            f"/tv/{tmdb_id}/season/{season_number}/episode/{episode_number}",
+            params,
+        )
 
     async def find_by_imdb_id(self, imdb_id: str) -> dict[str, Any]:
         """通过 IMDB ID 查找影片（电影或剧集）
@@ -282,7 +330,13 @@ class TmdbService:
         """
         normalized_id = str(imdb_id or "").strip()
         if not normalized_id:
-            return {"imdb_id": "", "found": False, "movie": None, "tv": None, "media_type": None}
+            return {
+                "imdb_id": "",
+                "found": False,
+                "movie": None,
+                "tv": None,
+                "media_type": None,
+            }
 
         result = await self.find_by_external_id(normalized_id, "imdb_id")
         items = result.get("items", [])

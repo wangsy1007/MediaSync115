@@ -2,6 +2,7 @@ import asyncio
 import base64
 import io
 import re
+import time
 from urllib.parse import quote, urlparse
 from typing import Any, Optional
 
@@ -17,7 +18,9 @@ from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.app_metadata_service import app_metadata_service
 from app.services.subscription_scheduler_service import subscription_scheduler_service
-from app.services.hdhive_checkin_scheduler_service import hdhive_checkin_scheduler_service
+from app.services.hdhive_checkin_scheduler_service import (
+    hdhive_checkin_scheduler_service,
+)
 from app.services.emby_sync_index_service import emby_sync_index_service
 from app.services.emby_sync_scheduler_service import emby_sync_scheduler_service
 from app.services.tg_sync_service import tg_sync_service
@@ -26,6 +29,10 @@ from app.services.tmdb_service import tmdb_service
 from app.services.update_check_service import update_check_service
 from app.services.emby_service import emby_service
 from app.utils.proxy import proxy_manager
+
+_SETTINGS_CHECK_CACHE_TTL_SECONDS = 300
+_settings_check_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_settings_check_cache_lock = asyncio.Lock()
 
 try:
     import qrcode
@@ -171,11 +178,15 @@ def _normalize_subscription_priority(raw: object) -> list[str]:
             normalized.append(item)
             seen.add(item)
 
-    return normalized or list(runtime_settings_service.get_subscription_resource_priority())
+    return normalized or list(
+        runtime_settings_service.get_subscription_resource_priority()
+    )
 
 
 async def _validate_priority_source_config(merged_settings: dict) -> None:
-    priority = _normalize_subscription_priority(merged_settings.get("subscription_resource_priority"))
+    priority = _normalize_subscription_priority(
+        merged_settings.get("subscription_resource_priority")
+    )
     errors: list[str] = []
 
     for source in priority:
@@ -184,7 +195,9 @@ async def _validate_priority_source_config(merged_settings: dict) -> None:
             api_key = str(merged_settings.get("nullbr_api_key") or "").strip()
             base_url = str(merged_settings.get("nullbr_base_url") or "").strip()
             if not app_id or not api_key or not base_url:
-                errors.append("Nullbr 优先级已启用，但缺少 APP ID / API Key / Base URL 配置")
+                errors.append(
+                    "Nullbr 优先级已启用，但缺少 APP ID / API Key / Base URL 配置"
+                )
         elif source == "hdhive":
             api_key = str(merged_settings.get("hdhive_api_key") or "").strip()
             base_url = str(merged_settings.get("hdhive_base_url") or "").strip()
@@ -214,28 +227,43 @@ async def _validate_priority_source_config(merged_settings: dict) -> None:
 
 
 def _validate_hdhive_unlock_settings(merged_settings: dict) -> None:
-    enabled = bool(merged_settings.get("subscription_hdhive_auto_unlock_enabled", False))
+    enabled = bool(
+        merged_settings.get("subscription_hdhive_auto_unlock_enabled", False)
+    )
     if not enabled:
         return
 
     api_key = str(merged_settings.get("hdhive_api_key") or "").strip()
     base_url = str(merged_settings.get("hdhive_base_url") or "").strip()
     if not api_key or not base_url:
-        raise HTTPException(status_code=400, detail="启用 HDHive 自动解锁时必须配置 HDHive API Key 和 Base URL")
+        raise HTTPException(
+            status_code=400,
+            detail="启用 HDHive 自动解锁时必须配置 HDHive API Key 和 Base URL",
+        )
 
     try:
-        max_points_per_item = int(merged_settings.get("subscription_hdhive_unlock_max_points_per_item", 0) or 0)
+        max_points_per_item = int(
+            merged_settings.get("subscription_hdhive_unlock_max_points_per_item", 0)
+            or 0
+        )
     except Exception:
         max_points_per_item = 0
     if max_points_per_item < 1:
-        raise HTTPException(status_code=400, detail="HDHive 自动解锁单条积分阈值必须大于等于 1")
+        raise HTTPException(
+            status_code=400, detail="HDHive 自动解锁单条积分阈值必须大于等于 1"
+        )
 
     try:
-        budget_points = int(merged_settings.get("subscription_hdhive_unlock_budget_points_per_run", 0) or 0)
+        budget_points = int(
+            merged_settings.get("subscription_hdhive_unlock_budget_points_per_run", 0)
+            or 0
+        )
     except Exception:
         budget_points = 0
     if budget_points < 1:
-        raise HTTPException(status_code=400, detail="HDHive 自动解锁任务积分预算必须大于等于 1")
+        raise HTTPException(
+            status_code=400, detail="HDHive 自动解锁任务积分预算必须大于等于 1"
+        )
 
 
 def _validate_hdhive_checkin_settings(merged_settings: dict) -> None:
@@ -243,25 +271,39 @@ def _validate_hdhive_checkin_settings(merged_settings: dict) -> None:
     if not enabled:
         return
 
-    method = str(merged_settings.get("hdhive_auto_checkin_method") or "api").strip().lower()
+    method = (
+        str(merged_settings.get("hdhive_auto_checkin_method") or "api").strip().lower()
+    )
     base_url = str(merged_settings.get("hdhive_base_url") or "").strip()
 
     if method == "cookie":
         cookie = str(merged_settings.get("hdhive_cookie") or "").strip()
         if not cookie or not base_url:
-            raise HTTPException(status_code=400, detail="使用 Cookie 签到时必须配置 HDHive Cookie 和 Base URL")
+            raise HTTPException(
+                status_code=400,
+                detail="使用 Cookie 签到时必须配置 HDHive Cookie 和 Base URL",
+            )
     else:
         api_key = str(merged_settings.get("hdhive_api_key") or "").strip()
         if not api_key or not base_url:
-            raise HTTPException(status_code=400, detail="使用 API Key 签到时必须配置 HDHive API Key 和 Base URL")
+            raise HTTPException(
+                status_code=400,
+                detail="使用 API Key 签到时必须配置 HDHive API Key 和 Base URL",
+            )
 
-    mode = str(merged_settings.get("hdhive_auto_checkin_mode") or "normal").strip().lower()
+    mode = (
+        str(merged_settings.get("hdhive_auto_checkin_mode") or "normal").strip().lower()
+    )
     if mode not in {"normal", "gamble"}:
-        raise HTTPException(status_code=400, detail="HDHive 自动签到模式仅支持 normal 或 gamble")
+        raise HTTPException(
+            status_code=400, detail="HDHive 自动签到模式仅支持 normal 或 gamble"
+        )
 
     run_time = str(merged_settings.get("hdhive_auto_checkin_run_time") or "").strip()
     if not run_time or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", run_time):
-        raise HTTPException(status_code=400, detail="HDHive 自动签到执行时间格式必须为 HH:mm")
+        raise HTTPException(
+            status_code=400, detail="HDHive 自动签到执行时间格式必须为 HH:mm"
+        )
 
 
 def _validate_emby_sync_settings(merged_settings: dict) -> None:
@@ -271,7 +313,9 @@ def _validate_emby_sync_settings(merged_settings: dict) -> None:
     emby_url = str(merged_settings.get("emby_url") or "").strip()
     emby_api_key = str(merged_settings.get("emby_api_key") or "").strip()
     if not emby_url or not emby_api_key:
-        raise HTTPException(status_code=400, detail="启用 Emby 定时同步前必须先配置 Emby URL 和 API Key")
+        raise HTTPException(
+            status_code=400, detail="启用 Emby 定时同步前必须先配置 Emby URL 和 API Key"
+        )
     try:
         interval_hours = int(merged_settings.get("emby_sync_interval_hours", 24) or 24)
     except Exception:
@@ -362,7 +406,9 @@ async def _probe_target_health(
         )
 
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False, proxy=applied_proxy) as client:
+        async with httpx.AsyncClient(
+            timeout=10.0, follow_redirects=False, proxy=applied_proxy
+        ) as client:
             response = await client.get(normalized_target)
         status_code = int(response.status_code)
         if 200 <= status_code < 400:
@@ -411,6 +457,40 @@ async def _perform_nullbr_check() -> dict[str, Any]:
         }
 
 
+async def _perform_hdhive_check_cached() -> dict[str, Any]:
+    now = time.time()
+    async with _settings_check_cache_lock:
+        cached = _settings_check_cache.get("hdhive_check")
+        if cached and cached[0] > now:
+            return dict(cached[1])
+    result = await _perform_hdhive_check()
+    async with _settings_check_cache_lock:
+        _settings_check_cache["hdhive_check"] = (
+            time.time() + _SETTINGS_CHECK_CACHE_TTL_SECONDS,
+            dict(result),
+        )
+    return result
+
+
+async def _perform_tg_check_cached() -> dict[str, Any]:
+    now = time.time()
+    async with _settings_check_cache_lock:
+        cached = _settings_check_cache.get("tg_check")
+        if cached and cached[0] > now:
+            return dict(cached[1])
+    result = await _perform_tg_check()
+    async with _settings_check_cache_lock:
+        _settings_check_cache["tg_check"] = (
+            time.time() + _SETTINGS_CHECK_CACHE_TTL_SECONDS,
+            dict(result),
+        )
+    return result
+
+
+def _invalidate_settings_check_cache() -> None:
+    _settings_check_cache.clear()
+
+
 async def _perform_hdhive_check() -> dict[str, Any]:
     try:
         payload = await hdhive_service.check_connection()
@@ -433,7 +513,10 @@ async def _perform_tg_check() -> dict[str, Any]:
         authorized = bool(payload.get("authorized"))
         return {
             "valid": authorized,
-            "message": str(payload.get("message") or ("Telegram 凭证可用" if authorized else "Telegram 未登录")),
+            "message": str(
+                payload.get("message")
+                or ("Telegram 凭证可用" if authorized else "Telegram 未登录")
+            ),
             "user": payload.get("user"),
             "channels": payload.get("channels") or [],
         }
@@ -467,7 +550,9 @@ async def _perform_tmdb_check() -> dict[str, Any]:
 
 
 def _validate_update_source_settings(merged_settings: dict[str, Any]) -> None:
-    source_type = str(merged_settings.get("update_source_type") or "official").strip().lower()
+    source_type = (
+        str(merged_settings.get("update_source_type") or "official").strip().lower()
+    )
     repository = str(merged_settings.get("update_repository") or "").strip()
     try:
         update_check_service.normalize_repository(source_type, repository)
@@ -488,7 +573,10 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
         "subscription_hdhive_unlock_budget_points_per_run",
         "subscription_hdhive_unlock_threshold_inclusive",
     }
-    if any(key in payload for key in unlock_keys) or payload.get("hdhive_api_key") is not None:
+    if (
+        any(key in payload for key in unlock_keys)
+        or payload.get("hdhive_api_key") is not None
+    ):
         _validate_hdhive_unlock_settings(merged_settings)
     checkin_keys = {
         "hdhive_auto_checkin_enabled",
@@ -496,12 +584,24 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
         "hdhive_auto_checkin_method",
         "hdhive_auto_checkin_run_time",
     }
-    if any(key in payload for key in checkin_keys) or payload.get("hdhive_api_key") is not None:
+    if (
+        any(key in payload for key in checkin_keys)
+        or payload.get("hdhive_api_key") is not None
+    ):
         _validate_hdhive_checkin_settings(merged_settings)
-    if any(key in payload for key in {"emby_url", "emby_api_key", "emby_sync_enabled", "emby_sync_interval_hours"}):
+    if any(
+        key in payload
+        for key in {
+            "emby_url",
+            "emby_api_key",
+            "emby_sync_enabled",
+            "emby_sync_interval_hours",
+        }
+    ):
         _validate_emby_sync_settings(merged_settings)
     if any(key in payload for key in {"update_source_type", "update_repository"}):
         _validate_update_source_settings(merged_settings)
+    _invalidate_settings_check_cache()
     try:
         updated = runtime_settings_service.update_bulk(payload)
         await subscription_scheduler_service.ensure_subscription_tasks()
@@ -511,13 +611,25 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    _secret_keys = {"hdhive_cookie", "hdhive_api_key", "nullbr_api_key", "tg_session", "tg_api_hash", "tmdb_api_key", "emby_api_key", "tg_bot_token", "license_key"}
+    _secret_keys = {
+        "hdhive_cookie",
+        "hdhive_api_key",
+        "nullbr_api_key",
+        "tg_session",
+        "tg_api_hash",
+        "tmdb_api_key",
+        "emby_api_key",
+        "tg_bot_token",
+        "license_key",
+    }
     safe_keys = [k for k in payload.keys() if k not in _secret_keys]
     redacted_keys = [k for k in payload.keys() if k in _secret_keys]
     summary_parts = safe_keys + [f"{k}(已脱敏)" for k in redacted_keys]
     await operation_log_service.log_background_event(
-        source_type="api", module="settings",
-        action="settings.update", status="success",
+        source_type="api",
+        module="settings",
+        action="settings.update",
+        status="success",
         message=f"运行时设置已更新：{', '.join(summary_parts[:10])}{'...' if len(summary_parts) > 10 else ''}",
         extra={"updated_keys": list(payload.keys())},
     )
@@ -560,16 +672,26 @@ async def check_nullbr_credentials():
 
 @router.get("/hdhive/check")
 async def check_hdhive_credentials():
-    return await _perform_hdhive_check()
+    return await _perform_hdhive_check_cached()
 
 
 @router.post("/hdhive/checkin")
 async def run_hdhive_checkin(payload: HDHiveCheckinRequest):
-    mode = str(payload.mode or runtime_settings_service.get_hdhive_auto_checkin_mode()).strip().lower()
+    mode = (
+        str(payload.mode or runtime_settings_service.get_hdhive_auto_checkin_mode())
+        .strip()
+        .lower()
+    )
     if mode not in {"normal", "gamble"}:
-        raise HTTPException(status_code=400, detail="HDHive 手动签到模式仅支持 normal 或 gamble")
+        raise HTTPException(
+            status_code=400, detail="HDHive 手动签到模式仅支持 normal 或 gamble"
+        )
 
-    method = str(payload.method or runtime_settings_service.get_hdhive_auto_checkin_method()).strip().lower()
+    method = (
+        str(payload.method or runtime_settings_service.get_hdhive_auto_checkin_method())
+        .strip()
+        .lower()
+    )
     if method not in {"api", "cookie"}:
         method = "api"
 
@@ -598,13 +720,15 @@ async def run_hdhive_checkin(payload: HDHiveCheckinRequest):
             detail = str(exc)
             if status in {400, 401, 402, 403, 404, 429}:
                 raise HTTPException(status_code=status, detail=detail)
-            raise HTTPException(status_code=502, detail=detail or f"HDHive 手动签到失败({status})")
+            raise HTTPException(
+                status_code=502, detail=detail or f"HDHive 手动签到失败({status})"
+            )
         raise HTTPException(status_code=500, detail=f"HDHive 手动签到失败: {str(exc)}")
 
 
 @router.get("/tg/check")
 async def check_tg_credentials():
-    return await _perform_tg_check()
+    return await _perform_tg_check_cached()
 
 
 @router.get("/tmdb/check")
@@ -622,7 +746,9 @@ async def check_pansou_credentials():
         is_healthy = health.get("status") == "healthy"
         return {
             "valid": is_healthy,
-            "message": "Pansou 服务可用" if is_healthy else f"Pansou 服务异常: {health.get('error', '未知错误')}",
+            "message": "Pansou 服务可用"
+            if is_healthy
+            else f"Pansou 服务异常: {health.get('error', '未知错误')}",
             "health": health,
         }
     except Exception as exc:
@@ -641,7 +767,9 @@ async def check_emby_credentials(
     custom_url = str(emby_url or "").strip()
     custom_key = str(emby_api_key or "").strip()
     if custom_url and custom_key:
-        payload = await emby_service.check_connection_with_config(custom_url, custom_key)
+        payload = await emby_service.check_connection_with_config(
+            custom_url, custom_key
+        )
     else:
         payload = await emby_service.check_connection()
     return payload
@@ -652,7 +780,10 @@ async def get_emby_sync_status():
     status = await emby_sync_index_service.get_status()
     return {
         **status,
-        "configured": bool(runtime_settings_service.get_emby_url() and runtime_settings_service.get_emby_api_key()),
+        "configured": bool(
+            runtime_settings_service.get_emby_url()
+            and runtime_settings_service.get_emby_api_key()
+        ),
     }
 
 
@@ -660,7 +791,9 @@ async def get_emby_sync_status():
 async def run_emby_sync():
     result = await emby_sync_index_service.start_background_sync(trigger="manual")
     if not result.get("success"):
-        raise HTTPException(status_code=400, detail=result.get("message") or "Emby 同步启动失败")
+        raise HTTPException(
+            status_code=400, detail=result.get("message") or "Emby 同步启动失败"
+        )
     return result
 
 
@@ -673,12 +806,14 @@ async def get_proxy_config():
         "https_proxy": config.get("https_proxy") or "",
         "all_proxy": config.get("all_proxy") or "",
         "socks_proxy": config.get("socks_proxy") or "",
-        "has_proxy": any([
-            config.get("http_proxy"),
-            config.get("https_proxy"),
-            config.get("all_proxy"),
-            config.get("socks_proxy"),
-        ]),
+        "has_proxy": any(
+            [
+                config.get("http_proxy"),
+                config.get("https_proxy"),
+                config.get("all_proxy"),
+                config.get("socks_proxy"),
+            ]
+        ),
     }
 
 
@@ -713,7 +848,11 @@ async def check_all_services_health():
         "tmdb": tmdb_result,
         "tg": tg_result,
     }
-    checked_results = [result for result in results.values() if result.get("status") != "not_configured"]
+    checked_results = [
+        result
+        for result in results.values()
+        if result.get("status") != "not_configured"
+    ]
     valid_count = sum(1 for result in checked_results if result.get("valid"))
     total_count = len(checked_results)
     all_valid = total_count > 0 and valid_count == total_count
@@ -734,7 +873,9 @@ async def verify_tg_login_password(payload: TgVerifyPasswordRequest):
     if not password or not session:
         raise HTTPException(status_code=400, detail="密码和会话信息不能为空")
     try:
-        result = await tg_service.verify_login_password(password=password, session=session)
+        result = await tg_service.verify_login_password(
+            password=password, session=session
+        )
         final_session = str(result.get("session") or "").strip()
         if final_session:
             runtime_settings_service.update_tg_session(final_session)
@@ -865,15 +1006,18 @@ async def rebuild_tg_index():
 
 # ── TG Bot ────────────────────────────────────────────────
 
+
 @router.get("/tg-bot/status")
 async def get_tg_bot_status():
     from app.services.tg_bot import tg_bot_service
+
     return tg_bot_service.status()
 
 
 @router.post("/tg-bot/restart")
 async def restart_tg_bot():
     from app.services.tg_bot import tg_bot_service
+
     try:
         await tg_bot_service.restart()
         return {"success": True, "running": tg_bot_service.running}
@@ -884,21 +1028,25 @@ async def restart_tg_bot():
 @router.post("/tg-bot/stop")
 async def stop_tg_bot():
     from app.services.tg_bot import tg_bot_service
+
     await tg_bot_service.stop()
     return {"success": True, "running": False}
 
 
 # ── 榜单订阅 ────────────────────────────────────────────────
 
+
 @router.get("/chart-subscription/charts")
 async def get_available_charts():
     from app.services.chart_subscription_service import get_available_charts
+
     return {"charts": get_available_charts()}
 
 
 @router.post("/chart-subscription/run")
 async def run_chart_subscription_now():
     from app.services.chart_subscription_service import run_chart_subscription
+
     try:
         result = await run_chart_subscription()
         return result
