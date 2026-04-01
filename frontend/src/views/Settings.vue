@@ -923,12 +923,12 @@
               设置后，订阅转存和首页探索转存会优先选择匹配的资源。勾选顺序即为优先级（从上到下）。不勾选则不做筛选。
             </el-alert>
             <el-form-item label="分辨率偏好">
-              <el-checkbox-group v-model="resourcePrefForm.resolutions">
+              <el-checkbox-group v-model="resourcePrefForm.resolutions" class="preference-inline-group">
                 <el-checkbox v-for="r in allResolutions" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
               </el-checkbox-group>
             </el-form-item>
             <el-form-item label="格式偏好">
-              <el-checkbox-group v-model="resourcePrefForm.formats">
+              <el-checkbox-group v-model="resourcePrefForm.formats" class="preference-inline-group">
                 <el-checkbox v-for="f in allFormats" :key="f" :label="f" :value="f">{{ f }}</el-checkbox>
               </el-checkbox-group>
             </el-form-item>
@@ -4039,6 +4039,21 @@ onBeforeUnmount(() => {
         width: 100%;
         height: 100%;
         object-fit: contain;
+      }
+    }
+
+    .preference-inline-group {
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 18px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+
+      :deep(.el-checkbox) {
+        margin-right: 0;
+        white-space: nowrap;
+        flex: 0 0 auto;
       }
     }
 
