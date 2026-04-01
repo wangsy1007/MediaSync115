@@ -2591,10 +2591,10 @@ const handleRunHdhiveCheckin = async () => {
       return
     }
     hdhiveCheckinResult.visible = true
-    hdhiveCheckinResult.type = 'success'
-    hdhiveCheckinResult.title = `${modeLabel}${methodLabel}执行成功`
+    hdhiveCheckinResult.type = 'info'
+    hdhiveCheckinResult.title = `${modeLabel}${methodLabel}已完成`
     hdhiveCheckinResult.message = data?.message || '签到成功'
-    ElMessage.success(data?.message || `${modeLabel}${methodLabel}执行成功`)
+    ElMessage.info(data?.message || `${modeLabel}${methodLabel}已完成`)
   } catch (error) {
     const modeLabel = hdhiveForm.value.autoCheckinMode === 'gamble' ? '赌狗签到' : '普通签到'
     const methodLabel = method === 'cookie' ? 'Cookie' : 'API'
