@@ -79,6 +79,41 @@ class HDHiveService:
     def set_api_key(self, api_key: str | None) -> None:
         self._api_key = str(api_key or "").strip()
 
+    @staticmethod
+    def _extract_optional_bool(value: Any) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            if value == 1:
+                return True
+            if value == 0:
+                return False
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "y"}:
+                return True
+            if normalized in {"false", "0", "no", "n"}:
+                return False
+        return None
+
+    @staticmethod
+    def _classify_checkin_status(message: str, checked_in: bool | None) -> tuple[str, str]:
+        normalized_message = str(message or "").strip()
+        normalized_text = normalized_message.lower()
+        already_keywords = (
+            "已签到",
+            "已经签到",
+            "今日已签到",
+            "今天已签到",
+            "already checked",
+            "already check",
+            "already signed",
+            "already sign",
+        )
+        if checked_in is False or any(keyword in normalized_text or keyword in normalized_message for keyword in already_keywords):
+            return "already_checked_in", normalized_message or "今天已经签到过了，无需重复签到"
+        return "success", normalized_message or "签到成功"
+
     def _create_client(self, **kwargs) -> httpx.AsyncClient:
         client_kwargs = {
             "timeout": self._timeout,
@@ -452,17 +487,23 @@ class HDHiveService:
             user_info = await self.get_user_info()
         except Exception:
             user_info = {}
+        checked_in = self._extract_optional_bool(data.get("checked_in"))
+        status, message = self._classify_checkin_status(
+            str(payload.get("message") or data.get("message") or "").strip(),
+            checked_in,
+        )
 
         return {
-            "success": True,
-            "message": str(payload.get("message") or data.get("message") or "签到成功").strip(),
+            "success": status == "success",
+            "status": status,
+            "message": message,
             "mode": "gamble" if gamble else "normal",
             "method": "api",
             "code": str(payload.get("code") or "200").strip(),
             "data": data,
             "user": user_info,
             "points": self._extract_first_int(user_info.get("points")) if isinstance(user_info, dict) else None,
-            "checked_in": bool(data.get("checked_in")),
+            "checked_in": checked_in,
         }
 
     def _get_cookie(self) -> str:
@@ -511,17 +552,23 @@ class HDHiveService:
             )
 
         data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        checked_in = self._extract_optional_bool(data.get("checked_in"))
+        status, message = self._classify_checkin_status(
+            str(payload.get("message") or data.get("message") or "").strip(),
+            checked_in,
+        )
 
         return {
-            "success": True,
-            "message": str(payload.get("message") or data.get("message") or "签到成功").strip(),
+            "success": status == "success",
+            "status": status,
+            "message": message,
             "mode": "gamble" if gamble else "normal",
             "method": "cookie",
             "code": str(payload.get("code") or "200").strip(),
             "data": data,
             "user": {},
             "points": None,
-            "checked_in": True,
+            "checked_in": checked_in,
         }
 
     async def unlock_resource(self, slug: str) -> dict[str, Any]:

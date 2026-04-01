@@ -2582,6 +2582,14 @@ const handleRunHdhiveCheckin = async () => {
     if (method === 'api') await checkHdhive(false)
     const modeLabel = hdhiveForm.value.autoCheckinMode === 'gamble' ? '赌狗签到' : '普通签到'
     const methodLabel = method === 'cookie' ? '（Cookie）' : '（API）'
+    if (data?.status === 'already_checked_in') {
+      hdhiveCheckinResult.visible = true
+      hdhiveCheckinResult.type = 'warning'
+      hdhiveCheckinResult.title = `${modeLabel}${methodLabel}今日已签到`
+      hdhiveCheckinResult.message = data?.message || '今天已经签到过了，无需重复签到'
+      ElMessage.warning(hdhiveCheckinResult.message)
+      return
+    }
     hdhiveCheckinResult.visible = true
     hdhiveCheckinResult.type = 'success'
     hdhiveCheckinResult.title = `${modeLabel}${methodLabel}执行成功`

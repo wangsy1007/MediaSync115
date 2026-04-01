@@ -81,6 +81,14 @@ class JobRegistry:
             result = await hdhive_service.check_in_by_cookie(gamble=gamble)
         else:
             result = await hdhive_service.check_in(gamble=gamble)
+        if str(result.get("status") or "") == "already_checked_in":
+            await operation_log_service.log_background_event(
+                source_type="scheduler", module="hdhive",
+                action="hdhive.checkin.skipped", status="info",
+                message=f"HDHive 今日已签到（{method_label}）：{result.get('message') or ''}",
+                extra={"method": method, "gamble": gamble, "result": result},
+            )
+            return result
         if not bool(result.get("success")):
             await operation_log_service.log_background_event(
                 source_type="scheduler", module="hdhive",
