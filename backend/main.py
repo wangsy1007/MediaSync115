@@ -39,6 +39,8 @@ from app.services.tg_bot import tg_bot_service
 
 logger = logging.getLogger(__name__)
 
+_app_ready = False
+
 
 async def _safe_log_operation(**kwargs) -> None:
     try:
@@ -162,6 +164,8 @@ async def lifespan(app: FastAPI):
     await emby_sync_scheduler_service.ensure_sync_task()
     await explore_home_warmup_service.warmup(force_refresh=False)
     await tg_bot_service.start()
+    global _app_ready
+    _app_ready = True
     yield
     await tg_bot_service.stop()
     await scheduler_manager.stop()
@@ -366,4 +370,6 @@ async def root():
 
 @app.get("/health")
 async def health():
+    if not _app_ready:
+        return JSONResponse({"status": "starting"}, status_code=503)
     return {"status": "healthy"}
