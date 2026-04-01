@@ -24,7 +24,14 @@ class HDHiveApiError(Exception):
         self.code = str(code or "").strip()
         self.message = str(message or "").strip()
         self.description = str(description or "").strip()
-        final_message = self.description or self.message or self.code or f"HTTP {self.status_code}"
+        parts: list[str] = []
+        if self.message:
+            parts.append(self.message)
+        if self.description and self.description != self.message:
+            parts.append(self.description)
+        if self.code and self.code not in parts:
+            parts.append(self.code)
+        final_message = "；".join(parts) if parts else f"HTTP {self.status_code}"
         super().__init__(final_message)
 
 
@@ -46,6 +53,19 @@ class HDHiveService:
         self._unlock_locks: dict[str, asyncio.Lock] = {}
         self._unlock_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._unlock_cache_ttl_seconds = 120.0
+
+    @staticmethod
+    def _extract_error_text(response: httpx.Response) -> str:
+        try:
+            text = str(response.text or "").strip()
+        except Exception:
+            return ""
+        if not text:
+            return ""
+        normalized = re.sub(r"\s+", " ", text)
+        if normalized.startswith("<"):
+            return ""
+        return normalized[:200]
 
     def set_base_url(self, base_url: str | None) -> None:
         value = str(base_url or "").strip()
@@ -343,7 +363,7 @@ class HDHiveService:
             raise HDHiveApiError(
                 status_code=response.status_code or 500,
                 code=str(payload.get("code") or "").strip(),
-                message=str(payload.get("message") or "").strip(),
+                message=str(payload.get("message") or self._extract_error_text(response) or "").strip(),
                 description=str(payload.get("description") or "").strip(),
             )
         return response, payload
@@ -486,7 +506,7 @@ class HDHiveService:
             raise HDHiveApiError(
                 status_code=response.status_code or 500,
                 code=str(payload.get("code") or "").strip(),
-                message=str(payload.get("message") or "").strip(),
+                message=str(payload.get("message") or self._extract_error_text(response) or "").strip(),
                 description=str(payload.get("description") or "").strip(),
             )
 

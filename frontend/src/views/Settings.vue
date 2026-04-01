@@ -345,6 +345,15 @@
                 会按当前选择的签到模式立即执行一次
               </el-text>
             </el-form-item>
+            <el-form-item v-if="hdhiveCheckinResult.visible">
+              <el-alert
+                :title="hdhiveCheckinResult.title"
+                :type="hdhiveCheckinResult.type"
+                :description="hdhiveCheckinResult.message"
+                :closable="false"
+                show-icon
+              />
+            </el-form-item>
           </el-form>
 
           <div
@@ -1765,6 +1774,12 @@ const appInfo = ref({
   currentBuildTime: '',
   isDockerBuild: false
 })
+const hdhiveCheckinResult = reactive({
+  visible: false,
+  type: 'success',
+  title: '',
+  message: ''
+})
 const updateSourceForm = ref({
   sourceType: 'official',
   repository: officialUpdateRepository
@@ -2567,9 +2582,19 @@ const handleRunHdhiveCheckin = async () => {
     if (method === 'api') await checkHdhive(false)
     const modeLabel = hdhiveForm.value.autoCheckinMode === 'gamble' ? '赌狗签到' : '普通签到'
     const methodLabel = method === 'cookie' ? '（Cookie）' : '（API）'
+    hdhiveCheckinResult.visible = true
+    hdhiveCheckinResult.type = 'success'
+    hdhiveCheckinResult.title = `${modeLabel}${methodLabel}执行成功`
+    hdhiveCheckinResult.message = data?.message || '签到成功'
     ElMessage.success(data?.message || `${modeLabel}${methodLabel}执行成功`)
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || 'HDHive 手动签到失败')
+    const modeLabel = hdhiveForm.value.autoCheckinMode === 'gamble' ? '赌狗签到' : '普通签到'
+    const methodLabel = method === 'cookie' ? 'Cookie' : 'API'
+    const reason = String(error.response?.data?.detail || error.message || '未知原因').trim()
+    hdhiveCheckinResult.visible = true
+    hdhiveCheckinResult.type = 'error'
+    hdhiveCheckinResult.title = `${modeLabel}失败`
+    hdhiveCheckinResult.message = `签到方式：${methodLabel}。失败原因：${reason}`
   } finally {
     runningHdhiveCheckin.value = false
   }
