@@ -33,7 +33,9 @@ class ButailingService:
     def _auth_params(self) -> dict[str, str]:
         return {"app_id": self.app_id, "identity": self.identity}
 
-    async def search_videos(self, keyword: str, page: int = 1, limit: int = 24) -> dict[str, Any]:
+    async def search_videos(
+        self, keyword: str, page: int = 1, limit: int = 24
+    ) -> dict[str, Any]:
         """搜索影视列表"""
         params = {**self._auth_params(), "sb": keyword, "page": page, "limit": limit}
         try:
@@ -92,10 +94,6 @@ class ButailingService:
                     target_video = v
                     break
 
-        # 兜底取第一个
-        if not target_video and video_list:
-            target_video = video_list[0]
-
         if not target_video:
             return []
 
@@ -132,14 +130,16 @@ class ButailingService:
             unique_key = f"btl:{magnet_link}"
             resource_id = f"btl-{hashlib.md5(unique_key.encode('utf-8')).hexdigest()[:12]}-{index}"
 
-            resources.append({
-                "id": resource_id,
-                "name": title,
-                "size": size,
-                "quality": quality,
-                "magnet": magnet_link,
-                "source_service": "butailing",
-            })
+            resources.append(
+                {
+                    "id": resource_id,
+                    "name": title,
+                    "size": size,
+                    "quality": quality,
+                    "magnet": magnet_link,
+                    "source_service": "butailing",
+                }
+            )
 
         return resources
 
