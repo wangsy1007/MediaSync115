@@ -183,7 +183,6 @@ export const settingsApi = {
   tgVerifyPassword: (payload) => api.post('/settings/tg/login/verify-password', payload),
   tgStartQrLogin: () => api.post('/settings/tg/login/qr/start'),
   tgCheckQrLogin: (token) => api.post('/settings/tg/login/qr/status', { token }),
-  tgImportSession: (session) => api.post('/settings/tg/login/session/import', { session }),
   tgLogout: () => api.post('/settings/tg/logout'),
   getTgIndexStatus: () => api.get('/settings/tg/index/status'),
   startTgIndexBackfill: (rebuild = false) => api.post('/settings/tg/index/backfill/start', { rebuild }),

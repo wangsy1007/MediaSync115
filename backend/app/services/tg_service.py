@@ -562,26 +562,6 @@ class TgService:
         finally:
             await client.disconnect()
 
-    async def import_session(self, session: str) -> dict[str, Any]:
-        self._ensure_login_config()
-        raw = str(session or "").strip()
-        if not raw:
-            raise RuntimeError("会话串不能为空")
-        client = self._build_client(raw)
-        try:
-            await client.connect()
-            if not await client.is_user_authorized():
-                raise RuntimeError("会话串无效或已过期，请重新获取")
-            user = await client.get_me()
-            final_session = client.session.save()
-            self._session = str(final_session or "").strip()
-            return {
-                "session": self._session,
-                "user": self._serialize_user(user),
-            }
-        finally:
-            await client.disconnect()
-
     async def start_qr_login(self) -> dict[str, Any]:
         self._ensure_login_config()
         await self._clear_expired_qr_pending()

@@ -121,10 +121,6 @@ class TgQrStatusRequest(BaseModel):
     token: str
 
 
-class TgImportSessionRequest(BaseModel):
-    session: str
-
-
 class TgIndexBackfillRequest(BaseModel):
     rebuild: Optional[bool] = False
 
@@ -787,25 +783,6 @@ async def check_tg_qr_login_status(payload: TgQrStatusRequest):
             "need_password": bool(result.get("need_password", False)),
             "session": str(result.get("session") or ""),
             "message": str(result.get("message") or ""),
-            "user": result.get("user"),
-        }
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-
-@router.post("/tg/login/session/import")
-async def import_tg_session(payload: TgImportSessionRequest):
-    session = str(payload.session or "").strip()
-    if not session:
-        raise HTTPException(status_code=400, detail="会话串不能为空")
-    try:
-        result = await tg_service.import_session(session)
-        final_session = str(result.get("session") or "").strip()
-        if final_session:
-            runtime_settings_service.update_tg_session(final_session)
-        return {
-            "success": True,
-            "session": final_session,
             "user": result.get("user"),
         }
     except Exception as exc:

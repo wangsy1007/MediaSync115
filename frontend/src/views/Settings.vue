@@ -526,9 +526,6 @@
             <el-form-item label="API HASH">
               <el-input v-model="tgForm.apiHash" placeholder="Telegram API HASH" type="password" show-password />
             </el-form-item>
-            <el-form-item label="手机号">
-              <el-input v-model="tgForm.phone" placeholder="例如: +8613812345678" />
-            </el-form-item>
             <el-form-item label="频道列表">
               <el-select
                 v-model="tgForm.channelsList"
@@ -559,7 +556,7 @@
             type="info"
             :closable="false"
             show-icon
-            title="国内手机号可能收不到验证码，推荐优先使用二维码登录或会话串导入。"
+            title="推荐使用二维码登录 Telegram 账号。"
             style="margin-bottom: 12px;"
           />
           <el-form label-width="120px">
@@ -592,22 +589,6 @@
               >
                 {{ tgQrState.statusText }}
               </el-tag>
-            </el-form-item>
-          </el-form>
-
-          <el-form label-width="120px">
-            <el-form-item label="会话串导入">
-              <el-input
-                v-model="tgSessionImport"
-                type="textarea"
-                :rows="3"
-                placeholder="粘贴 Telegram StringSession"
-              />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" :loading="importingTgSession" @click="handleImportTgSession">
-                导入并校验会话串
-              </el-button>
             </el-form-item>
           </el-form>
 
@@ -1574,7 +1555,6 @@ const embyForm = ref({
 const tgForm = ref({
   apiId: '',
   apiHash: '',
-  phone: '',
   session: '',
   channelsList: [],
   searchDays: 30,
@@ -1593,7 +1573,6 @@ const tgLoginForm = ref({
   password: '',
   needPassword: false
 })
-const tgSessionImport = ref('')
 const tgQrState = reactive({
   token: '',
   url: '',
@@ -1759,7 +1738,6 @@ const verifyingTgPassword = ref(false)
 const loggingOutTg = ref(false)
 const startingTgQr = ref(false)
 const pollingTgQr = ref(false)
-const importingTgSession = ref(false)
 const startingPan115Qr = ref(false)
 const pollingPan115Qr = ref(false)
 const cancelingPan115Qr = ref(false)
@@ -2787,7 +2765,7 @@ const handleSaveTg = async () => {
     await settingsApi.updateRuntime({
       tg_api_id: tgForm.value.apiId,
       tg_api_hash: tgForm.value.apiHash,
-      tg_phone: tgForm.value.phone,
+      tg_phone: '',
       tg_channel_usernames: channels,
       tg_search_days: Number(tgForm.value.searchDays || 30),
       tg_max_messages_per_channel: Number(tgForm.value.maxMessagesPerChannel || 200),
@@ -2826,10 +2804,6 @@ const handleVerifyTgPassword = async () => {
     })
     tgLoginForm.value.needPassword = false
     tgForm.value.session = data.session || ''
-    await settingsApi.updateRuntime({
-      tg_phone: tgForm.value.phone,
-      tg_session: tgForm.value.session
-    })
     await checkTg(false)
     ElMessage.success('Telegram 二步验证成功')
   } catch (error) {
@@ -2856,7 +2830,7 @@ const ensureTgLoginBaseConfig = async () => {
   await settingsApi.updateRuntime({
     tg_api_id: tgForm.value.apiId,
     tg_api_hash: tgForm.value.apiHash,
-    tg_phone: tgForm.value.phone
+    tg_phone: ''
   })
   return true
 }
@@ -2877,10 +2851,6 @@ const pollTgQrStatus = async (token) => {
         tgQrState.imageDataUrl = ''
         tgQrState.statusText = '已授权，登录成功'
         tgQrState.statusType = 'success'
-        await settingsApi.updateRuntime({
-          tg_phone: tgForm.value.phone,
-          tg_session: tgForm.value.session
-        })
         await checkTg(false)
         await refreshSourceConnectionStatus()
         ElMessage.success('Telegram 二维码登录成功')
@@ -2934,33 +2904,6 @@ const handleStartTgQrLogin = async () => {
     ElMessage.error(error.response?.data?.detail || '二维码登录启动失败')
   } finally {
     startingTgQr.value = false
-  }
-}
-
-const handleImportTgSession = async () => {
-  const session = String(tgSessionImport.value || '').trim()
-  if (!session) {
-    ElMessage.warning('请输入 StringSession')
-    return
-  }
-  importingTgSession.value = true
-  try {
-    const ok = await ensureTgLoginBaseConfig()
-    if (!ok) return
-    const { data } = await settingsApi.tgImportSession(session)
-    tgForm.value.session = data.session || ''
-    tgSessionImport.value = ''
-    await settingsApi.updateRuntime({
-      tg_phone: tgForm.value.phone,
-      tg_session: tgForm.value.session
-    })
-    await checkTg(false)
-    await refreshSourceConnectionStatus()
-    ElMessage.success('Telegram 会话串导入成功')
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '会话串导入失败')
-  } finally {
-    importingTgSession.value = false
   }
 }
 
@@ -3450,7 +3393,6 @@ const fetchRuntimeSettings = async () => {
     hdhiveForm.value.autoCheckinRunTime = data.hdhive_auto_checkin_run_time || '09:00'
     tgForm.value.apiId = data.tg_api_id || ''
     tgForm.value.apiHash = data.tg_api_hash || ''
-    tgForm.value.phone = data.tg_phone || ''
     tgForm.value.session = data.tg_session || ''
     tgForm.value.searchDays = Number(data.tg_search_days || 30)
     tgForm.value.maxMessagesPerChannel = Number(data.tg_max_messages_per_channel || 200)
