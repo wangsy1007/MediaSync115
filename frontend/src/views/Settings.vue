@@ -535,20 +535,21 @@
                 v-model="feiniuForm.secret"
                 type="password"
                 show-password
-                placeholder="请输入飞牛影视 Secret"
+                placeholder="可选：手动配置时填写"
               />
+              <template #label><span>Secret <span style="color: #999; font-weight: normal">(可选)</span></span></template>
             </el-form-item>
             <el-form-item label="API Key">
               <el-input
                 v-model="feiniuForm.apiKey"
                 type="password"
                 show-password
-                placeholder="请输入飞牛影视 API Key"
+                placeholder="可选：手动配置时填写"
               />
+              <template #label><span>API Key <span style="color: #999; font-weight: normal">(可选)</span></span></template>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" :loading="savingFeiniu" @click="handleSaveFeiniu">保存</el-button>
-              <el-button :loading="testingFeiniu" @click="handleTestFeiniu">测试连接</el-button>
+              <el-button type="primary" :loading="savingFeiniu" @click="handleSaveFeiniu">保存URL</el-button>
               <el-button type="success" :loading="loggingInFeiniu" @click="feiniuLoginDialogVisible = true">一键登录飞牛</el-button>
             </el-form-item>
           </el-form>
@@ -2781,14 +2782,6 @@ const handleSaveFeiniu = async () => {
     ElMessage.warning('请输入飞牛影视 URL')
     return
   }
-  if (!String(feiniuForm.value.secret || '').trim()) {
-    ElMessage.warning('请输入飞牛影视 Secret')
-    return
-  }
-  if (!String(feiniuForm.value.apiKey || '').trim()) {
-    ElMessage.warning('请输入飞牛影视 API Key')
-    return
-  }
 
   savingFeiniu.value = true
   try {
@@ -2841,7 +2834,8 @@ const handleFeiniuLogin = async () => {
   try {
     const { data } = await settingsApi.feiniuLogin(
       feiniuLoginForm.value.username,
-      feiniuLoginForm.value.password
+      feiniuLoginForm.value.password,
+      feiniuForm.value.url
     )
     if (data.success) {
       ElMessage.success('飞牛影视登录成功')

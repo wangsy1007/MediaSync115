@@ -147,6 +147,7 @@ class HDHiveCheckinRequest(BaseModel):
 class FeiniuLoginRequest(BaseModel):
     username: str
     password: str
+    url: Optional[str] = None
 
 
 def _build_qr_image_data_url(content: str) -> str:
@@ -811,7 +812,11 @@ async def login_feiniu(payload: FeiniuLoginRequest):
 
     通过 WebSocket 连接登录，返回的 secret 可直接用于 API 认证。
     """
-    feiniu_url = runtime_settings_service.get_feiniu_url()
+    feiniu_url = (
+        str(payload.url or "").strip()
+        if payload.url
+        else runtime_settings_service.get_feiniu_url()
+    )
     feiniu_api_key = runtime_settings_service.get_feiniu_api_key()
 
     if not feiniu_url:
