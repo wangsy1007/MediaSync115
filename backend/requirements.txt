@@ -14,3 +14,4 @@ p115client>=0.0.8.4.6
 telethon>=1.36.0
 PySocks>=1.7.1
 python-telegram-bot>=21.0
+playwright>=1.40.0
