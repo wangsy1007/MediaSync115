@@ -42,6 +42,9 @@ class RuntimeSettingsService:
         "tmdb_region": "TMDB_REGION",
         "emby_url": "EMBY_URL",
         "emby_api_key": "EMBY_API_KEY",
+        "feiniu_url": "FEINIU_URL",
+        "feiniu_secret": "FEINIU_SECRET",
+        "feiniu_api_key": "FEINIU_API_KEY",
     }
 
     @staticmethod
@@ -86,9 +89,13 @@ class RuntimeSettingsService:
             "tg_api_hash": settings.TG_API_HASH or "",
             "tg_phone": settings.TG_PHONE or "",
             "tg_session": settings.TG_SESSION or "",
-            "tg_channel_usernames": tg_service._parse_channels(settings.TG_CHANNEL_USERNAMES),
+            "tg_channel_usernames": tg_service._parse_channels(
+                settings.TG_CHANNEL_USERNAMES
+            ),
             "tg_search_days": int(settings.TG_SEARCH_DAYS or 30),
-            "tg_max_messages_per_channel": int(settings.TG_MAX_MESSAGES_PER_CHANNEL or 200),
+            "tg_max_messages_per_channel": int(
+                settings.TG_MAX_MESSAGES_PER_CHANNEL or 200
+            ),
             "tg_index_enabled": True,
             "tg_index_realtime_fallback_enabled": True,
             "tg_index_query_limit_per_channel": 120,
@@ -103,6 +110,9 @@ class RuntimeSettingsService:
             "emby_api_key": settings.EMBY_API_KEY or "",
             "emby_sync_enabled": False,
             "emby_sync_interval_hours": 24,
+            "feiniu_url": settings.FEINIU_URL or "",
+            "feiniu_secret": settings.FEINIU_SECRET or "",
+            "feiniu_api_key": settings.FEINIU_API_KEY or "",
             "auth_username": "admin",
             "auth_password_hash": "",
             "auth_secret": "",
@@ -133,8 +143,15 @@ class RuntimeSettingsService:
             "tg_bot_allowed_users": [],
             "tg_bot_notify_chat_ids": [],
             "detail_visible_tabs": [
-                "pan115", "pan115_nullbr", "pan115_pansou", "pan115_hdhive", "pan115_tg",
-                "magnet", "magnet_nullbr", "magnet_seedhub", "magnet_butailing",
+                "pan115",
+                "pan115_nullbr",
+                "pan115_pansou",
+                "pan115_hdhive",
+                "pan115_tg",
+                "magnet",
+                "magnet_nullbr",
+                "magnet_seedhub",
+                "magnet_butailing",
                 "ed2k",
             ],
             "license_key": "",
@@ -216,9 +233,13 @@ class RuntimeSettingsService:
             "tg_api_hash": settings.TG_API_HASH or "",
             "tg_phone": settings.TG_PHONE or "",
             "tg_session": settings.TG_SESSION or "",
-            "tg_channel_usernames": tg_service._parse_channels(settings.TG_CHANNEL_USERNAMES),
+            "tg_channel_usernames": tg_service._parse_channels(
+                settings.TG_CHANNEL_USERNAMES
+            ),
             "tg_search_days": int(settings.TG_SEARCH_DAYS or 30),
-            "tg_max_messages_per_channel": int(settings.TG_MAX_MESSAGES_PER_CHANNEL or 200),
+            "tg_max_messages_per_channel": int(
+                settings.TG_MAX_MESSAGES_PER_CHANNEL or 200
+            ),
             "tmdb_api_key": settings.TMDB_API_KEY or "",
             "tmdb_base_url": settings.TMDB_BASE_URL or "",
             "tmdb_image_base_url": settings.TMDB_IMAGE_BASE_URL or "",
@@ -226,6 +247,9 @@ class RuntimeSettingsService:
             "tmdb_region": settings.TMDB_REGION or "",
             "emby_url": settings.EMBY_URL or "",
             "emby_api_key": settings.EMBY_API_KEY or "",
+            "feiniu_url": settings.FEINIU_URL or "",
+            "feiniu_secret": settings.FEINIU_SECRET or "",
+            "feiniu_api_key": settings.FEINIU_API_KEY or "",
         }
         for key, fallback_value in fallback_values.items():
             if key in self._loaded_keys:
@@ -248,7 +272,9 @@ class RuntimeSettingsService:
                 continue
             self._data[key] = fallback_value
 
-    def _normalize_env_backed_update(self, key: str, value: Any) -> tuple[Any, str | None]:
+    def _normalize_env_backed_update(
+        self, key: str, value: Any
+    ) -> tuple[Any, str | None]:
         default_value = self._defaults[key]
 
         if isinstance(default_value, list):
@@ -333,13 +359,17 @@ class RuntimeSettingsService:
         return bool(self._data.get("hdhive_auto_checkin_enabled", False))
 
     def get_hdhive_auto_checkin_mode(self) -> str:
-        value = str(self._data.get("hdhive_auto_checkin_mode") or "normal").strip().lower()
+        value = (
+            str(self._data.get("hdhive_auto_checkin_mode") or "normal").strip().lower()
+        )
         if value == "gamble":
             return "gamble"
         return "normal"
 
     def get_hdhive_auto_checkin_method(self) -> str:
-        value = str(self._data.get("hdhive_auto_checkin_method") or "api").strip().lower()
+        value = (
+            str(self._data.get("hdhive_auto_checkin_method") or "api").strip().lower()
+        )
         if value == "cookie":
             return "cookie"
         return "api"
@@ -380,7 +410,9 @@ class RuntimeSettingsService:
             "folder_name": folder_name,
         }
 
-    def update_pan115_default_folder(self, folder_id: str, folder_name: str = "") -> dict[str, str]:
+    def update_pan115_default_folder(
+        self, folder_id: str, folder_name: str = ""
+    ) -> dict[str, str]:
         normalized_id = str(folder_id or "0").strip() or "0"
         normalized_name = str(folder_name or "").strip()
         if normalized_id == "0" and not normalized_name:
@@ -404,7 +436,9 @@ class RuntimeSettingsService:
             "folder_name": folder_name,
         }
 
-    def update_pan115_offline_folder(self, folder_id: str, folder_name: str = "") -> dict[str, str]:
+    def update_pan115_offline_folder(
+        self, folder_id: str, folder_name: str = ""
+    ) -> dict[str, str]:
         normalized_id = str(folder_id or "0").strip() or "0"
         normalized_name = str(folder_name or "").strip()
         if normalized_id == "0" and not normalized_name:
@@ -528,6 +562,15 @@ class RuntimeSettingsService:
         except Exception:
             return 24
 
+    def get_feiniu_url(self) -> str:
+        return str(self._data.get("feiniu_url") or "")
+
+    def get_feiniu_secret(self) -> str:
+        return str(self._data.get("feiniu_secret") or "")
+
+    def get_feiniu_api_key(self) -> str:
+        return str(self._data.get("feiniu_api_key") or "")
+
     def get_auth_username(self) -> str:
         return str(self._data.get("auth_username") or "admin").strip() or "admin"
 
@@ -537,7 +580,9 @@ class RuntimeSettingsService:
     def get_auth_secret(self) -> str:
         return str(self._data.get("auth_secret") or "").strip()
 
-    def update_auth_credentials(self, username: str, new_password: str | None = None) -> dict[str, str]:
+    def update_auth_credentials(
+        self, username: str, new_password: str | None = None
+    ) -> dict[str, str]:
         next_username = str(username or "").strip()
         if not next_username:
             raise ValueError("账号不能为空")
@@ -586,7 +631,9 @@ class RuntimeSettingsService:
             return 30
 
     def get_subscription_hdhive_unlock_threshold_inclusive(self) -> bool:
-        return bool(self._data.get("subscription_hdhive_unlock_threshold_inclusive", True))
+        return bool(
+            self._data.get("subscription_hdhive_unlock_threshold_inclusive", True)
+        )
 
     def get_subscription_hdhive_prefer_free(self) -> bool:
         return bool(self._data.get("subscription_hdhive_prefer_free", True))
@@ -664,16 +711,25 @@ class RuntimeSettingsService:
                         normalized[key] = int_list
                     continue
 
-                if key in ("detail_visible_tabs", "resource_preferred_resolutions", "resource_preferred_formats"):
+                if key in (
+                    "detail_visible_tabs",
+                    "resource_preferred_resolutions",
+                    "resource_preferred_formats",
+                ):
                     if isinstance(value, list):
-                        normalized[key] = [str(v).strip() for v in value if str(v).strip()]
+                        normalized[key] = [
+                            str(v).strip() for v in value if str(v).strip()
+                        ]
                     continue
 
                 if key == "chart_subscription_sources":
                     if isinstance(value, list):
                         normalized[key] = [
-                            item for item in value
-                            if isinstance(item, dict) and item.get("source") and item.get("key")
+                            item
+                            for item in value
+                            if isinstance(item, dict)
+                            and item.get("source")
+                            and item.get("key")
                         ]
                     continue
 
@@ -737,6 +793,9 @@ class RuntimeSettingsService:
         settings.TMDB_REGION = self.get_tmdb_region()
         settings.EMBY_URL = self.get_emby_url()
         settings.EMBY_API_KEY = self.get_emby_api_key()
+        settings.FEINIU_URL = self.get_feiniu_url()
+        settings.FEINIU_SECRET = self.get_feiniu_secret()
+        settings.FEINIU_API_KEY = self.get_feiniu_api_key()
 
         proxy_manager.update_proxy(
             http_proxy=self._data.get("http_proxy"),
@@ -771,7 +830,15 @@ class RuntimeSettingsService:
             base_url=self.get_emby_url(),
             api_key=self.get_emby_api_key(),
         )
+        from app.services.feiniu_service import feiniu_service
+
+        feiniu_service.set_config(
+            base_url=self.get_feiniu_url(),
+            secret=self.get_feiniu_secret(),
+            api_key=self.get_feiniu_api_key(),
+        )
         from app.services.license_service import license_service
+
         license_service.set_license_key(str(self._data.get("license_key") or ""))
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -784,9 +851,13 @@ class RuntimeSettingsService:
             "all_proxy": str(self._data.get("all_proxy") or ""),
             "socks_proxy": str(self._data.get("socks_proxy") or ""),
             "pan115_default_folder_id": self.get_pan115_default_folder()["folder_id"],
-            "pan115_default_folder_name": self.get_pan115_default_folder()["folder_name"],
+            "pan115_default_folder_name": self.get_pan115_default_folder()[
+                "folder_name"
+            ],
             "pan115_offline_folder_id": self.get_pan115_offline_folder()["folder_id"],
-            "pan115_offline_folder_name": self.get_pan115_offline_folder()["folder_name"],
+            "pan115_offline_folder_name": self.get_pan115_offline_folder()[
+                "folder_name"
+            ],
             "hdhive_cookie": self.get_hdhive_cookie(),
             "hdhive_api_key": self.get_hdhive_api_key(),
             "hdhive_base_url": self.get_hdhive_base_url(),
@@ -819,19 +890,46 @@ class RuntimeSettingsService:
             "emby_api_key": self.get_emby_api_key(),
             "emby_sync_enabled": self.get_emby_sync_enabled(),
             "emby_sync_interval_hours": self.get_emby_sync_interval_hours(),
+            "feiniu_url": self.get_feiniu_url(),
+            "feiniu_secret": self.get_feiniu_secret(),
+            "feiniu_api_key": self.get_feiniu_api_key(),
             "auth_username": self.get_auth_username(),
-            "subscription_nullbr_enabled": bool(self._data.get("subscription_nullbr_enabled", False)),
-            "subscription_nullbr_interval_hours": int(self._data.get("subscription_nullbr_interval_hours", 24) or 24),
-            "subscription_nullbr_run_time": str(self._data.get("subscription_nullbr_run_time", "03:00") or "03:00"),
-            "subscription_hdhive_enabled": bool(self._data.get("subscription_hdhive_enabled", False)),
-            "subscription_hdhive_interval_hours": int(self._data.get("subscription_hdhive_interval_hours", 24) or 24),
-            "subscription_hdhive_run_time": str(self._data.get("subscription_hdhive_run_time", "03:15") or "03:15"),
-            "subscription_pansou_enabled": bool(self._data.get("subscription_pansou_enabled", False)),
-            "subscription_pansou_interval_hours": int(self._data.get("subscription_pansou_interval_hours", 24) or 24),
-            "subscription_pansou_run_time": str(self._data.get("subscription_pansou_run_time", "03:30") or "03:30"),
-            "subscription_tg_enabled": bool(self._data.get("subscription_tg_enabled", False)),
-            "subscription_tg_interval_hours": int(self._data.get("subscription_tg_interval_hours", 24) or 24),
-            "subscription_tg_run_time": str(self._data.get("subscription_tg_run_time", "04:00") or "04:00"),
+            "subscription_nullbr_enabled": bool(
+                self._data.get("subscription_nullbr_enabled", False)
+            ),
+            "subscription_nullbr_interval_hours": int(
+                self._data.get("subscription_nullbr_interval_hours", 24) or 24
+            ),
+            "subscription_nullbr_run_time": str(
+                self._data.get("subscription_nullbr_run_time", "03:00") or "03:00"
+            ),
+            "subscription_hdhive_enabled": bool(
+                self._data.get("subscription_hdhive_enabled", False)
+            ),
+            "subscription_hdhive_interval_hours": int(
+                self._data.get("subscription_hdhive_interval_hours", 24) or 24
+            ),
+            "subscription_hdhive_run_time": str(
+                self._data.get("subscription_hdhive_run_time", "03:15") or "03:15"
+            ),
+            "subscription_pansou_enabled": bool(
+                self._data.get("subscription_pansou_enabled", False)
+            ),
+            "subscription_pansou_interval_hours": int(
+                self._data.get("subscription_pansou_interval_hours", 24) or 24
+            ),
+            "subscription_pansou_run_time": str(
+                self._data.get("subscription_pansou_run_time", "03:30") or "03:30"
+            ),
+            "subscription_tg_enabled": bool(
+                self._data.get("subscription_tg_enabled", False)
+            ),
+            "subscription_tg_interval_hours": int(
+                self._data.get("subscription_tg_interval_hours", 24) or 24
+            ),
+            "subscription_tg_run_time": str(
+                self._data.get("subscription_tg_run_time", "04:00") or "04:00"
+            ),
             "subscription_resource_priority": self.get_subscription_resource_priority(),
             "subscription_hdhive_auto_unlock_enabled": self.get_subscription_hdhive_auto_unlock_enabled(),
             "subscription_hdhive_unlock_max_points_per_item": self.get_subscription_hdhive_unlock_max_points_per_item(),
@@ -849,11 +947,20 @@ class RuntimeSettingsService:
             "detail_visible_tabs": self._data.get("detail_visible_tabs") or [],
             "license_key": str(self._data.get("license_key") or ""),
             "subscription_offline_transfer_enabled": self.get_subscription_offline_transfer_enabled(),
-            "chart_subscription_enabled": bool(self._data.get("chart_subscription_enabled", False)),
-            "chart_subscription_sources": self._data.get("chart_subscription_sources") or [],
-            "chart_subscription_limit": int(self._data.get("chart_subscription_limit", 20) or 20),
-            "chart_subscription_interval_hours": int(self._data.get("chart_subscription_interval_hours", 24) or 24),
-            "chart_subscription_run_time": str(self._data.get("chart_subscription_run_time", "02:00") or "02:00"),
+            "chart_subscription_enabled": bool(
+                self._data.get("chart_subscription_enabled", False)
+            ),
+            "chart_subscription_sources": self._data.get("chart_subscription_sources")
+            or [],
+            "chart_subscription_limit": int(
+                self._data.get("chart_subscription_limit", 20) or 20
+            ),
+            "chart_subscription_interval_hours": int(
+                self._data.get("chart_subscription_interval_hours", 24) or 24
+            ),
+            "chart_subscription_run_time": str(
+                self._data.get("chart_subscription_run_time", "02:00") or "02:00"
+            ),
         }
 
 

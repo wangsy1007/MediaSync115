@@ -28,6 +28,7 @@ from app.services.tg_service import tg_service
 from app.services.tmdb_service import tmdb_service
 from app.services.update_check_service import update_check_service
 from app.services.emby_service import emby_service
+from app.services.feiniu_service import feiniu_service
 from app.utils.proxy import proxy_manager
 
 _SETTINGS_CHECK_CACHE_TTL_SECONDS = 300
@@ -83,6 +84,9 @@ class RuntimeSettingsRequest(BaseModel):
     emby_api_key: Optional[str] = None
     emby_sync_enabled: Optional[bool] = None
     emby_sync_interval_hours: Optional[int] = None
+    feiniu_url: Optional[str] = None
+    feiniu_secret: Optional[str] = None
+    feiniu_api_key: Optional[str] = None
     subscription_nullbr_enabled: Optional[bool] = None
     subscription_nullbr_interval_hours: Optional[int] = None
     subscription_nullbr_run_time: Optional[str] = None
@@ -619,6 +623,8 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
         "tg_api_hash",
         "tmdb_api_key",
         "emby_api_key",
+        "feiniu_secret",
+        "feiniu_api_key",
         "tg_bot_token",
         "license_key",
     }
@@ -772,6 +778,24 @@ async def check_emby_credentials(
         )
     else:
         payload = await emby_service.check_connection()
+    return payload
+
+
+@router.get("/feiniu/check")
+async def check_feiniu_credentials(
+    feiniu_url: Optional[str] = None,
+    feiniu_secret: Optional[str] = None,
+    feiniu_api_key: Optional[str] = None,
+):
+    custom_url = str(feiniu_url or "").strip()
+    custom_secret = str(feiniu_secret or "").strip()
+    custom_key = str(feiniu_api_key or "").strip()
+    if custom_url and custom_secret and custom_key:
+        payload = await feiniu_service.check_connection_with_config(
+            custom_url, custom_secret, custom_key
+        )
+    else:
+        payload = await feiniu_service.check_connection()
     return payload
 
 

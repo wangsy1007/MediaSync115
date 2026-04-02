@@ -57,6 +57,7 @@ class ExploreHomeWarmupService:
             "cache_warmed_at": snapshot.get("cache_warmed_at"),
             "section": deepcopy(payload),
             "emby_status_map": deepcopy(snapshot.get("emby_status_map") or {}),
+            "feiniu_status_map": deepcopy(snapshot.get("feiniu_status_map") or {}),
         }
 
     def _replace_source_snapshots(
@@ -193,14 +194,18 @@ class ExploreHomeWarmupService:
                 section_status_map = await search_api._build_emby_status_map(
                     section_payload["items"]
                 )
+                section_feiniu_status_map = await search_api._build_feiniu_status_map(
+                    section_payload["items"]
+                )
             except Exception as exc:
                 logger.warning(
-                    "explore home warmup emby badge cache failed for %s/%s: %s",
+                    "explore home warmup badge cache failed for %s/%s: %s",
                     source_name,
                     section_payload["key"],
                     exc,
                 )
                 section_status_map = {}
+                section_feiniu_status_map = {}
             snapshots.append(
                 {
                     "section_key": section_payload["key"],
@@ -209,6 +214,7 @@ class ExploreHomeWarmupService:
                     "cache_warmed_at": warmed_at,
                     "payload": section_payload,
                     "emby_status_map": section_status_map,
+                    "feiniu_status_map": section_feiniu_status_map,
                 }
             )
 

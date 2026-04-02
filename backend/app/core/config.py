@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     EMBY_URL: str = "http://192.168.2.139:8096/"
     EMBY_API_KEY: str = "355c5a7a4cae4966a3c0b40042bbde36"
 
+    FEINIU_URL: str = ""
+    FEINIU_SECRET: str = ""
+    FEINIU_API_KEY: str = ""
+
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/mediasync.db"
 
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]

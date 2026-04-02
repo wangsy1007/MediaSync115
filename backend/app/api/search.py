@@ -21,6 +21,7 @@ from app.services.douban_explore_service import (
 )
 from app.services.explore_action_queue_service import explore_action_queue_service
 from app.services.emby_service import emby_service
+from app.services.feiniu_service import feiniu_service
 from app.services.explore_home_warmup_service import (
     EXPLORE_HOME_WARMUP_LIMIT,
     explore_home_warmup_service,
@@ -96,6 +97,10 @@ _image_proxy_cache_lock = asyncio.Lock()
 EMBY_BADGE_CACHE_TTL_SECONDS = 60 * 10
 _emby_badge_cache: dict[str, dict[str, Any]] = {}
 _emby_badge_cache_lock = asyncio.Lock()
+
+FEINIU_BADGE_CACHE_TTL_SECONDS = 60 * 10
+_feiniu_badge_cache: dict[str, dict[str, Any]] = {}
+_feiniu_badge_cache_lock = asyncio.Lock()
 
 TMDB_DETAIL_CACHE_TTL_SECONDS = 60 * 60
 _tmdb_detail_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -228,6 +233,36 @@ async def _set_cached_emby_badge_status(
             _emby_badge_cache.pop(oldest_key, None)
 
 
+async def _get_cached_feiniu_badge_status(cache_key: str) -> dict[str, Any] | None:
+    now_ts = time.time()
+    async with _feiniu_badge_cache_lock:
+        cached = _feiniu_badge_cache.get(cache_key)
+        if not cached:
+            return None
+        expires_at = float(cached.get("expires_at") or 0)
+        if expires_at <= now_ts:
+            _feiniu_badge_cache.pop(cache_key, None)
+            return None
+        payload = cached.get("payload")
+        return dict(payload) if isinstance(payload, dict) else None
+
+
+async def _set_cached_feiniu_badge_status(
+    cache_key: str, payload: dict[str, Any]
+) -> None:
+    async with _feiniu_badge_cache_lock:
+        _feiniu_badge_cache[cache_key] = {
+            "expires_at": time.time() + FEINIU_BADGE_CACHE_TTL_SECONDS,
+            "payload": dict(payload),
+        }
+        if len(_feiniu_badge_cache) > 2000:
+            oldest_key = min(
+                _feiniu_badge_cache.items(),
+                key=lambda item: float(item[1].get("expires_at") or 0),
+            )[0]
+            _feiniu_badge_cache.pop(oldest_key, None)
+
+
 async def _get_cached_tmdb_detail(cache_key: str) -> dict[str, Any] | None:
     now = time.time()
     async with _tmdb_detail_cache_lock:
@@ -335,6 +370,68 @@ async def _build_emby_status_map(
             payload = result
         status_map[cache_key] = payload
         await _set_cached_emby_badge_status(cache_key, payload)
+
+    return status_map
+
+
+async def _resolve_feiniu_status_payload(
+    media_type: str, tmdb_id: int
+) -> dict[str, Any]:
+    if media_type == "tv":
+        tv_status = await feiniu_service.get_tv_episode_status_by_tmdb(tmdb_id)
+        status_text = str(tv_status.get("status") or "")
+        existing_episodes = tv_status.get("existing_episodes") or set()
+        return {
+            "exists_in_feiniu": bool(existing_episodes),
+            "status": status_text or "request_failed",
+            "existing_episodes": len(existing_episodes),
+        }
+
+    movie_status = await feiniu_service.get_movie_status_by_tmdb(tmdb_id)
+    status_text = str(movie_status.get("status") or "")
+    exists_in_feiniu = status_text == "ok" and bool(movie_status.get("exists"))
+    return {
+        "exists_in_feiniu": exists_in_feiniu,
+        "status": status_text or "request_failed",
+        "matched_type": "movie" if exists_in_feiniu else "",
+    }
+
+
+async def _build_feiniu_status_map(
+    items: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    candidates = _extract_emby_status_candidates(items)
+    if not candidates:
+        return {}
+
+    status_map: dict[str, dict[str, Any]] = {}
+    uncached: list[tuple[str, str, int]] = []
+    for cache_key, media_type, tmdb_id in candidates:
+        cached_payload = await _get_cached_feiniu_badge_status(cache_key)
+        if cached_payload is not None:
+            status_map[cache_key] = cached_payload
+            continue
+        uncached.append((cache_key, media_type, tmdb_id))
+
+    results = await asyncio.gather(
+        *(
+            _resolve_feiniu_status_payload(media_type, tmdb_id)
+            for _, media_type, tmdb_id in uncached
+        ),
+        return_exceptions=True,
+    )
+    for (cache_key, _, _), result in zip(uncached, results):
+        if isinstance(result, Exception):
+            payload = {
+                "exists_in_feiniu": False,
+                "status": "request_failed",
+                "matched_type": "",
+            }
+            logger.warning("resolve feiniu status failed for %s: %s", cache_key, result)
+        else:
+            payload = result
+        status_map[cache_key] = payload
+        await _set_cached_feiniu_badge_status(cache_key, payload)
 
     return status_map
 
@@ -1047,6 +1144,7 @@ async def search(
             payload = {}
         items = payload.get("items") if isinstance(payload.get("items"), list) else []
         payload["emby_status_map"] = await _build_emby_status_map(items)
+        payload["feiniu_status_map"] = await _build_feiniu_status_map(items)
         return payload
     except ValueError as exc:
         if "TMDB_API_KEY is not configured" in str(exc):
@@ -1124,12 +1222,14 @@ async def get_explore_popular_sections(
         )
 
     emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
+    feiniu_status_map = await _build_feiniu_status_map(_collect_section_items(sections))
     return {
         "source": "popular-movies-data.stevenlu.com",
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "sections": sections,
         "errors": errors,
         "emby_status_map": emby_status_map,
+        "feiniu_status_map": feiniu_status_map,
     }
 
 
@@ -1176,15 +1276,18 @@ async def get_explore_douban_sections(
             "sections": fallback.get("sections", []),
             "errors": errors + fallback_errors,
             "emby_status_map": fallback.get("emby_status_map", {}),
+            "feiniu_status_map": fallback.get("feiniu_status_map", {}),
         }
 
     emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
+    feiniu_status_map = await _build_feiniu_status_map(_collect_section_items(sections))
     return {
         "source": "douban-frodo",
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "sections": sections,
         "errors": errors,
         "emby_status_map": emby_status_map,
+        "feiniu_status_map": feiniu_status_map,
     }
 
 
@@ -1241,12 +1344,16 @@ async def get_explore_sections(
             )
 
         emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
+        feiniu_status_map = await _build_feiniu_status_map(
+            _collect_section_items(sections)
+        )
         return {
             "source": "tmdb",
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "sections": sections,
             "errors": errors,
             "emby_status_map": emby_status_map,
+            "feiniu_status_map": feiniu_status_map,
         }
 
     async with proxy_manager.create_httpx_client(timeout=30.0, http2=False) as client:
@@ -1289,15 +1396,18 @@ async def get_explore_sections(
             "sections": fallback.get("sections", []),
             "errors": errors + fallback_errors,
             "emby_status_map": fallback.get("emby_status_map", {}),
+            "feiniu_status_map": fallback.get("feiniu_status_map", {}),
         }
 
     emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
+    feiniu_status_map = await _build_feiniu_status_map(_collect_section_items(sections))
     return {
         "source": "douban-frodo",
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "sections": sections,
         "errors": errors,
         "emby_status_map": emby_status_map,
+        "feiniu_status_map": feiniu_status_map,
     }
 
 
@@ -1378,12 +1488,16 @@ async def get_explore_home(
             )
 
         emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
+        feiniu_status_map = await _build_feiniu_status_map(
+            _collect_section_items(sections)
+        )
         return {
             "source": "tmdb",
             "fetched_at": datetime.now(timezone.utc).isoformat(),
             "sections": sections,
             "errors": errors,
             "emby_status_map": emby_status_map,
+            "feiniu_status_map": feiniu_status_map,
         }
 
     async with proxy_manager.create_httpx_client(timeout=30.0, http2=False) as client:
@@ -1432,15 +1546,18 @@ async def get_explore_home(
             "sections": fallback.get("sections", []),
             "errors": errors + fallback_errors,
             "emby_status_map": fallback.get("emby_status_map", {}),
+            "feiniu_status_map": fallback.get("feiniu_status_map", {}),
         }
 
     emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
+    feiniu_status_map = await _build_feiniu_status_map(_collect_section_items(sections))
     return {
         "source": "douban-frodo",
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "sections": sections,
         "errors": errors,
         "emby_status_map": emby_status_map,
+        "feiniu_status_map": feiniu_status_map,
     }
 
 
@@ -1485,6 +1602,7 @@ async def get_explore_section(
         return {
             **home_cached,
             "emby_status_map": await _build_emby_status_map(cached_items),
+            "feiniu_status_map": await _build_feiniu_status_map(cached_items),
             "cache_hit": True,
             "cache_source": "home_warmup",
         }
@@ -1523,6 +1641,7 @@ async def get_explore_section(
                 "items": items,
             },
             "emby_status_map": await _build_emby_status_map(items),
+            "feiniu_status_map": await _build_feiniu_status_map(items),
             "cache_hit": False,
             "cache_source": "section_runtime",
             "cache_warmed_at": None,
@@ -1565,6 +1684,7 @@ async def get_explore_section(
             "items": items,
         },
         "emby_status_map": await _build_emby_status_map(items),
+        "feiniu_status_map": await _build_feiniu_status_map(items),
         "cache_hit": False,
         "cache_source": "section_runtime",
         "cache_warmed_at": None,
@@ -1619,6 +1739,7 @@ async def get_explore_douban_section(
             "items": items,
         },
         "emby_status_map": await _build_emby_status_map(items),
+        "feiniu_status_map": await _build_feiniu_status_map(items),
     }
 
 
