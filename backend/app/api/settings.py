@@ -807,20 +807,21 @@ async def check_feiniu_credentials(
 @router.post("/feiniu/login")
 async def login_feiniu(payload: FeiniuLoginRequest):
     """
-    使用浏览器自动化登录飞牛影视，获取 Session Token
+    使用 WebSocket 登录飞牛影视，获取 Session Token 和 Secret
+
+    通过 WebSocket 连接登录，返回的 secret 可直接用于 API 认证。
     """
     feiniu_url = runtime_settings_service.get_feiniu_url()
-    feiniu_secret = runtime_settings_service.get_feiniu_secret()
     feiniu_api_key = runtime_settings_service.get_feiniu_api_key()
 
-    if not feiniu_url or not feiniu_secret or not feiniu_api_key:
+    if not feiniu_url:
         raise HTTPException(
             status_code=400,
-            detail="请先配置飞牛影视 URL、Secret 和 API Key",
+            detail="请先配置飞牛影视 URL",
         )
 
-    feiniu_service.set_config(feiniu_url, feiniu_secret, feiniu_api_key)
-    result = await feiniu_service.browser_login(
+    feiniu_service.set_config(feiniu_url, "", feiniu_api_key)
+    result = await feiniu_service.websocket_login(
         username=payload.username,
         password=payload.password,
     )
@@ -830,11 +831,14 @@ async def login_feiniu(payload: FeiniuLoginRequest):
             "success": True,
             "message": "登录成功",
             "token": result["token"],
+            "secret": result.get("secret"),
+            "uid": result.get("uid"),
         }
     return {
         "success": False,
         "message": result.get("message", "登录失败"),
         "token": None,
+        "secret": None,
     }
 
 

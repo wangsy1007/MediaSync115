@@ -1,0 +1,14 @@
+{
+  "cookies": [
+    {
+      "name": "mediasync_session",
+      "value": "d2FuZ3N5MTAwN3wxNzc1NjQ1OTkwfDc1OTUxOGZiODQ2MWNlOWNkMTBjZDY0M2UwZDg1NTJlZmI3OTdhZWM5YWU5MjE4YTk2MGZhMTQ0NDA4MTEyMjM=",
+      "domain": "127.0.0.1",
+      "path": "/",
+      "httpOnly": true,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": []
+}

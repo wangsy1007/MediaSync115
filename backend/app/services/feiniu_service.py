@@ -3,14 +3,19 @@
 """
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
 import random
 import time
+import uuid
 from typing import Any, Optional
 
 import httpx
+import websockets
+from Crypto.Cipher import AES, PKCS1_v1_5
+from Crypto.PublicKey import RSA
 from playwright.async_api import async_playwright
 
 from app.core.config import settings
@@ -33,7 +38,7 @@ class FeiniuService:
     def set_config(self, base_url: str, secret: str, api_key: str) -> None:
         self.base_url = str(base_url or "").strip().rstrip("/")
         self.secret = str(secret or "").strip()
-        self.api_key = str(api_key or "").strip()
+        self.api_key = str(api_key or "").strip() or self.API_KEY
         self.session_token = None
 
     def set_session_token(self, token: str) -> None:
@@ -146,12 +151,174 @@ class FeiniuService:
                 "token": None,
             }
 
+    def _generate_reqid(self, backId: Optional[str] = None) -> str:
+        """生成请求ID"""
+        t = format(int(time.time()), "x").zfill(8)
+        e = format(1, "x").zfill(4)
+        bid = backId or "0000000000000000"
+        return f"{t}{bid}{e}"
+
+    def _generate_aes_key_iv(self) -> tuple[bytes, bytes]:
+        """生成随机的AES key和iv"""
+        key = uuid.uuid4().hex[:16].encode()
+        iv = uuid.uuid4().hex[:16].encode()
+        return key, iv
+
+    def _aes_encrypt(self, data: str, key: bytes, iv: bytes) -> str:
+        """AES加密"""
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+        padded_data = data.encode("utf-8") + b"\0" * (
+            AES.block_size - len(data.encode("utf-8")) % AES.block_size
+        )
+        ciphertext = cipher.encrypt(padded_data)
+        return base64.b64encode(ciphertext).decode("utf-8")
+
+    def _rsa_encrypt(self, public_key_str: str, plaintext: bytes) -> str:
+        """RSA加密"""
+        key = RSA.import_key(public_key_str)
+        cipher = PKCS1_v1_5.new(key)
+        ciphertext = cipher.encrypt(plaintext)
+        return base64.b64encode(ciphertext).decode()
+
+    async def websocket_login(self, username: str, password: str) -> dict[str, Any]:
+        """
+        使用 WebSocket 登录飞牛影视（推荐方式）
+
+        通过 WebSocket 连接获取登录凭证，返回的 secret 可直接用于 API 认证。
+
+        Args:
+            username: 用户名
+            password: 密码
+
+        Returns:
+            包含 success, token, secret, message 等字段的字典
+        """
+        if not self.base_url:
+            return {
+                "success": False,
+                "message": "飞牛影视 URL 未配置",
+                "token": None,
+                "secret": None,
+            }
+
+        try:
+            host = (
+                self.base_url.split("://")[1]
+                if "://" in self.base_url
+                else self.base_url
+            )
+            port = 5666
+            if ":" in host:
+                host, port_str = host.rsplit(":", 1)
+                try:
+                    port = int(port_str)
+                except ValueError:
+                    port = 5666
+
+            ws_url = f"ws://{host}:{port}/websocket?type=main"
+            logger.info(f"[Feiniu WS] 连接到 {ws_url}")
+
+            async with websockets.connect(ws_url, max_size=10 * 1024 * 1024) as ws:
+                reqid = self._generate_reqid()
+
+                get_rsa_msg = {"reqid": reqid, "req": "util.crypto.getRSAPub"}
+                await ws.send(json.dumps(get_rsa_msg))
+                response = await ws.recv()
+                resp_data = json.loads(response)
+
+                if resp_data.get("result") != "succ":
+                    return {
+                        "success": False,
+                        "message": f"获取RSA公钥失败: {resp_data}",
+                        "token": None,
+                        "secret": None,
+                    }
+
+                public_key = resp_data.get("pub")
+                si = resp_data.get("si")
+                backId = resp_data.get("backId", "0000000000000000")
+                logger.info(f"[Feiniu WS] RSA公钥获取成功, si={si}")
+
+                login_data = {
+                    "req": "user.login",
+                    "reqid": self._generate_reqid(backId),
+                    "user": username,
+                    "password": password,
+                    "deviceType": "Browser",
+                    "deviceName": "Windows-Google Chrome",
+                    "stay": True,
+                    "si": si,
+                }
+
+                key, iv = self._generate_aes_key_iv()
+                json_data = json.dumps(login_data, separators=(",", ":"))
+                aes_encrypted = self._aes_encrypt(json_data, key, iv)
+                rsa_encrypted = self._rsa_encrypt(public_key, key)
+
+                encrypted_data = {
+                    "req": "encrypted",
+                    "iv": base64.b64encode(iv).decode("utf-8"),
+                    "rsa": rsa_encrypted,
+                    "aes": aes_encrypted,
+                    "reqid": self._generate_reqid(backId),
+                }
+
+                await ws.send(json.dumps(encrypted_data))
+                response = await ws.recv()
+                resp_data = json.loads(response)
+
+                if resp_data.get("result") != "succ":
+                    return {
+                        "success": False,
+                        "message": f"登录失败: errno={resp_data.get('errno')}",
+                        "token": None,
+                        "secret": None,
+                    }
+
+                token = resp_data.get("token")
+                secret = resp_data.get("secret")
+                uid = resp_data.get("uid")
+                logger.info(
+                    f"[Feiniu WS] 登录成功! uid={uid}, token={token[:20] if token else None}..."
+                )
+
+                self.session_token = token
+                if secret:
+                    self.secret = secret
+
+                return {
+                    "success": True,
+                    "message": "登录成功",
+                    "token": token,
+                    "secret": secret,
+                    "uid": uid,
+                }
+
+        except Exception as exc:
+            logger.exception("[Feiniu WS] WebSocket登录失败")
+            return {
+                "success": False,
+                "message": f"WebSocket登录异常: {str(exc)}",
+                "token": None,
+                "secret": None,
+            }
+
     async def check_connection(self) -> dict[str, Any]:
         """检查连接状态（使用 API Key 认证）"""
-        if not self.base_url or not self.secret or not self.api_key:
+        if not self.base_url:
             return {
                 "valid": False,
-                "message": "飞牛影视 URL、Secret 或 API Key 未配置",
+                "message": "飞牛影视 URL 未配置",
+                "user": None,
+            }
+
+        api_key = self.api_key or self.API_KEY
+        secret = self.secret
+
+        if not secret:
+            return {
+                "valid": False,
+                "message": "请先登录飞牛影视获取凭证",
                 "user": None,
             }
 
