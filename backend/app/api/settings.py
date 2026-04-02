@@ -144,6 +144,11 @@ class HDHiveCheckinRequest(BaseModel):
     base_url: Optional[str] = None
 
 
+class FeiniuLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 def _build_qr_image_data_url(content: str) -> str:
     if not QRCODE_AVAILABLE:
         return ""
@@ -797,6 +802,40 @@ async def check_feiniu_credentials(
     else:
         payload = await feiniu_service.check_connection()
     return payload
+
+
+@router.post("/feiniu/login")
+async def login_feiniu(payload: FeiniuLoginRequest):
+    """
+    使用浏览器自动化登录飞牛影视，获取 Session Token
+    """
+    feiniu_url = runtime_settings_service.get_feiniu_url()
+    feiniu_secret = runtime_settings_service.get_feiniu_secret()
+    feiniu_api_key = runtime_settings_service.get_feiniu_api_key()
+
+    if not feiniu_url or not feiniu_secret or not feiniu_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="请先配置飞牛影视 URL、Secret 和 API Key",
+        )
+
+    feiniu_service.set_config(feiniu_url, feiniu_secret, feiniu_api_key)
+    result = await feiniu_service.browser_login(
+        username=payload.username,
+        password=payload.password,
+    )
+
+    if result.get("success") and result.get("token"):
+        return {
+            "success": True,
+            "message": "登录成功",
+            "token": result["token"],
+        }
+    return {
+        "success": False,
+        "message": result.get("message", "登录失败"),
+        "token": None,
+    }
 
 
 @router.get("/emby/sync/status")

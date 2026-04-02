@@ -1,38 +1,153 @@
+"""
+飞牛影视服务 - 支持浏览器自动化登录和 API Key 认证
+"""
+
+import asyncio
 import hashlib
+import json
+import logging
+import random
 import time
 from typing import Any, Optional
 
 import httpx
+from playwright.async_api import async_playwright
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 class FeiniuService:
+    """飞牛影视服务"""
+
+    API_KEY = "NDzZTVxnRKP8Z0jXg1VAMonaG8akvh"
+    API_SECRET = "16CCEB3D-AB42-077D-36A1-F355324E4237"
+
     def __init__(self):
         self.base_url = settings.FEINIU_URL.rstrip("/") if settings.FEINIU_URL else ""
         self.secret = settings.FEINIU_SECRET
         self.api_key = settings.FEINIU_API_KEY
+        self.session_token: Optional[str] = None
 
     def set_config(self, base_url: str, secret: str, api_key: str) -> None:
         self.base_url = str(base_url or "").strip().rstrip("/")
         self.secret = str(secret or "").strip()
         self.api_key = str(api_key or "").strip()
+        self.session_token = None
 
-    def _compute_authx(self, timestamp: Optional[str] = None) -> str:
-        if timestamp is None:
-            timestamp = str(int(time.time()))
-        raw = f"{self.secret}{timestamp}{self.api_key}"
-        return hashlib.md5(raw.encode("utf-8")).hexdigest()
+    def set_session_token(self, token: str) -> None:
+        self.session_token = token
 
-    def _auth_headers(self) -> dict[str, str]:
+    def _generate_nonce(self) -> str:
+        return str(random.randint(100000, 999999))
+
+    def _md5(self, data: str) -> str:
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        elif not isinstance(data, bytes):
+            data = str(data).encode("utf-8")
+        return hashlib.md5(data).hexdigest()
+
+    def _compute_authx(self, url: str, data: Optional[dict] = None) -> str:
+        nonce = self._generate_nonce()
+        timestamp = int(time.time() * 1000)
+        data_json = json.dumps(data, separators=(",", ":")) if data else ""
+        data_md5 = self._md5(data_json)
+        sign_array = [
+            self.API_KEY,
+            url,
+            nonce,
+            str(timestamp),
+            data_md5,
+            self.API_SECRET,
+        ]
+        sign_str = "_".join(sign_array)
+        sign_hash = self._md5(sign_str)
+        return f"nonce={nonce}&timestamp={timestamp}&sign={sign_hash}"
+
+    def _auth_headers(self, use_session: bool = False) -> dict[str, str]:
         timestamp = str(int(time.time()))
-        authx = self._compute_authx(timestamp)
-        return {
+        raw = f"{self.secret}{timestamp}{self.api_key}"
+        authx = self._md5(raw)
+        headers = {
             "authx": authx,
             "authn": timestamp,
         }
+        if use_session and self.session_token:
+            headers["Authorization"] = self.session_token
+            headers["Cookie"] = f"mode=relay; Trim-MC-token={self.session_token}"
+        return headers
+
+    async def browser_login(self, username: str, password: str) -> dict[str, Any]:
+        """
+        使用浏览器自动化登录飞牛影视
+
+        Args:
+            username: 用户名
+            password: 密码
+
+        Returns:
+            包含 success, token, message 等字段的字典
+        """
+        if not self.base_url:
+            return {
+                "success": False,
+                "message": "飞牛影视 URL 未配置",
+                "token": None,
+            }
+
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context()
+                page = await context.new_page()
+
+                login_url = (
+                    f"{self.base_url}/v/login?redirect_uri=http%3A%2F%2F"
+                    f"{self.base_url.split('://')[1]}%2Fv"
+                )
+                await page.goto(login_url, wait_until="networkidle", timeout=60000)
+
+                await page.fill("#username", username)
+                await page.fill("#password", password)
+                await page.click("button[type='submit']")
+
+                try:
+                    await page.wait_for_url(f"{self.base_url}/v", timeout=60000)
+                except Exception:
+                    pass
+
+                cookies = await context.cookies()
+                await browser.close()
+
+                for cookie in cookies:
+                    if cookie["name"] == "Trim-MC-token":
+                        token = cookie["value"]
+                        self.session_token = token
+                        logger.info(f"浏览器登录成功，获取 Token: {token[:20]}...")
+                        return {
+                            "success": True,
+                            "message": "登录成功",
+                            "token": token,
+                        }
+
+                return {
+                    "success": False,
+                    "message": "未找到登录凭证",
+                    "token": None,
+                }
+
+        except Exception as exc:
+            logger.exception("浏览器登录失败")
+            return {
+                "success": False,
+                "message": f"登录异常: {str(exc)}",
+                "token": None,
+            }
 
     async def check_connection(self) -> dict[str, Any]:
+        """检查连接状态（使用 API Key 认证）"""
         if not self.base_url or not self.secret or not self.api_key:
             return {
                 "valid": False,
@@ -63,37 +178,37 @@ class FeiniuService:
                     "user": None,
                 }
 
-    async def check_connection_with_config(
-        self, base_url: str, secret: str, api_key: str
-    ) -> dict[str, Any]:
-        normalized_base_url = str(base_url or "").strip().rstrip("/")
-        normalized_secret = str(secret or "").strip()
-        normalized_api_key = str(api_key or "").strip()
-
-        if not normalized_base_url or not normalized_secret or not normalized_api_key:
+    async def check_connection_with_session(self) -> dict[str, Any]:
+        """使用 session token 检查连接状态"""
+        if not self.session_token:
             return {
                 "valid": False,
-                "message": "飞牛影视 URL、Secret 或 API Key 未配置",
+                "message": "未登录，无 session token",
                 "user": None,
             }
 
-        url = f"{normalized_base_url}/mdb/count"
-        timestamp = str(int(time.time()))
-        raw = f"{normalized_secret}{timestamp}{normalized_api_key}"
-        authx = hashlib.md5(raw.encode("utf-8")).hexdigest()
+        url = f"{self.base_url}/v/api/v1/user/info"
         headers = {
-            "authx": authx,
-            "authn": timestamp,
+            "Authx": self._compute_authx("/v/api/v1/user/info"),
+            "Authorization": self.session_token,
+            "Cookie": f"mode=relay; Trim-MC-token={self.session_token}",
         }
 
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(url, headers=headers, timeout=10.0)
                 if response.status_code == 200:
+                    data = response.json()
+                    if data.get("code") == 0:
+                        return {
+                            "valid": True,
+                            "message": "飞牛影视连接成功",
+                            "user": data.get("data", {}),
+                        }
                     return {
-                        "valid": True,
-                        "message": "飞牛影视连接成功",
-                        "user": {"server": "feiniu"},
+                        "valid": False,
+                        "message": f"API错误: {data.get('msg', 'Unknown')}",
+                        "user": None,
                     }
                 return {
                     "valid": False,
@@ -108,20 +223,22 @@ class FeiniuService:
                 }
 
     async def get_movie_status_by_tmdb(self, tmdb_id: int) -> dict[str, Any]:
-        if not self.base_url or not self.secret or not self.api_key:
+        """使用 session token 检查电影是否存在（需要先登录）"""
+        if not self.session_token:
             return {
-                "status": "not_configured",
-                "message": "飞牛影视未配置",
+                "status": "not_logged_in",
+                "message": "未登录，无法查询媒体状态",
                 "exists": False,
                 "item_ids": [],
             }
 
-        url = f"{self.base_url}/mdb/search"
-        headers = self._auth_headers()
-        params = {
-            "type": "movie",
-            "tmdb": str(tmdb_id),
+        url = f"{self.base_url}/v/api/v1/mdb/search"
+        headers = {
+            "Authx": self._compute_authx(f"/v/api/v1/mdb/search"),
+            "Authorization": self.session_token,
+            "Cookie": f"mode=relay; Trim-MC-token={self.session_token}",
         }
+        params = {"tmdb": str(tmdb_id), "type": "movie"}
 
         async with httpx.AsyncClient() as client:
             try:
@@ -135,8 +252,15 @@ class FeiniuService:
                         "exists": False,
                         "item_ids": [],
                     }
-                payload = response.json() if response.content else {}
-                items = payload.get("data") or payload.get("items") or []
+                payload = response.json()
+                if payload.get("code") != 0:
+                    return {
+                        "status": "api_error",
+                        "message": payload.get("msg", "Unknown error"),
+                        "exists": False,
+                        "item_ids": [],
+                    }
+                items = payload.get("data", {}).get("items") or []
                 item_ids = [
                     str(item.get("id") or "") for item in items if item.get("id")
                 ]
@@ -157,19 +281,21 @@ class FeiniuService:
                 }
 
     async def get_tv_episode_status_by_tmdb(self, tmdb_id: int) -> dict[str, Any]:
-        if not self.base_url or not self.secret or not self.api_key:
+        """使用 session token 检查剧集是否存在"""
+        if not self.session_token:
             return {
-                "status": "not_configured",
-                "message": "飞牛影视未配置",
+                "status": "not_logged_in",
+                "message": "未登录，无法查询媒体状态",
                 "existing_episodes": set(),
             }
 
-        url = f"{self.base_url}/mdb/search"
-        headers = self._auth_headers()
-        params = {
-            "type": "tv",
-            "tmdb": str(tmdb_id),
+        url = f"{self.base_url}/v/api/v1/mdb/search"
+        headers = {
+            "Authx": self._compute_authx(f"/v/api/v1/mdb/search"),
+            "Authorization": self.session_token,
+            "Cookie": f"mode=relay; Trim-MC-token={self.session_token}",
         }
+        params = {"tmdb": str(tmdb_id), "type": "tv"}
 
         async with httpx.AsyncClient() as client:
             try:
@@ -182,16 +308,20 @@ class FeiniuService:
                         "message": f"请求失败 (HTTP {response.status_code})",
                         "existing_episodes": set(),
                     }
-                payload = response.json() if response.content else {}
-                items = payload.get("data") or payload.get("items") or []
-
+                payload = response.json()
+                if payload.get("code") != 0:
+                    return {
+                        "status": "api_error",
+                        "message": payload.get("msg", "Unknown error"),
+                        "existing_episodes": set(),
+                    }
+                items = payload.get("data", {}).get("items") or []
                 existing_episodes: set[tuple[int, int]] = set()
                 for item in items:
                     season = int(item.get("season") or item.get("seasonNumber") or 1)
                     episode = int(item.get("episode") or item.get("episodeNumber") or 0)
                     if episode > 0:
                         existing_episodes.add((season, episode))
-
                 return {
                     "status": "ok",
                     "message": "查询成功",
@@ -205,6 +335,7 @@ class FeiniuService:
                 }
 
     async def refresh_library(self, path: Optional[str] = None) -> dict[str, Any]:
+        """触发媒体库扫描"""
         if not self.base_url or not self.secret or not self.api_key:
             return {
                 "status": "not_configured",

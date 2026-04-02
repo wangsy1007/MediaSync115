@@ -549,6 +549,7 @@
             <el-form-item>
               <el-button type="primary" :loading="savingFeiniu" @click="handleSaveFeiniu">保存</el-button>
               <el-button :loading="testingFeiniu" @click="handleTestFeiniu">测试连接</el-button>
+              <el-button type="success" :loading="loggingInFeiniu" @click="feiniuLoginDialogVisible = true">一键登录飞牛</el-button>
             </el-form-item>
           </el-form>
 
@@ -1572,6 +1573,34 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="feiniuLoginDialogVisible"
+      title="飞牛影视登录"
+      width="400px"
+      destroy-on-close
+    >
+      <el-form :model="feiniuLoginForm" label-width="80px">
+        <el-form-item label="用户名">
+          <el-input v-model="feiniuLoginForm.username" placeholder="请输入飞牛影视用户名" />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input
+            v-model="feiniuLoginForm.password"
+            type="password"
+            show-password
+            placeholder="请输入飞牛影视密码"
+            @keyup.enter="handleFeiniuLogin"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="feiniuLoginDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="loggingInFeiniu" @click="handleFeiniuLogin">
+          登录
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1624,6 +1653,11 @@ const feiniuForm = ref({
   secret: '',
   apiKey: ''
 })
+const feiniuLoginForm = ref({
+  username: '',
+  password: ''
+})
+const feiniuLoginDialogVisible = ref(false)
 
 const tgForm = ref({
   apiId: '',
@@ -1804,6 +1838,7 @@ const savingEmby = ref(false)
 const testingEmby = ref(false)
 const savingFeiniu = ref(false)
 const testingFeiniu = ref(false)
+const loggingInFeiniu = ref(false)
 const runningEmbySync = ref(false)
 const savingTg = ref(false)
 const testingTg = ref(false)
@@ -2790,6 +2825,36 @@ const handleTestFeiniu = async () => {
     await checkFeiniu(true)
   } finally {
     testingFeiniu.value = false
+  }
+}
+
+const handleFeiniuLogin = async () => {
+  if (!String(feiniuLoginForm.value.username || '').trim()) {
+    ElMessage.warning('请输入飞牛影视用户名')
+    return
+  }
+  if (!String(feiniuLoginForm.value.password || '').trim()) {
+    ElMessage.warning('请输入飞牛影视密码')
+    return
+  }
+  loggingInFeiniu.value = true
+  try {
+    const { data } = await settingsApi.feiniuLogin(
+      feiniuLoginForm.value.username,
+      feiniuLoginForm.value.password
+    )
+    if (data.success) {
+      ElMessage.success('飞牛影视登录成功')
+      feiniuLoginDialogVisible.value = false
+      feiniuLoginForm.value.username = ''
+      feiniuLoginForm.value.password = ''
+    } else {
+      ElMessage.error(data.message || '飞牛影视登录失败')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '飞牛影视登录失败')
+  } finally {
+    loggingInFeiniu.value = false
   }
 }
 

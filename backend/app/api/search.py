@@ -160,6 +160,15 @@ class EmbyStatusMapRequest(BaseModel):
     items: list[EmbyStatusMapItem]
 
 
+class FeiniuStatusMapItem(BaseModel):
+    media_type: str
+    tmdb_id: int
+
+
+class FeiniuStatusMapRequest(BaseModel):
+    items: list[FeiniuStatusMapItem]
+
+
 def _normalize_emby_media_type(raw_media_type: Any) -> str:
     value = str(raw_media_type or "").strip().lower()
     if value == "tv":
@@ -1565,6 +1574,11 @@ async def get_explore_home(
 async def get_emby_status_map(payload: EmbyStatusMapRequest):
     items = [row.model_dump() for row in payload.items]
     return {"items": await _build_emby_status_map(items)}
+
+
+async def get_feiniu_status_map(payload: FeiniuStatusMapRequest):
+    items = [row.model_dump() for row in payload.items]
+    return {"items": await _build_feiniu_status_map(items)}
 
 
 @router.get("/explore/section/{section_key}")
