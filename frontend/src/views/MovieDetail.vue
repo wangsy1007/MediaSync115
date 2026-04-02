@@ -8,7 +8,7 @@
         <div class="info">
           <div class="title-row">
             <h1 class="title">{{ movie.title }}</h1>
-            <span v-if="isInEmby" class="emby-badge-inline" title="Emby 已入库">
+            <span v-if="isInMediaLibrary" class="emby-badge-inline" title="已入库">
               <el-icon><Check /></el-icon>
             </span>
           </div>
@@ -785,6 +785,8 @@ const ed2kLoading = ref(false)
 const ed2kTried = ref(false)
 const isSubscribed = ref(false)
 const isInEmby = ref(false)
+const isInFeiniu = ref(false)
+const isInMediaLibrary = computed(() => isInEmby.value || isInFeiniu.value)
 const subscriptionId = ref(null)
 const subscribing = ref(false)
 const doubanLink = ref(null)
@@ -1174,6 +1176,7 @@ const fetchMovie = async () => {
     // 获取 IMDB ID 和豆瓣链接
     await fetchExternalIds(tmdbId)
     await refreshEmbyStatus()
+    await refreshFeiniuStatus()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '获取电影信息失败')
   } finally {
@@ -1193,6 +1196,21 @@ const refreshEmbyStatus = async () => {
     isInEmby.value = Boolean(payload[`movie:${tmdbId}`]?.exists_in_emby)
   } catch {
     isInEmby.value = false
+  }
+}
+
+const refreshFeiniuStatus = async () => {
+  const tmdbId = Number(route.params.id || 0)
+  if (!Number.isFinite(tmdbId) || tmdbId <= 0) {
+    isInFeiniu.value = false
+    return
+  }
+  try {
+    const { data } = await searchApi.getFeiniuStatusMap([{ media_type: 'movie', tmdb_id: tmdbId }])
+    const payload = data?.items || {}
+    isInFeiniu.value = Boolean(payload[`movie:${tmdbId}`]?.exists_in_feiniu)
+  } catch {
+    isInFeiniu.value = false
   }
 }
 
@@ -1648,6 +1666,7 @@ watch(pan115SourceTab, (tab) => {
 watch(() => route.params.id, () => {
   resetPan115Diagnostics()
   isInEmby.value = false
+  isInFeiniu.value = false
   pan115SourceTab.value = 'nullbr'
   magnetSourceTab.value = 'nullbr'
   pan115Resources.value = []

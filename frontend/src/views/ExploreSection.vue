@@ -30,7 +30,7 @@
             @error="handleImageError"
           />
           <div class="rank">#{{ item.rank }}</div>
-          <div v-if="item.isInEmby" class="emby-badge" title="Emby 已入库">
+          <div v-if="item.isInMediaLibrary" class="emby-badge" title="已入库">
             <el-icon><Check /></el-icon>
           </div>
           <div class="explore-card-actions">
@@ -135,6 +135,7 @@ const subscribedIdMap = ref(new Map())
 const subscribedDoubanIds = ref(new Set()) // 存储豆瓣ID订阅集合
 const subscribedImdbIds = ref(new Set()) // 存储IMDB ID订阅集合
 const embyStatusMap = ref(new Map())
+const feiniuStatusMap = ref(new Map())
 const EXPLORE_QUEUE_POLL_INTERVAL_MS = 1800
 const queueActiveSubscribeKeys = ref(new Set())
 const queueActiveSaveKeys = ref(new Set())
@@ -157,7 +158,11 @@ const buildSubscribedKey = (mediaType, tmdbId) => {
 const markEmbyOnItem = (item) => {
   if (!item || typeof item !== 'object') return
   const key = buildSubscribedKey(item.media_type, item.tmdb_id)
-  item.isInEmby = Boolean(key) && Boolean(embyStatusMap.value.get(key)?.exists_in_emby)
+  const inEmby = Boolean(key) && Boolean(embyStatusMap.value.get(key)?.exists_in_emby)
+  const inFeiniu = Boolean(key) && Boolean(feiniuStatusMap.value.get(key)?.exists_in_feiniu)
+  item.isInEmby = inEmby
+  item.isInFeiniu = inFeiniu
+  item.isInMediaLibrary = inEmby || inFeiniu
 }
 
 const applySubscribedFlag = (item) => {
@@ -185,6 +190,16 @@ const mergeEmbyStatusMap = (rawMap = {}) => {
     nextMap.set(key, value || {})
   }
   embyStatusMap.value = nextMap
+  applySubscribedFlags()
+}
+
+const mergeFeiniuStatusMap = (rawMap = {}) => {
+  if (!rawMap || typeof rawMap !== 'object') return
+  const nextMap = new Map(feiniuStatusMap.value)
+  for (const [key, value] of Object.entries(rawMap)) {
+    nextMap.set(key, value || {})
+  }
+  feiniuStatusMap.value = nextMap
   applySubscribedFlags()
 }
 
@@ -429,7 +444,8 @@ const requestSectionBatch = async (sectionSource, sectionKey, start, { refresh =
     .then(({ data }) => {
       const payload = {
         ...(data.section || {}),
-        emby_status_map: data?.emby_status_map || {}
+        emby_status_map: data?.emby_status_map || {},
+        feiniu_status_map: data?.feiniu_status_map || {}
       }
       setCachedBatchPayload(sectionSource, sectionKey, start, count, payload)
       return payload
@@ -706,6 +722,8 @@ const appendUniqueItems = (items) => {
       media_type: mediaType,
       isSubscribed: false,
       isInEmby: false,
+      isInFeiniu: false,
+      isInMediaLibrary: false,
       embyChecking: false,
       subscribing: false,
       saving: false,
@@ -744,6 +762,7 @@ const fetchNextBatch = async ({ refresh = false, silent = false } = {}) => {
     const payload = await requestSectionBatch(sectionSource, sectionKey, requestStart, { refresh })
     prefetchedOffsets.delete(requestStart)
     mergeEmbyStatusMap(payload?.emby_status_map || {})
+    mergeFeiniuStatusMap(payload?.feiniu_status_map || {})
     const { batchItems, payloadStart, payloadCount } = updateSectionMetaFromPayload(payload, requestStart)
     nextOffset.value = Math.max(nextOffset.value, payloadStart + payloadCount)
     prefetchCursor = Math.max(prefetchCursor, nextOffset.value)

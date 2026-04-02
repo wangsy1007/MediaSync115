@@ -384,7 +384,7 @@
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane label="Emby" name="emby">
+      <el-tab-pane label="媒体库" name="emby">
         <el-card class="settings-card">
           <template #header>
             <div class="card-header">
@@ -496,6 +496,69 @@
               style="margin-top: 12px"
               :title="embySyncStatus.lastSyncError"
             />
+          </div>
+        </el-card>
+
+        <el-card class="settings-card" style="margin-top: 16px">
+          <template #header>
+            <div class="card-header">
+              <span>飞牛影视配置</span>
+              <el-tag v-if="feiniuStatus.checked" :type="feiniuStatus.valid ? 'success' : 'danger'" size="small">
+                {{ feiniuStatus.valid ? '已连接' : '未连接' }}
+              </el-tag>
+            </div>
+          </template>
+
+          <el-alert
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 16px"
+          >
+            <template #title>
+              <span>如何获取 Secret 和 API Key？</span>
+            </template>
+            <ol style="margin: 6px 0 0; padding-left: 18px; line-height: 1.8">
+              <li>登录飞牛影视网页版，查看源代码（Ctrl+U）；</li>
+              <li>找到第二个 <code>.js</code> 文件；</li>
+              <li>搜索 <code>",s,l,c,o,e].join("_")</code> → 左边引号内为 <strong>Secret</strong>；</li>
+              <li>搜索 <code>`${Ld}/sys/progressThumb`</code> → 右边为 <strong>API Key</strong>。</li>
+            </ol>
+          </el-alert>
+
+          <el-form :model="feiniuForm" label-width="120px">
+            <el-form-item label="飞牛 URL">
+              <el-input v-model="feiniuForm.url" placeholder="例如: http://192.168.1.100:5666" />
+            </el-form-item>
+            <el-form-item label="Secret">
+              <el-input
+                v-model="feiniuForm.secret"
+                type="password"
+                show-password
+                placeholder="请输入飞牛影视 Secret"
+              />
+            </el-form-item>
+            <el-form-item label="API Key">
+              <el-input
+                v-model="feiniuForm.apiKey"
+                type="password"
+                show-password
+                placeholder="请输入飞牛影视 API Key"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingFeiniu" @click="handleSaveFeiniu">保存</el-button>
+              <el-button :loading="testingFeiniu" @click="handleTestFeiniu">测试连接</el-button>
+            </el-form-item>
+          </el-form>
+
+          <div
+            v-if="feiniuStatus.checked"
+            class="connection-result"
+            :class="feiniuStatus.valid ? 'is-success' : 'is-failed'"
+          >
+            <div class="result-title">连接检测结果</div>
+            <div class="result-message">{{ feiniuStatus.message }}</div>
           </div>
         </el-card>
       </el-tab-pane>
@@ -1556,6 +1619,11 @@ const embyForm = ref({
   syncEnabled: false,
   syncIntervalHours: 24
 })
+const feiniuForm = ref({
+  url: '',
+  secret: '',
+  apiKey: ''
+})
 
 const tgForm = ref({
   apiId: '',
@@ -1734,6 +1802,8 @@ const testingHdhive = ref(false)
 const runningHdhiveCheckin = ref(false)
 const savingEmby = ref(false)
 const testingEmby = ref(false)
+const savingFeiniu = ref(false)
+const testingFeiniu = ref(false)
 const runningEmbySync = ref(false)
 const savingTg = ref(false)
 const testingTg = ref(false)
@@ -1883,6 +1953,12 @@ const tgIndexStatus = reactive({
   latestJobs: []
 })
 const embyStatus = reactive({
+  checked: false,
+  valid: false,
+  message: '',
+  user: null
+})
+const feiniuStatus = reactive({
   checked: false,
   valid: false,
   message: '',
@@ -2633,6 +2709,87 @@ const checkEmby = async (notify = false) => {
     embyStatus.user = null
     embyStatus.message = error.response?.data?.detail || error.message || 'Emby 连接检测失败'
     if (notify) ElMessage.error(embyStatus.message)
+  }
+}
+
+const checkFeiniu = async (notify = false) => {
+  try {
+    const customUrl = String(feiniuForm.value.url || '').trim()
+    const customSecret = String(feiniuForm.value.secret || '').trim()
+    const customKey = String(feiniuForm.value.apiKey || '').trim()
+    const { data } = await settingsApi.checkFeiniu(
+      customUrl && customSecret && customKey
+        ? { feiniu_url: customUrl, feiniu_secret: customSecret, feiniu_api_key: customKey }
+        : undefined
+    )
+    feiniuStatus.checked = true
+    feiniuStatus.valid = !!data.valid
+    feiniuStatus.user = data.user || null
+    feiniuStatus.message = data.valid
+      ? `连接成功：${data.user?.server || '飞牛影视服务可用'}`
+      : `连接失败：${data.message || '请检查 URL、Secret 和 API Key'}`
+    if (notify) {
+      if (data.valid) ElMessage.success(feiniuStatus.message)
+      else ElMessage.error(feiniuStatus.message)
+    }
+  } catch (error) {
+    feiniuStatus.checked = true
+    feiniuStatus.valid = false
+    feiniuStatus.user = null
+    feiniuStatus.message = error.response?.data?.detail || error.message || '飞牛影视连接检测失败'
+    if (notify) ElMessage.error(feiniuStatus.message)
+  }
+}
+
+const handleSaveFeiniu = async () => {
+  if (!String(feiniuForm.value.url || '').trim()) {
+    ElMessage.warning('请输入飞牛影视 URL')
+    return
+  }
+  if (!String(feiniuForm.value.secret || '').trim()) {
+    ElMessage.warning('请输入飞牛影视 Secret')
+    return
+  }
+  if (!String(feiniuForm.value.apiKey || '').trim()) {
+    ElMessage.warning('请输入飞牛影视 API Key')
+    return
+  }
+
+  savingFeiniu.value = true
+  try {
+    await settingsApi.updateRuntime({
+      feiniu_url: feiniuForm.value.url,
+      feiniu_secret: feiniuForm.value.secret,
+      feiniu_api_key: feiniuForm.value.apiKey
+    })
+    await fetchRuntimeSettings()
+    ElMessage.success('飞牛影视配置已保存')
+    await checkFeiniu(false)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '飞牛影视配置保存失败')
+  } finally {
+    savingFeiniu.value = false
+  }
+}
+
+const handleTestFeiniu = async () => {
+  if (!String(feiniuForm.value.url || '').trim()) {
+    ElMessage.warning('请输入飞牛影视 URL')
+    return
+  }
+  if (!String(feiniuForm.value.secret || '').trim()) {
+    ElMessage.warning('请输入飞牛影视 Secret')
+    return
+  }
+  if (!String(feiniuForm.value.apiKey || '').trim()) {
+    ElMessage.warning('请输入飞牛影视 API Key')
+    return
+  }
+  testingFeiniu.value = true
+  try {
+    await checkFeiniu(true)
+  } finally {
+    testingFeiniu.value = false
   }
 }
 
@@ -3436,6 +3593,9 @@ const fetchRuntimeSettings = async () => {
     embyForm.value.apiKey = data.emby_api_key || ''
     embyForm.value.syncEnabled = !!data.emby_sync_enabled
     embyForm.value.syncIntervalHours = Number(data.emby_sync_interval_hours || 24)
+    feiniuForm.value.url = data.feiniu_url || ''
+    feiniuForm.value.secret = data.feiniu_secret || ''
+    feiniuForm.value.apiKey = data.feiniu_api_key || ''
 
     if (!pansouForm.value.baseUrl) {
       pansouForm.value.baseUrl = data.pansou_base_url || ''

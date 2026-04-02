@@ -68,7 +68,7 @@
               @error="handleImageError"
             />
             <div class="rank-badge">#{{ item.rank }}</div>
-            <div v-if="item.isInEmby" class="emby-badge" title="Emby 已入库">
+            <div v-if="item.isInMediaLibrary" class="emby-badge" title="已入库">
               <el-icon><Check /></el-icon>
             </div>
             <div class="explore-card-actions">
@@ -142,10 +142,14 @@ const props = defineProps({
   embyStatusMap: {
     type: Object,
     default: () => new Map()
+  },
+  feiniuStatusMap: {
+    type: Object,
+    default: () => new Map()
   }
 })
 
-const emit = defineEmits(['item-click', 'subscribe', 'save', 'merge-emby-status', 'open-section'])
+const emit = defineEmits(['item-click', 'subscribe', 'save', 'merge-emby-status', 'merge-feiniu-status', 'open-section'])
 
 const HOME_SECTION_LIMIT = 12
 const PRIORITY_POSTER_COUNT = 6
@@ -185,6 +189,8 @@ const buildExploreQueueItemKeyFromItem = (item) => {
 const markEmbyOnItem = (item) => {
   const key = buildSubscribedKey(item.media_type, item.tmdb_id || item.tmdbid)
   item.isInEmby = Boolean(key) && Boolean(props.embyStatusMap?.get?.(key)?.exists_in_emby)
+  item.isInFeiniu = Boolean(key) && Boolean(props.feiniuStatusMap?.get?.(key)?.exists_in_feiniu)
+  item.isInMediaLibrary = item.isInEmby || item.isInFeiniu
 }
 
 const applySubscribedFlag = (item) => {
@@ -220,6 +226,8 @@ const normalizeItems = (items = [], rankStart = 1) => {
       rank: item.rank || rankStart + index,
       isSubscribed: false,
       isInEmby: false,
+      isInFeiniu: false,
+      isInMediaLibrary: false,
       subscribing: false,
       saving: false,
       justSaved: false
@@ -314,6 +322,7 @@ const fetchSection = async (force = false) => {
   try {
     const { data } = await searchApi.getExploreSection(props.source, props.section.key, HOME_SECTION_LIMIT, force, 0)
     emit('merge-emby-status', data?.emby_status_map || {})
+    emit('merge-feiniu-status', data?.feiniu_status_map || {})
     const payload = data?.section || {}
     const items = Array.isArray(payload.items) ? payload.items : []
     rowItems.value = normalizeItems(items, 1)
@@ -340,7 +349,8 @@ watch(
     props.subscribedImdbIds,
     props.queueActiveSubscribeKeys,
     props.queueActiveSaveKeys,
-    props.embyStatusMap
+    props.embyStatusMap,
+    props.feiniuStatusMap
   ],
   () => {
     applyStateToItems()

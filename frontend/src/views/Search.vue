@@ -49,6 +49,7 @@
             :queue-active-save-keys="queueActiveSaveKeys"
             :emby-status-map="embyStatusMap"
             @merge-emby-status="mergeEmbyStatusMap"
+            @merge-feiniu-status="mergeFeiniuStatusMap"
             @open-section="goToSection"
             @item-click="handleExploreItemClick"
             @subscribe="handleExploreSubscribe"
@@ -108,7 +109,7 @@
                 decoding="async"
                 @error="handleImageError"
               />
-              <div v-if="item.isInEmby" class="emby-badge" title="Emby 已入库">
+              <div v-if="item.isInMediaLibrary" class="emby-badge" title="已入库">
                 <el-icon><Check /></el-icon>
               </div>
               <div class="media-type-tag">
@@ -116,7 +117,7 @@
                   {{ getMediaTypeLabel(item.media_type) }}
                 </el-tag>
               </div>
-              <div class="rating-badge" :class="{ 'has-emby': item.isInEmby }" v-if="item.vote_average">
+              <div class="rating-badge" :class="{ 'has-emby': item.isInMediaLibrary }" v-if="item.vote_average">
                 {{ item.vote_average.toFixed(1) }}
               </div>
               <div class="action-buttons">
@@ -249,6 +250,7 @@ const subscribedIdMap = ref(new Map())
 const subscribedDoubanIds = ref(new Set()) // 存储豆瓣ID订阅集合
 const subscribedImdbIds = ref(new Set()) // 存储IMDB ID订阅集合
 const embyStatusMap = ref(new Map())
+const feiniuStatusMap = ref(new Map())
 const EXPLORE_QUEUE_POLL_INTERVAL_MS = 1800
 const queueActiveSubscribeKeys = ref(new Set())
 const queueActiveSaveKeys = ref(new Set())
@@ -265,7 +267,11 @@ const buildSubscribedKey = (mediaType, tmdbId) => {
 const markEmbyOnItem = (item) => {
   if (!item || typeof item !== 'object') return
   const key = buildSubscribedKey(item.media_type, item.tmdb_id || item.tmdbid)
-  item.isInEmby = Boolean(key) && Boolean(embyStatusMap.value.get(key)?.exists_in_emby)
+  const inEmby = Boolean(key) && Boolean(embyStatusMap.value.get(key)?.exists_in_emby)
+  const inFeiniu = Boolean(key) && Boolean(feiniuStatusMap.value.get(key)?.exists_in_feiniu)
+  item.isInEmby = inEmby
+  item.isInFeiniu = inFeiniu
+  item.isInMediaLibrary = inEmby || inFeiniu
 }
 
 const isSubscribedMedia = (mediaType, tmdbId) => {
@@ -303,6 +309,15 @@ const mergeEmbyStatusMap = (rawMap = {}) => {
     nextMap.set(key, value || {})
   }
   embyStatusMap.value = nextMap
+}
+
+const mergeFeiniuStatusMap = (rawMap = {}) => {
+  if (!rawMap || typeof rawMap !== 'object') return
+  const nextMap = new Map(feiniuStatusMap.value)
+  for (const [key, value] of Object.entries(rawMap)) {
+    nextMap.set(key, value || {})
+  }
+  feiniuStatusMap.value = nextMap
 }
 
 const normalizeExploreQueueMediaType = (rawType) => {
@@ -682,6 +697,8 @@ const normalizeExploreSectionItems = (items = [], rankStart = 1) => {
       rank: item.rank || rankStart + index,
       isSubscribed: false,
       isInEmby: false,
+      isInFeiniu: false,
+      isInMediaLibrary: false,
       embyChecking: false,
       subscribing: false,
       saving: false,
@@ -1168,6 +1185,8 @@ const normalizeSearchResultItem = (item, index = 0, fallbackService = '') => {
     ),
     isSubscribed: isSubscribedMedia(item.media_type || (isPansouResult ? 'resource' : ''), item.tmdb_id || item.tmdbid || normalizedId),
     isInEmby: false,
+    isInFeiniu: false,
+    isInMediaLibrary: false,
     embyChecking: false,
     subscribing: false,
     saving: false
@@ -1241,6 +1260,7 @@ const handleSearch = async () => {
     const { data } = await searchApi.search(keyword, currentPage.value)
     const items = data.items || data.results || []
     mergeEmbyStatusMap(data?.emby_status_map || {})
+    mergeFeiniuStatusMap(data?.feiniu_status_map || {})
     activeSearchService.value = data.search_service || ''
     results.value = items.map((item, index) =>
       normalizeSearchResultItem(item, index, activeSearchService.value)

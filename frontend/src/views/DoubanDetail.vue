@@ -8,7 +8,7 @@
         <div class="info">
           <div class="title-row">
             <h1 class="title">{{ detail.title }}</h1>
-            <span v-if="isInEmby" class="emby-badge-inline" title="Emby 已入库">
+            <span v-if="isInMediaLibrary" class="emby-badge-inline" title="已入库">
               <el-icon><Check /></el-icon>
             </span>
           </div>
@@ -671,6 +671,8 @@ const magnetResources = ref([])
 const ed2kResources = ref([])
 const isSubscribed = ref(false)
 const isInEmby = ref(false)
+const isInFeiniu = ref(false)
+const isInMediaLibrary = computed(() => isInEmby.value || isInFeiniu.value)
 const subscriptionId = ref(null)
 
 const pan115Loading = ref(false)
@@ -1404,6 +1406,7 @@ const loadDetail = async () => {
     pan115SourceTab.value = mappedTmdbId.value ? 'nullbr' : 'pansou'
     await refreshSubscribeState()
     await refreshEmbyStatus()
+    await refreshFeiniuStatus()
     await ensureActiveTabLoaded()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || error.message || '豆瓣详情获取失败')
@@ -1685,6 +1688,20 @@ const refreshEmbyStatus = async () => {
   }
 }
 
+const refreshFeiniuStatus = async () => {
+  if (!mappedTmdbId.value) {
+    isInFeiniu.value = false
+    return
+  }
+  try {
+    const { data } = await searchApi.getFeiniuStatusMap([{ media_type: mediaType.value, tmdb_id: mappedTmdbId.value }])
+    const payload = data?.items || {}
+    isInFeiniu.value = Boolean(payload[`${mediaType.value}:${mappedTmdbId.value}`]?.exists_in_feiniu)
+  } catch {
+    isInFeiniu.value = false
+  }
+}
+
 const handleSubscribe = async () => {
   if (!mappedTmdbId.value || !detail.value) {
     ElMessage.warning('请先匹配 TMDB 后再订阅')
@@ -1817,6 +1834,7 @@ watch(activeTab, async () => {
 
 watch(mappedTmdbId, async () => {
   await refreshEmbyStatus()
+  await refreshFeiniuStatus()
 })
 
 watch(pan115SourceTab, async (tab) => {
@@ -1851,6 +1869,7 @@ watch(magnetSourceTab, async (tab) => {
 
 watch(() => `${route.params.mediaType || ''}:${route.params.id || ''}`, async () => {
   isInEmby.value = false
+  isInFeiniu.value = false
   activeTab.value = 'pan115'
   pan115SourceTab.value = 'nullbr'
   magnetSourceTab.value = 'nullbr'

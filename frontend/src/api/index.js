@@ -66,6 +66,7 @@ export const searchApi = {
   getExploreSection: (source = 'douban', sectionKey, limit = 30, refresh = false, start = 0) =>
     api.get(`/search/explore/section/${sectionKey}`, { params: { source, limit, refresh, start } }),
   getEmbyStatusMap: (items = []) => api.post('/search/emby/status-map', { items }),
+  getFeiniuStatusMap: (items = []) => api.post('/search/feiniu/status-map', { items }),
   resolveExploreItem: (payload) => api.post('/search/explore/resolve', payload),
   enqueueExploreSubscribeTask: (payload) => api.post('/search/explore/queue/subscribe', payload),
   enqueueExploreSaveTask: (payload) => api.post('/search/explore/queue/save', payload),
@@ -176,6 +177,7 @@ export const settingsApi = {
   checkTmdb: () => api.get('/settings/tmdb/check'),
   checkPansou: () => api.get('/settings/pansou/check'),
   checkEmby: (params) => api.get('/settings/emby/check', { params }),
+  checkFeiniu: (params) => api.get('/settings/feiniu/check', { params }),
   getEmbySyncStatus: () => api.get('/settings/emby/sync/status'),
   runEmbySync: () => api.post('/settings/emby/sync/run'),
   checkAllHealth: () => api.get('/settings/health/all'),
