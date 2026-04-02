@@ -45,6 +45,7 @@ class RuntimeSettingsService:
         "feiniu_url": "FEINIU_URL",
         "feiniu_secret": "FEINIU_SECRET",
         "feiniu_api_key": "FEINIU_API_KEY",
+        "feiniu_session_token": "FEINIU_SESSION_TOKEN",
     }
 
     @staticmethod
@@ -113,6 +114,7 @@ class RuntimeSettingsService:
             "feiniu_url": settings.FEINIU_URL or "",
             "feiniu_secret": settings.FEINIU_SECRET or "",
             "feiniu_api_key": settings.FEINIU_API_KEY or "",
+            "feiniu_session_token": "",
             "auth_username": "admin",
             "auth_password_hash": "",
             "auth_secret": "",
@@ -571,6 +573,9 @@ class RuntimeSettingsService:
     def get_feiniu_api_key(self) -> str:
         return str(self._data.get("feiniu_api_key") or "")
 
+    def get_feiniu_session_token(self) -> str:
+        return str(self._data.get("feiniu_session_token") or "")
+
     def get_auth_username(self) -> str:
         return str(self._data.get("auth_username") or "admin").strip() or "admin"
 
@@ -893,6 +898,7 @@ class RuntimeSettingsService:
             "feiniu_url": self.get_feiniu_url(),
             "feiniu_secret": self.get_feiniu_secret(),
             "feiniu_api_key": self.get_feiniu_api_key(),
+            "feiniu_session_token": self.get_feiniu_session_token(),
             "auth_username": self.get_auth_username(),
             "subscription_nullbr_enabled": bool(
                 self._data.get("subscription_nullbr_enabled", False)

@@ -530,27 +530,9 @@
             <el-form-item label="飞牛 URL">
               <el-input v-model="feiniuForm.url" placeholder="例如: http://192.168.1.100:5666" />
             </el-form-item>
-            <el-form-item label="Secret">
-              <el-input
-                v-model="feiniuForm.secret"
-                type="password"
-                show-password
-                placeholder="可选：手动配置时填写"
-              />
-              <template #label><span>Secret <span style="color: #999; font-weight: normal">(可选)</span></span></template>
-            </el-form-item>
-            <el-form-item label="API Key">
-              <el-input
-                v-model="feiniuForm.apiKey"
-                type="password"
-                show-password
-                placeholder="可选：手动配置时填写"
-              />
-              <template #label><span>API Key <span style="color: #999; font-weight: normal">(可选)</span></span></template>
-            </el-form-item>
             <el-form-item>
-              <el-button type="primary" :loading="savingFeiniu" @click="handleSaveFeiniu">保存URL</el-button>
-              <el-button type="success" :loading="loggingInFeiniu" @click="feiniuLoginDialogVisible = true">一键登录飞牛</el-button>
+              <el-button type="primary" :loading="savingFeiniu" @click="handleSaveFeiniu">保存</el-button>
+              <el-button type="success" :loading="loggingInFeiniu" @click="feiniuLoginDialogVisible = true">登录</el-button>
             </el-form-item>
           </el-form>
 
@@ -1650,9 +1632,7 @@ const embyForm = ref({
   syncIntervalHours: 24
 })
 const feiniuForm = ref({
-  url: '',
-  secret: '',
-  apiKey: ''
+  url: ''
 })
 const feiniuLoginForm = ref({
   username: '',

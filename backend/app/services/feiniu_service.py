@@ -72,6 +72,8 @@ class FeiniuService:
         return f"nonce={nonce}&timestamp={timestamp}&sign={sign_hash}"
 
     def _auth_headers(self, use_session: bool = False) -> dict[str, str]:
+        from app.services.runtime_settings_service import runtime_settings_service
+
         timestamp = str(int(time.time()))
         raw = f"{self.secret}{timestamp}{self.api_key}"
         authx = self._md5(raw)
@@ -79,9 +81,12 @@ class FeiniuService:
             "authx": authx,
             "authn": timestamp,
         }
-        if use_session and self.session_token:
-            headers["Authorization"] = self.session_token
-            headers["Cookie"] = f"mode=relay; Trim-MC-token={self.session_token}"
+        token = (
+            self.session_token or runtime_settings_service.get_feiniu_session_token()
+        )
+        if use_session and token:
+            headers["Authorization"] = token
+            headers["Cookie"] = f"mode=relay; Trim-MC-token={token}"
         return headers
 
     async def browser_login(self, username: str, password: str) -> dict[str, Any]:
@@ -145,6 +150,93 @@ class FeiniuService:
 
         except Exception as exc:
             logger.exception("浏览器登录失败")
+            return {
+                "success": False,
+                "message": f"登录异常: {str(exc)}",
+                "token": None,
+            }
+
+    async def http_login(self, username: str, password: str) -> dict[str, Any]:
+        """
+        使用 HTTP API 登录飞牛影视
+
+        通过 HTTP POST 到 /v/api/v1/login 接口登录。
+
+        Args:
+            username: 用户名
+            password: 密码
+
+        Returns:
+            包含 success, token, message 等字段的字典
+        """
+        if not self.base_url:
+            return {
+                "success": False,
+                "message": "飞牛影视 URL 未配置",
+                "token": None,
+            }
+
+        url = f"{self.base_url}/v/api/v1/login"
+
+        try:
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                response = await client.post(
+                    url,
+                    json={"username": username, "password": password},
+                    timeout=15.0,
+                )
+
+                if response.status_code != 200:
+                    return {
+                        "success": False,
+                        "message": f"登录请求失败 (HTTP {response.status_code})",
+                        "token": None,
+                    }
+
+                payload = response.json()
+                code = payload.get("code")
+                msg = payload.get("msg", "")
+
+                if code == 0:
+                    token = (
+                        payload.get("data", {}).get("token")
+                        if isinstance(payload.get("data"), dict)
+                        else None
+                    )
+                    if token:
+                        self.session_token = token
+                        logger.info(f"HTTP登录成功，获取 Token: {token[:20]}...")
+                        return {
+                            "success": True,
+                            "message": "登录成功",
+                            "token": token,
+                        }
+                    return {
+                        "success": False,
+                        "message": f"登录成功但未返回 Token: {msg}",
+                        "token": None,
+                    }
+                elif code == -15:
+                    return {
+                        "success": False,
+                        "message": "密码错误",
+                        "token": None,
+                    }
+                elif code == -2:
+                    return {
+                        "success": False,
+                        "message": "认证失败，请检查用户名",
+                        "token": None,
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "message": f"登录失败: {msg} (code={code})",
+                        "token": None,
+                    }
+
+        except Exception as exc:
+            logger.exception("HTTP登录异常")
             return {
                 "success": False,
                 "message": f"登录异常: {str(exc)}",
