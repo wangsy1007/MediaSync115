@@ -84,7 +84,11 @@
             </template>
           </el-table-column>
           <el-table-column prop="duration_ms" label="耗时(ms)" width="110" />
-          <el-table-column prop="message" label="说明" min-width="220" show-overflow-tooltip />
+          <el-table-column label="说明" min-width="220" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span>{{ formatMessage(row) }}</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="trace_id" label="Trace ID" min-width="230" show-overflow-tooltip />
           <el-table-column label="请求摘要" min-width="260" show-overflow-tooltip>
             <template #default="{ row }">
@@ -192,6 +196,43 @@ const apiActionPatterns = [
 
 const httpMethodLabels = { GET: '查询', POST: '提交', PUT: '更新', DELETE: '删除', PATCH: '修改' }
 
+const summaryKeyLabels = {
+  method: '请求方法',
+  path: '请求路径',
+  route_path: '路由路径',
+  query: '查询参数',
+  client: '客户端',
+  ip: 'IP地址',
+  user_agent: '用户代理',
+  timezone: '时区',
+  auth: '认证信息',
+  authenticated: '已认证',
+  username: '用户名',
+  headers: '头信息',
+  endpoint: '处理函数',
+  status_code: '状态码',
+  duration_ms: '耗时(毫秒)',
+  data: '数据',
+  detail: '详情',
+  body: '请求体',
+  params: '参数',
+  url: '地址',
+  content_type: '内容类型',
+  content_length: '内容长度'
+}
+
+const headerKeyLabels = {
+  'content-type': '内容类型',
+  'content-length': '内容长度',
+  referer: '来源页',
+  origin: '来源站点',
+  location: '跳转地址',
+  'x-trace-id': '追踪ID',
+  accept: '接受类型',
+  host: '主机',
+  connection: '连接方式'
+}
+
 const translateAction = (value) => {
   if (!value) return '-'
   if (actionLabels[value]) return actionLabels[value]
@@ -207,6 +248,102 @@ const translateAction = (value) => {
     }
   }
   return value
+}
+
+const translateHttpMethod = (method) => {
+  const normalized = String(method || '').toUpperCase()
+  return httpMethodLabels[normalized] || normalized || '-'
+}
+
+const translateEndpoint = (value) => {
+  const normalized = String(value || '').trim()
+  if (!normalized) return '-'
+  if (normalized === 'unknown') return '未知'
+  return normalized
+}
+
+const tryParseJson = (value) => {
+  if (typeof value !== 'string') return value
+  const text = value.trim()
+  if (!text) return value
+  if (!(text.startsWith('{') || text.startsWith('['))) return value
+  try {
+    return JSON.parse(text)
+  } catch {
+    return value
+  }
+}
+
+const translateSummaryValue = (value, key = '') => {
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (value === null || value === undefined) return value
+  if (key === 'method') return translateHttpMethod(value)
+  if (key === 'endpoint') return translateEndpoint(value)
+  if (typeof value === 'string' && /^(GET|POST|PUT|DELETE|PATCH)$/.test(value)) {
+    return translateHttpMethod(value)
+  }
+  return value
+}
+
+const translateSummaryData = (value, parentKey = '') => {
+  const parsed = tryParseJson(value)
+  if (Array.isArray(parsed)) {
+    return parsed.map((item) => translateSummaryData(item, parentKey))
+  }
+  if (parsed && typeof parsed === 'object') {
+    return Object.fromEntries(
+      Object.entries(parsed).map(([key, item]) => {
+        const translatedKey = parentKey === 'headers'
+          ? (headerKeyLabels[key] || key)
+          : (summaryKeyLabels[key] || key)
+        return [translatedKey, translateSummaryData(item, key)]
+      })
+    )
+  }
+  return translateSummaryValue(parsed, parentKey)
+}
+
+const stringifyTranslatedSummary = (value) => {
+  if (!value) return '-'
+  const translated = translateSummaryData(value)
+  if (typeof translated === 'string') return translated
+  try {
+    return JSON.stringify(translated, ensureAsciiFalseReplacer())
+  } catch {
+    return String(translated)
+  }
+}
+
+const ensureAsciiFalseReplacer = () => (key, val) => val
+
+const formatApiMessage = (message, row) => {
+  const raw = String(message || '').trim()
+  if (!raw) return '-'
+
+  let match = raw.match(/^(GET|POST|PUT|DELETE|PATCH)\s+(\S+)\s*->\s*(\d{3})$/)
+  if (match) {
+    return `接口请求完成：${translateHttpMethod(match[1])} ${match[2]}，状态码 ${match[3]}`
+  }
+
+  match = raw.match(/^收到接口请求：(GET|POST|PUT|DELETE|PATCH)\s+([^，]+)，模块=([^，]+)，路由=([^，]+)，处理函数=([^，]+)，客户端=(.+)$/)
+  if (match) {
+    return `收到接口请求：${translateHttpMethod(match[1])} ${match[2]}，模块=${translateLabel(match[3], moduleLabels)}，路由=${match[4]}，处理函数=${translateEndpoint(match[5])}，客户端=${match[6]}`
+  }
+
+  match = raw.match(/^接口处理完成：(GET|POST|PUT|DELETE|PATCH)\s+([^，]+)，模块=([^，]+)，状态码=(\d+)，耗时=(\d+)ms，结果=(.+)$/)
+  if (match) {
+    return `接口处理完成：${translateHttpMethod(match[1])} ${match[2]}，模块=${translateLabel(match[3], moduleLabels)}，状态码=${match[4]}，耗时=${match[5]}毫秒，结果=${translateLabel(String(match[6]).trim().toLowerCase(), statusLabels)}`
+  }
+
+  return raw.replace(/\b(GET|POST|PUT|DELETE|PATCH)\b/g, (_, method) => translateHttpMethod(method))
+}
+
+const formatMessage = (row) => {
+  if (!row) return '-'
+  if (row.source_type === 'api') {
+    return formatApiMessage(row.message, row)
+  }
+  return row.message || '-'
 }
 
 const loading = ref(false)
@@ -241,36 +378,24 @@ const statusTagType = (status) => {
 }
 
 const stringifySummary = (value) => {
-  if (!value) return '-'
-  if (typeof value === 'string') return value
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
+  return stringifyTranslatedSummary(value)
 }
 
 const formatSummaryBlock = (value) => {
   if (!value) return '-'
-  if (typeof value === 'string') {
-    try {
-      return JSON.stringify(JSON.parse(value), null, 2)
-    } catch {
-      return value
-    }
-  }
+  const translated = translateSummaryData(value)
   try {
-    return JSON.stringify(value, null, 2)
+    return JSON.stringify(translated, null, 2)
   } catch {
-    return String(value)
+    return String(translated)
   }
 }
 
 const formatHttpCell = (row) => {
-  const method = row.http_method || '-'
+  const method = translateHttpMethod(row.http_method || '-')
   const path = row.path || '-'
   const statusCode = row.status_code || '-'
-  return `${method} ${path} (${statusCode})`
+  return `${method} ${path}（状态码 ${statusCode}）`
 }
 
 const fetchFilterOptions = async () => {
