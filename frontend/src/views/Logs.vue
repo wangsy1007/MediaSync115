@@ -218,7 +218,22 @@ const summaryKeyLabels = {
   params: '参数',
   url: '地址',
   content_type: '内容类型',
-  content_length: '内容长度'
+  content_length: '内容长度',
+  code: '结果代码',
+  msg: '结果消息',
+  success: '成功',
+  error: '错误',
+  errors: '错误列表',
+  count: '数量',
+  total: '总数',
+  items: '项目',
+  results: '结果',
+  list: '列表',
+  page: '页码',
+  page_size: '每页数量',
+  page_num: '页码',
+  limit: '限制数量',
+  offset: '偏移量'
 }
 
 const headerKeyLabels = {
@@ -232,6 +247,96 @@ const headerKeyLabels = {
   host: '主机',
   connection: '连接方式'
 }
+
+const endpointLabels = {
+  check_all_services_health: '检查全部服务健康状态',
+  check_cookie_valid: '检查 Cookie 有效性',
+  check_emby_credentials: '检查 Emby 连接',
+  check_feiniu_credentials: '检查飞牛连接',
+  check_hdhive_credentials: '检查 HDHive 连接',
+  check_nullbr_credentials: '检查 Nullbr 连接',
+  check_tg_credentials: '检查 Telegram 连接',
+  check_tg_qr_login_status: '检查 Telegram 二维码登录状态',
+  enqueue_explore_subscribe_task: '加入探索订阅队列',
+  get_app_info: '获取应用信息',
+  get_auth_session: '获取登录会话',
+  get_available_charts: '获取可用榜单',
+  get_bridge_by_imdb_id: '通过 IMDb 获取桥接信息',
+  get_current_cookie: '获取当前 Cookie',
+  get_default_folder: '获取默认目录',
+  get_douban_subject_detail: '获取豆瓣条目详情',
+  get_emby_status_map: '获取 Emby 状态图',
+  get_emby_sync_status: '获取 Emby 同步状态',
+  get_explore_meta: '获取探索元信息',
+  get_explore_queue_active_tasks: '获取探索队列活动任务',
+  get_explore_section: '获取探索分区',
+  get_feiniu_status_map: '获取飞牛状态图',
+  get_feiniu_sync_status: '获取飞牛同步状态',
+  get_file_list: '获取文件列表',
+  get_license_status: '获取许可证状态',
+  get_movie: '获取电影详情',
+  get_movie_magnet_butailing: '获取电影不太灵磁力',
+  get_movie_pan115: '获取电影 115 资源',
+  get_offline_default_folder: '获取离线默认目录',
+  get_offline_quota: '获取离线配额',
+  get_offline_tasks: '获取离线任务列表',
+  get_pan115_risk_health: '获取 115 风控健康状态',
+  get_pansou_config: '获取盘搜配置',
+  get_proxy_config: '获取代理配置',
+  get_runtime_settings: '获取运行时设置',
+  get_subscription_status_map: '获取订阅状态图',
+  get_tg_index_job: '获取 Telegram 索引任务',
+  get_tg_index_status: '获取 Telegram 索引状态',
+  get_tv: '获取剧集详情',
+  get_tv_magnet: '获取剧集磁力资源',
+  get_tv_magnet_butailing: '获取剧集不太灵磁力',
+  get_tv_pan115: '获取剧集 115 资源',
+  health_check: '健康检查',
+  list_dynamic_tasks: '获取动态任务列表',
+  list_scheduler_jobs: '获取调度任务列表',
+  list_subscription_logs: '获取订阅日志',
+  list_subscriptions: '获取订阅列表',
+  list_tv_missing_status: '获取剧集缺集状态',
+  list_workflows: '获取工作流列表',
+  login: '登录',
+  login_feiniu: '登录飞牛',
+  proxy_explore_poster: '代理探索海报',
+  run_chart_subscription_now: '立即执行榜单订阅',
+  run_feiniu_sync: '立即执行飞牛同步',
+  run_hdhive_checkin: '执行 HDHive 签到',
+  search: '搜索',
+  set_offline_default_folder: '设置离线默认目录',
+  start_tg_index_backfill: '启动 Telegram 索引补录',
+  start_tg_qr_login: '启动 Telegram 二维码登录',
+  update_pansou_config: '更新盘搜配置',
+  update_runtime_settings: '更新运行时设置',
+  unknown: '未知'
+}
+
+const pathPatterns = [
+  [/^\/api\/search\//, '搜索接口'],
+  [/^\/api\/search$/, '搜索接口'],
+  [/^\/api\/settings\//, '设置接口'],
+  [/^\/api\/settings$/, '设置接口'],
+  [/^\/api\/logs\//, '日志接口'],
+  [/^\/api\/logs$/, '日志接口'],
+  [/^\/api\/pan115\//, '115网盘接口'],
+  [/^\/api\/pan115$/, '115网盘接口'],
+  [/^\/api\/subscriptions\//, '订阅接口'],
+  [/^\/api\/subscriptions$/, '订阅接口'],
+  [/^\/api\/scheduler\//, '调度器接口'],
+  [/^\/api\/scheduler$/, '调度器接口'],
+  [/^\/api\/downloads\//, '下载接口'],
+  [/^\/api\/downloads$/, '下载接口'],
+  [/^\/api\/auth\//, '认证接口'],
+  [/^\/api\/auth$/, '认证接口'],
+  [/^\/api\/health\//, '健康检查接口'],
+  [/^\/api\/health$/, '健康检查接口'],
+  [/^\/api\/license\//, '许可证接口'],
+  [/^\/api\/license$/, '许可证接口'],
+  [/^\/api\/workflows\//, '工作流接口'],
+  [/^\/api\/workflows$/, '工作流接口']
+]
 
 const translateAction = (value) => {
   if (!value) return '-'
@@ -258,7 +363,17 @@ const translateHttpMethod = (method) => {
 const translateEndpoint = (value) => {
   const normalized = String(value || '').trim()
   if (!normalized) return '-'
-  if (normalized === 'unknown') return '未知'
+  return endpointLabels[normalized] || normalized
+}
+
+const translatePath = (value) => {
+  const normalized = String(value || '').trim()
+  if (!normalized) return '-'
+  for (const [pattern, label] of pathPatterns) {
+    if (pattern.test(normalized)) {
+      return `${label}（${normalized}）`
+    }
+  }
   return normalized
 }
 
@@ -279,8 +394,14 @@ const translateSummaryValue = (value, key = '') => {
   if (value === null || value === undefined) return value
   if (key === 'method') return translateHttpMethod(value)
   if (key === 'endpoint') return translateEndpoint(value)
+  if (key === 'path' || key === 'route_path') return translatePath(value)
   if (typeof value === 'string' && /^(GET|POST|PUT|DELETE|PATCH)$/.test(value)) {
     return translateHttpMethod(value)
+  }
+  if (key === 'content-type' && value === 'application/json') return 'JSON'
+  if (key === 'status' || key === 'result') {
+    const lowered = String(value).trim().toLowerCase()
+    return statusLabels[lowered] || value
   }
   return value
 }
@@ -322,17 +443,17 @@ const formatApiMessage = (message, row) => {
 
   let match = raw.match(/^(GET|POST|PUT|DELETE|PATCH)\s+(\S+)\s*->\s*(\d{3})$/)
   if (match) {
-    return `接口请求完成：${translateHttpMethod(match[1])} ${match[2]}，状态码 ${match[3]}`
+    return `接口请求完成：${translateHttpMethod(match[1])} ${translatePath(match[2])}，状态码 ${match[3]}`
   }
 
   match = raw.match(/^收到接口请求：(GET|POST|PUT|DELETE|PATCH)\s+([^，]+)，模块=([^，]+)，路由=([^，]+)，处理函数=([^，]+)，客户端=(.+)$/)
   if (match) {
-    return `收到接口请求：${translateHttpMethod(match[1])} ${match[2]}，模块=${translateLabel(match[3], moduleLabels)}，路由=${match[4]}，处理函数=${translateEndpoint(match[5])}，客户端=${match[6]}`
+    return `收到接口请求：${translateHttpMethod(match[1])} ${translatePath(match[2])}，模块=${translateLabel(match[3], moduleLabels)}，路由=${translatePath(match[4])}，处理函数=${translateEndpoint(match[5])}，客户端=${match[6]}`
   }
 
   match = raw.match(/^接口处理完成：(GET|POST|PUT|DELETE|PATCH)\s+([^，]+)，模块=([^，]+)，状态码=(\d+)，耗时=(\d+)ms，结果=(.+)$/)
   if (match) {
-    return `接口处理完成：${translateHttpMethod(match[1])} ${match[2]}，模块=${translateLabel(match[3], moduleLabels)}，状态码=${match[4]}，耗时=${match[5]}毫秒，结果=${translateLabel(String(match[6]).trim().toLowerCase(), statusLabels)}`
+    return `接口处理完成：${translateHttpMethod(match[1])} ${translatePath(match[2])}，模块=${translateLabel(match[3], moduleLabels)}，状态码=${match[4]}，耗时=${match[5]}毫秒，结果=${translateLabel(String(match[6]).trim().toLowerCase(), statusLabels)}`
   }
 
   return raw.replace(/\b(GET|POST|PUT|DELETE|PATCH)\b/g, (_, method) => translateHttpMethod(method))
@@ -393,7 +514,7 @@ const formatSummaryBlock = (value) => {
 
 const formatHttpCell = (row) => {
   const method = translateHttpMethod(row.http_method || '-')
-  const path = row.path || '-'
+  const path = translatePath(row.path || '-')
   const statusCode = row.status_code || '-'
   return `${method} ${path}（状态码 ${statusCode}）`
 }
