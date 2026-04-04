@@ -48,6 +48,7 @@
             :queue-active-subscribe-keys="queueActiveSubscribeKeys"
             :queue-active-save-keys="queueActiveSaveKeys"
             :emby-status-map="embyStatusMap"
+            :feiniu-status-map="feiniuStatusMap"
             @merge-emby-status="mergeEmbyStatusMap"
             @merge-feiniu-status="mergeFeiniuStatusMap"
             @open-section="goToSection"
@@ -671,7 +672,10 @@ const getCachedHomeSectionBatch = (sectionKey, start, count) => {
     homeSectionBatchCache.delete(cacheKey)
     return null
   }
-  if (!Object.prototype.hasOwnProperty.call(cached.payload || {}, 'emby_status_map')) {
+  if (
+    !Object.prototype.hasOwnProperty.call(cached.payload || {}, 'emby_status_map') ||
+    !Object.prototype.hasOwnProperty.call(cached.payload || {}, 'feiniu_status_map')
+  ) {
     homeSectionBatchCache.delete(cacheKey)
     return null
   }
@@ -863,7 +867,8 @@ const requestHomeSectionBatch = async (sectionKey, start, { refresh = false } = 
     .then(({ data }) => {
       const payload = {
         ...(data.section || {}),
-        emby_status_map: data?.emby_status_map || {}
+        emby_status_map: data?.emby_status_map || {},
+        feiniu_status_map: data?.feiniu_status_map || {}
       }
       setCachedHomeSectionBatch(sectionKey, start, count, payload)
       return payload
@@ -898,6 +903,7 @@ const fetchHomeSectionNextBatch = async (sectionKey) => {
   const task = (async () => {
     const payload = await requestHomeSectionBatch(sectionKey, start)
     mergeEmbyStatusMap(payload?.emby_status_map || {})
+    mergeFeiniuStatusMap(payload?.feiniu_status_map || {})
     const payloadItems = normalizeExploreSectionItems(
       Array.isArray(payload.items) ? payload.items : [],
       start + 1
