@@ -832,7 +832,7 @@ async def login_feiniu(payload: FeiniuLoginRequest):
 
     if result.get("success") and result.get("token"):
         token = result["token"]
-        await runtime_settings_service.update_runtime({"feiniu_session_token": token})
+        runtime_settings_service.update_bulk({"feiniu_session_token": token})
         return {
             "success": True,
             "message": "登录成功",

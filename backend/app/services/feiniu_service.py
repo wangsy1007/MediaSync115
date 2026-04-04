@@ -396,7 +396,7 @@ class FeiniuService:
             }
 
     async def check_connection(self) -> dict[str, Any]:
-        """检查连接状态（使用 API Key 认证）"""
+        """检查连接状态"""
         if not self.base_url:
             return {
                 "valid": False,
@@ -404,27 +404,38 @@ class FeiniuService:
                 "user": None,
             }
 
-        api_key = self.api_key or self.API_KEY
-        secret = self.secret
+        token = self.session_token
+        if not token:
+            from app.services.runtime_settings_service import runtime_settings_service
 
-        if not secret:
+            token = runtime_settings_service.get_feiniu_session_token()
+
+        if not token:
             return {
                 "valid": False,
                 "message": "请先登录飞牛影视获取凭证",
                 "user": None,
             }
 
-        url = f"{self.base_url}/mdb/count"
-        headers = self._auth_headers()
+        url = f"{self.base_url}/v/api/v1/mdb/count"
+        headers = self._auth_headers(use_session=True)
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(url, headers=headers, timeout=10.0)
                 if response.status_code == 200:
-                    return {
-                        "valid": True,
-                        "message": "飞牛影视连接成功",
-                        "user": {"server": "feiniu"},
-                    }
+                    payload = response.json()
+                    if payload.get("code") == 0:
+                        return {
+                            "valid": True,
+                            "message": "飞牛影视连接成功",
+                            "user": {"server": "feiniu"},
+                        }
+                    elif payload.get("code") == -2:
+                        return {
+                            "valid": False,
+                            "message": "Session Token 无效或已过期，请重新登录",
+                            "user": None,
+                        }
                 return {
                     "valid": False,
                     "message": f"连接失败 (HTTP {response.status_code})",
