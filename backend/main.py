@@ -31,6 +31,7 @@ from app.services.operation_log_service import operation_log_service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.emby_sync_scheduler_service import emby_sync_scheduler_service
+from app.services.feiniu_sync_scheduler_service import feiniu_sync_scheduler_service
 from app.services.hdhive_checkin_scheduler_service import (
     hdhive_checkin_scheduler_service,
 )
@@ -162,6 +163,7 @@ async def lifespan(app: FastAPI):
     await subscription_scheduler_service.ensure_chart_subscription_task()
     await hdhive_checkin_scheduler_service.ensure_checkin_task()
     await emby_sync_scheduler_service.ensure_sync_task()
+    await feiniu_sync_scheduler_service.ensure_sync_task()
     await explore_home_warmup_service.warmup(force_refresh=False)
     await tg_bot_service.start()
     global _app_ready

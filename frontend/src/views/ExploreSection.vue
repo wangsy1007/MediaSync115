@@ -30,9 +30,12 @@
             @error="handleImageError"
           />
           <div class="rank">#{{ item.rank }}</div>
-          <div v-if="item.isInMediaLibrary" class="emby-badge" title="已入库">
-            <el-icon><Check /></el-icon>
-          </div>
+          <LibraryBadge
+            v-if="item.isInMediaLibrary"
+            class="emby-badge"
+            :in-emby="item.isInEmby"
+            :in-feiniu="item.isInFeiniu"
+          />
           <div class="explore-card-actions">
             <el-button
               class="explore-action-btn"
@@ -84,7 +87,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { searchApi, subscriptionApi } from '@/api'
-import { Star, FolderAdd, Check } from '@element-plus/icons-vue'
+import { Star, FolderAdd } from '@element-plus/icons-vue'
+import LibraryBadge from '@/components/media/LibraryBadge.vue'
 
 const SECTION_BATCH_CACHE_TTL_MS = 10 * 60 * 1000
 const sectionBatchCache = new Map()
@@ -1018,15 +1022,6 @@ onBeforeUnmount(() => {
         top: 8px;
         right: 8px;
         z-index: 4;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 28px;
-        height: 28px;
-        border-radius: 999px;
-        background: rgba(52, 199, 89, 0.95);
-        color: #fff;
-        box-shadow: 0 6px 16px rgba(52, 199, 89, 0.35);
       }
 
       img {

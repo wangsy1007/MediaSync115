@@ -2,7 +2,6 @@
 飞牛影视服务 - 支持浏览器自动化登录和 API Key 认证
 """
 
-import asyncio
 import base64
 import hashlib
 import json
@@ -43,6 +42,16 @@ class FeiniuService:
 
     def set_session_token(self, token: str) -> None:
         self.session_token = token
+
+    def _get_session_token(self) -> str:
+        if self.session_token:
+            return self.session_token
+        from app.services.runtime_settings_service import runtime_settings_service
+
+        token = runtime_settings_service.get_feiniu_session_token()
+        if token:
+            self.session_token = token
+        return token
 
     def _generate_nonce(self) -> str:
         return str(random.randint(100000, 999999))
@@ -85,6 +94,14 @@ class FeiniuService:
             self.session_token or runtime_settings_service.get_feiniu_session_token()
         )
         if use_session and token:
+            headers["Authorization"] = token
+            headers["Cookie"] = f"mode=relay; Trim-MC-token={token}"
+        return headers
+
+    def _session_headers(self) -> dict[str, str]:
+        token = self._get_session_token()
+        headers: dict[str, str] = {}
+        if token:
             headers["Authorization"] = token
             headers["Cookie"] = f"mode=relay; Trim-MC-token={token}"
         return headers
@@ -409,6 +426,8 @@ class FeiniuService:
             from app.services.runtime_settings_service import runtime_settings_service
 
             token = runtime_settings_service.get_feiniu_session_token()
+            if token:
+                self.session_token = token
 
         if not token:
             return {
@@ -417,7 +436,7 @@ class FeiniuService:
                 "user": None,
             }
 
-        url = f"{self.base_url}/v/api/v1/mdb/count"
+        url = f"{self.base_url}/v/api/v1/user/info"
         headers = self._auth_headers(use_session=True)
         async with httpx.AsyncClient() as client:
             try:
@@ -428,14 +447,19 @@ class FeiniuService:
                         return {
                             "valid": True,
                             "message": "飞牛影视连接成功",
-                            "user": {"server": "feiniu"},
+                            "user": payload.get("data") or {"server": "feiniu"},
                         }
-                    elif payload.get("code") == -2:
+                    if payload.get("code") == -2:
                         return {
                             "valid": False,
                             "message": "Session Token 无效或已过期，请重新登录",
                             "user": None,
                         }
+                    return {
+                        "valid": False,
+                        "message": payload.get("msg") or "飞牛影视连接失败",
+                        "user": None,
+                    }
                 return {
                     "valid": False,
                     "message": f"连接失败 (HTTP {response.status_code})",
@@ -448,9 +472,21 @@ class FeiniuService:
                     "user": None,
                 }
 
+    async def check_connection_with_config(
+        self, base_url: str, secret: str, api_key: str
+    ) -> dict[str, Any]:
+        """使用临时配置检查连接状态"""
+        previous = (self.base_url, self.secret, self.api_key, self.session_token)
+        try:
+            self.set_config(base_url, secret, api_key)
+            return await self.check_connection()
+        finally:
+            self.base_url, self.secret, self.api_key, self.session_token = previous
+
     async def check_connection_with_session(self) -> dict[str, Any]:
         """使用 session token 检查连接状态"""
-        if not self.session_token:
+        token = self._get_session_token()
+        if not token:
             return {
                 "valid": False,
                 "message": "未登录，无 session token",
@@ -458,11 +494,7 @@ class FeiniuService:
             }
 
         url = f"{self.base_url}/v/api/v1/user/info"
-        headers = {
-            "Authx": self._compute_authx("/v/api/v1/user/info"),
-            "Authorization": self.session_token,
-            "Cookie": f"mode=relay; Trim-MC-token={self.session_token}",
-        }
+        headers = self._session_headers()
 
         async with httpx.AsyncClient() as client:
             try:
@@ -494,7 +526,8 @@ class FeiniuService:
 
     async def get_movie_status_by_tmdb(self, tmdb_id: int) -> dict[str, Any]:
         """使用 session token 检查电影是否存在（需要先登录）"""
-        if not self.session_token:
+        token = self._get_session_token()
+        if not token:
             return {
                 "status": "not_logged_in",
                 "message": "未登录，无法查询媒体状态",
@@ -503,11 +536,7 @@ class FeiniuService:
             }
 
         url = f"{self.base_url}/v/api/v1/mdb/search"
-        headers = {
-            "Authx": self._compute_authx(f"/v/api/v1/mdb/search"),
-            "Authorization": self.session_token,
-            "Cookie": f"mode=relay; Trim-MC-token={self.session_token}",
-        }
+        headers = self._session_headers()
         params = {"tmdb": str(tmdb_id), "type": "movie"}
 
         async with httpx.AsyncClient() as client:
@@ -552,7 +581,8 @@ class FeiniuService:
 
     async def get_tv_episode_status_by_tmdb(self, tmdb_id: int) -> dict[str, Any]:
         """使用 session token 检查剧集是否存在"""
-        if not self.session_token:
+        token = self._get_session_token()
+        if not token:
             return {
                 "status": "not_logged_in",
                 "message": "未登录，无法查询媒体状态",
@@ -560,11 +590,7 @@ class FeiniuService:
             }
 
         url = f"{self.base_url}/v/api/v1/mdb/search"
-        headers = {
-            "Authx": self._compute_authx(f"/v/api/v1/mdb/search"),
-            "Authorization": self.session_token,
-            "Cookie": f"mode=relay; Trim-MC-token={self.session_token}",
-        }
+        headers = self._session_headers()
         params = {"tmdb": str(tmdb_id), "type": "tv"}
 
         async with httpx.AsyncClient() as client:
@@ -642,6 +668,176 @@ class FeiniuService:
                 return {
                     "status": "request_failed",
                     "message": str(exc),
+                }
+
+    async def list_items_page(self, page: int = 1) -> dict[str, Any]:
+        """分页获取媒体条目列表"""
+        token = self._get_session_token()
+        if not self.base_url or not token:
+            return {
+                "success": False,
+                "message": "飞牛影视未登录",
+                "data": None,
+            }
+
+        url = f"{self.base_url}/v/api/v1/item/list"
+        headers = self._session_headers()
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json={"page": max(1, int(page))},
+                    timeout=30.0,
+                )
+                if response.status_code != 200:
+                    return {
+                        "success": False,
+                        "message": f"请求失败 (HTTP {response.status_code})",
+                        "data": None,
+                    }
+                payload = response.json()
+                if payload.get("code") != 0:
+                    return {
+                        "success": False,
+                        "message": payload.get("msg") or "获取媒体条目失败",
+                        "data": None,
+                    }
+                return {
+                    "success": True,
+                    "message": "查询成功",
+                    "data": payload.get("data") or {},
+                }
+            except Exception as exc:
+                return {
+                    "success": False,
+                    "message": str(exc),
+                    "data": None,
+                }
+
+    async def get_item_detail(self, guid: str) -> dict[str, Any]:
+        """获取条目详情"""
+        token = self._get_session_token()
+        item_guid = str(guid or "").strip()
+        if not self.base_url or not token or not item_guid:
+            return {
+                "success": False,
+                "message": "参数无效或未登录",
+                "data": None,
+            }
+
+        url = f"{self.base_url}/v/api/v1/item/{item_guid}"
+        headers = self._session_headers()
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(url, headers=headers, timeout=15.0)
+                if response.status_code != 200:
+                    return {
+                        "success": False,
+                        "message": f"请求失败 (HTTP {response.status_code})",
+                        "data": None,
+                    }
+                payload = response.json()
+                if payload.get("code") != 0:
+                    return {
+                        "success": False,
+                        "message": payload.get("msg") or "获取条目详情失败",
+                        "data": None,
+                    }
+                return {
+                    "success": True,
+                    "message": "查询成功",
+                    "data": payload.get("data") or {},
+                }
+            except Exception as exc:
+                return {
+                    "success": False,
+                    "message": str(exc),
+                    "data": None,
+                }
+
+    async def list_seasons(self, tv_guid: str) -> dict[str, Any]:
+        """获取剧集季列表"""
+        token = self._get_session_token()
+        item_guid = str(tv_guid or "").strip()
+        if not self.base_url or not token or not item_guid:
+            return {
+                "success": False,
+                "message": "参数无效或未登录",
+                "data": [],
+            }
+
+        url = f"{self.base_url}/v/api/v1/season/list/{item_guid}"
+        headers = self._session_headers()
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(url, headers=headers, timeout=15.0)
+                if response.status_code != 200:
+                    return {
+                        "success": False,
+                        "message": f"请求失败 (HTTP {response.status_code})",
+                        "data": [],
+                    }
+                payload = response.json()
+                if payload.get("code") != 0:
+                    return {
+                        "success": False,
+                        "message": payload.get("msg") or "获取季列表失败",
+                        "data": [],
+                    }
+                data = payload.get("data") or []
+                return {
+                    "success": True,
+                    "message": "查询成功",
+                    "data": data if isinstance(data, list) else [],
+                }
+            except Exception as exc:
+                return {
+                    "success": False,
+                    "message": str(exc),
+                    "data": [],
+                }
+
+    async def list_episodes(self, season_guid: str) -> dict[str, Any]:
+        """获取单季分集列表"""
+        token = self._get_session_token()
+        item_guid = str(season_guid or "").strip()
+        if not self.base_url or not token or not item_guid:
+            return {
+                "success": False,
+                "message": "参数无效或未登录",
+                "data": [],
+            }
+
+        url = f"{self.base_url}/v/api/v1/episode/list/{item_guid}"
+        headers = self._session_headers()
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(url, headers=headers, timeout=15.0)
+                if response.status_code != 200:
+                    return {
+                        "success": False,
+                        "message": f"请求失败 (HTTP {response.status_code})",
+                        "data": [],
+                    }
+                payload = response.json()
+                if payload.get("code") != 0:
+                    return {
+                        "success": False,
+                        "message": payload.get("msg") or "获取分集列表失败",
+                        "data": [],
+                    }
+                data = payload.get("data") or []
+                return {
+                    "success": True,
+                    "message": "查询成功",
+                    "data": data if isinstance(data, list) else [],
+                }
+            except Exception as exc:
+                return {
+                    "success": False,
+                    "message": str(exc),
+                    "data": [],
                 }
 
 

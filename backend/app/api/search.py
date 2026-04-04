@@ -22,6 +22,7 @@ from app.services.douban_explore_service import (
 from app.services.explore_action_queue_service import explore_action_queue_service
 from app.services.emby_service import emby_service
 from app.services.feiniu_service import feiniu_service
+from app.services.feiniu_sync_index_service import feiniu_sync_index_service
 from app.services.explore_home_warmup_service import (
     EXPLORE_HOME_WARMUP_LIMIT,
     explore_home_warmup_service,
@@ -387,7 +388,9 @@ async def _resolve_feiniu_status_payload(
     media_type: str, tmdb_id: int
 ) -> dict[str, Any]:
     if media_type == "tv":
-        tv_status = await feiniu_service.get_tv_episode_status_by_tmdb(tmdb_id)
+        tv_status = await feiniu_sync_index_service.get_tv_existing_episodes(tmdb_id)
+        if tv_status is None:
+            tv_status = await feiniu_service.get_tv_episode_status_by_tmdb(tmdb_id)
         status_text = str(tv_status.get("status") or "")
         existing_episodes = tv_status.get("existing_episodes") or set()
         return {
@@ -396,7 +399,9 @@ async def _resolve_feiniu_status_payload(
             "existing_episodes": len(existing_episodes),
         }
 
-    movie_status = await feiniu_service.get_movie_status_by_tmdb(tmdb_id)
+    movie_status = await feiniu_sync_index_service.get_movie_status(tmdb_id)
+    if movie_status is None:
+        movie_status = await feiniu_service.get_movie_status_by_tmdb(tmdb_id)
     status_text = str(movie_status.get("status") or "")
     exists_in_feiniu = status_text == "ok" and bool(movie_status.get("exists"))
     return {
@@ -1576,6 +1581,7 @@ async def get_emby_status_map(payload: EmbyStatusMapRequest):
     return {"items": await _build_emby_status_map(items)}
 
 
+@router.post("/feiniu/status-map")
 async def get_feiniu_status_map(payload: FeiniuStatusMapRequest):
     items = [row.model_dump() for row in payload.items]
     return {"items": await _build_feiniu_status_map(items)}

@@ -8,9 +8,13 @@
         <div class="info">
           <div class="title-row">
             <h1 class="title">{{ detail.title }}</h1>
-            <span v-if="isInMediaLibrary" class="emby-badge-inline" title="已入库">
-              <el-icon><Check /></el-icon>
-            </span>
+            <LibraryBadge
+              v-if="isInMediaLibrary"
+              class="emby-badge-inline"
+              inline
+              :in-emby="isInEmby"
+              :in-feiniu="isInFeiniu"
+            />
           </div>
           <p class="original-title" v-if="detail.original_title && detail.original_title !== detail.title">
             {{ detail.original_title }}
@@ -641,7 +645,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { pansouApi, pan115Api, searchApi, subscriptionApi } from '@/api'
-import { Check } from '@element-plus/icons-vue'
+import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import { getVisibleTabs, loadVisibleTabs, isTabVisible } from '@/utils/detailTabs'
 import { extractTags } from '@/utils/resourceTags'
 
@@ -1916,13 +1920,6 @@ onMounted(async () => {
       .emby-badge-inline {
         display: inline-flex;
         align-items: center;
-        justify-content: center;
-        width: 32px;
-        height: 32px;
-        border-radius: 999px;
-        background: rgba(52, 199, 89, 0.95);
-        color: #fff;
-        box-shadow: 0 6px 18px rgba(52, 199, 89, 0.35);
       }
 
       .title {

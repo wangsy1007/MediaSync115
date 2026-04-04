@@ -8,9 +8,13 @@
         <div class="info">
           <div class="title-row">
             <h1 class="title">{{ movie.title }}</h1>
-            <span v-if="isInMediaLibrary" class="emby-badge-inline" title="已入库">
-              <el-icon><Check /></el-icon>
-            </span>
+            <LibraryBadge
+              v-if="isInMediaLibrary"
+              class="emby-badge-inline"
+              inline
+              :in-emby="isInEmby"
+              :in-feiniu="isInFeiniu"
+            />
           </div>
           <p class="original-title" v-if="movie.original_title !== movie.title">
             {{ movie.original_title }}
@@ -740,7 +744,8 @@ import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { searchApi, subscriptionApi, pan115Api } from '@/api'
-import { Star, Plus, Check } from '@element-plus/icons-vue'
+import { Star, Plus } from '@element-plus/icons-vue'
+import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import { getVisibleTabs, loadVisibleTabs, isTabVisible } from '@/utils/detailTabs'
 import { extractTags } from '@/utils/resourceTags'
 
@@ -1174,7 +1179,7 @@ const fetchMovie = async () => {
     }
 
     // 获取 IMDB ID 和豆瓣链接
-    await fetchExternalIds(tmdbId)
+    await fetchExternalIds()
     await refreshEmbyStatus()
     await refreshFeiniuStatus()
   } catch (error) {
@@ -1214,10 +1219,14 @@ const refreshFeiniuStatus = async () => {
   }
 }
 
-const fetchExternalIds = async (tmdbId) => {
+const fetchExternalIds = async () => {
+  const imdbId = String(movie.value?.imdb_id || movie.value?.external_ids?.imdb_id || '').trim()
+  if (!imdbId) {
+    doubanLink.value = null
+    return
+  }
   try {
-    // 调用 bridge API 获取 IMDB ID 和豆瓣信息
-    const { data } = await searchApi.getBridgeByImdbId(`tt${tmdbId}`, 'movie')
+    const { data } = await searchApi.getBridgeByImdbId(imdbId, 'movie')
     if (data?.imdb_id) {
       doubanLink.value = {
         imdb_id: data.imdb_id,
@@ -1756,13 +1765,6 @@ onMounted(() => {
       .emby-badge-inline {
         display: inline-flex;
         align-items: center;
-        justify-content: center;
-        width: 32px;
-        height: 32px;
-        border-radius: 999px;
-        background: rgba(52, 199, 89, 0.95);
-        color: #fff;
-        box-shadow: 0 6px 18px rgba(52, 199, 89, 0.35);
       }
 
       .title {

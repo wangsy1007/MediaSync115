@@ -509,30 +509,28 @@
             </div>
           </template>
 
-          <el-alert
-            type="info"
-            :closable="false"
-            show-icon
-            style="margin-bottom: 16px"
-          >
-            <template #title>
-              <span>如何获取 Secret 和 API Key？</span>
-            </template>
-            <ol style="margin: 6px 0 0; padding-left: 18px; line-height: 1.8">
-              <li>登录飞牛影视网页版，查看源代码（Ctrl+U）；</li>
-              <li>找到第二个 <code>.js</code> 文件；</li>
-              <li>搜索 <code>",s,l,c,o,e].join("_")</code> → 左边引号内为 <strong>Secret</strong>；</li>
-              <li>搜索 <code>`${Ld}/sys/progressThumb`</code> → 右边为 <strong>API Key</strong>。</li>
-            </ol>
-          </el-alert>
-
           <el-form :model="feiniuForm" label-width="120px">
             <el-form-item label="飞牛 URL">
               <el-input v-model="feiniuForm.url" placeholder="例如: http://192.168.1.100:5666" />
             </el-form-item>
+            <el-form-item label="定时同步">
+              <el-switch v-model="feiniuForm.syncEnabled" />
+            </el-form-item>
+            <el-form-item label="同步间隔(小时)">
+              <el-input-number
+                v-model="feiniuForm.syncIntervalHours"
+                :min="1"
+                :max="168"
+                :disabled="!feiniuForm.syncEnabled"
+              />
+            </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingFeiniu" @click="handleSaveFeiniu">保存</el-button>
+              <el-button :loading="testingFeiniu" @click="handleTestFeiniu">测试连接</el-button>
               <el-button type="success" :loading="loggingInFeiniu" @click="feiniuLoginDialogVisible = true">登录</el-button>
+              <el-button type="warning" :loading="runningFeiniuSync" @click="handleRunFeiniuSync">
+                立即同步
+              </el-button>
             </el-form-item>
           </el-form>
 
@@ -543,6 +541,68 @@
           >
             <div class="result-title">连接检测结果</div>
             <div class="result-message">{{ feiniuStatus.message }}</div>
+          </div>
+
+          <div v-if="feiniuStatus.valid && feiniuStatus.user" class="user-info">
+            <el-divider />
+            <h4>服务信息</h4>
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="用户名">
+                {{ feiniuStatus.user.username || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="语言">
+                {{ feiniuStatus.user.lan || '-' }}
+              </el-descriptions-item>
+            </el-descriptions>
+          </div>
+
+          <div class="user-info">
+            <el-divider />
+            <h4>同步状态</h4>
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="当前状态">
+                <el-tag :type="feiniuSyncStatusTagType" size="small">
+                  {{ feiniuSyncStatusText }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="是否已有快照">
+                <el-tag :type="feiniuSyncStatus.hasSnapshot ? 'success' : 'info'" size="small">
+                  {{ feiniuSyncStatus.hasSnapshot ? '有' : '无' }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="最近开始时间">
+                {{ formatBeijingTableCell(null, null, feiniuSyncStatus.lastSyncStartedAt) || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="最近完成时间">
+                {{ formatBeijingTableCell(null, null, feiniuSyncStatus.lastSyncFinishedAt) || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="最近成功时间">
+                {{ formatBeijingTableCell(null, null, feiniuSyncStatus.lastSuccessfulSyncAt) || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="最近耗时">
+                {{ feiniuSyncStatus.lastSyncDurationMs ? `${feiniuSyncStatus.lastSyncDurationMs} ms` : '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="电影数">
+                {{ feiniuSyncStatus.movieCount }}
+              </el-descriptions-item>
+              <el-descriptions-item label="剧集数">
+                {{ feiniuSyncStatus.tvCount }}
+              </el-descriptions-item>
+              <el-descriptions-item label="已索引集数">
+                {{ feiniuSyncStatus.episodeCount }}
+              </el-descriptions-item>
+              <el-descriptions-item label="最近触发来源">
+                {{ feiniuSyncStatus.lastTrigger || '-' }}
+              </el-descriptions-item>
+            </el-descriptions>
+            <el-alert
+              v-if="feiniuSyncStatus.lastSyncError"
+              :closable="false"
+              type="error"
+              show-icon
+              style="margin-top: 12px"
+              :title="feiniuSyncStatus.lastSyncError"
+            />
           </div>
         </el-card>
       </el-tab-pane>
@@ -1632,7 +1692,9 @@ const embyForm = ref({
   syncIntervalHours: 24
 })
 const feiniuForm = ref({
-  url: ''
+  url: '',
+  syncEnabled: false,
+  syncIntervalHours: 24
 })
 const feiniuLoginForm = ref({
   username: '',
@@ -1821,6 +1883,7 @@ const savingFeiniu = ref(false)
 const testingFeiniu = ref(false)
 const loggingInFeiniu = ref(false)
 const runningEmbySync = ref(false)
+const runningFeiniuSync = ref(false)
 const savingTg = ref(false)
 const testingTg = ref(false)
 const verifyingTgPassword = ref(false)
@@ -1980,6 +2043,20 @@ const feiniuStatus = reactive({
   message: '',
   user: null
 })
+const feiniuSyncStatus = reactive({
+  status: '',
+  running: false,
+  hasSnapshot: false,
+  lastTrigger: '',
+  lastSyncStartedAt: '',
+  lastSyncFinishedAt: '',
+  lastSuccessfulSyncAt: '',
+  lastSyncDurationMs: null,
+  lastSyncError: '',
+  movieCount: 0,
+  tvCount: 0,
+  episodeCount: 0
+})
 const embySyncStatus = reactive({
   status: '',
   running: false,
@@ -1995,6 +2072,7 @@ const embySyncStatus = reactive({
   episodeCount: 0
 })
 let embySyncPollTimer = null
+let feiniuSyncPollTimer = null
 const sourceConnectionStatus = reactive({
   nullbr: { checked: false, ok: false, text: '未检测' },
   hdhive: { checked: false, ok: false, text: '未检测' },
@@ -2036,6 +2114,20 @@ const embySyncStatusTagType = computed(() => {
   if (embySyncStatus.running) return 'warning'
   if (embySyncStatus.status === 'success') return 'success'
   if (embySyncStatus.status === 'failed') return 'danger'
+  return 'info'
+})
+
+const feiniuSyncStatusText = computed(() => {
+  if (feiniuSyncStatus.running) return '同步中'
+  if (feiniuSyncStatus.status === 'success') return '同步成功'
+  if (feiniuSyncStatus.status === 'failed') return '同步失败'
+  return '未同步'
+})
+
+const feiniuSyncStatusTagType = computed(() => {
+  if (feiniuSyncStatus.running) return 'warning'
+  if (feiniuSyncStatus.status === 'success') return 'success'
+  if (feiniuSyncStatus.status === 'failed') return 'danger'
   return 'info'
 })
 
@@ -2731,11 +2823,9 @@ const checkEmby = async (notify = false) => {
 const checkFeiniu = async (notify = false) => {
   try {
     const customUrl = String(feiniuForm.value.url || '').trim()
-    const customSecret = String(feiniuForm.value.secret || '').trim()
-    const customKey = String(feiniuForm.value.apiKey || '').trim()
     const { data } = await settingsApi.checkFeiniu(
-      customUrl && customSecret && customKey
-        ? { feiniu_url: customUrl, feiniu_secret: customSecret, feiniu_api_key: customKey }
+      customUrl
+        ? { feiniu_url: customUrl }
         : undefined
     )
     feiniuStatus.checked = true
@@ -2743,7 +2833,7 @@ const checkFeiniu = async (notify = false) => {
     feiniuStatus.user = data.user || null
     feiniuStatus.message = data.valid
       ? `连接成功：${data.user?.server || '飞牛影视服务可用'}`
-      : `连接失败：${data.message || '请检查 URL、Secret 和 API Key'}`
+      : `连接失败：${data.message || '请检查 URL 或重新登录飞牛'}`
     if (notify) {
       if (data.valid) ElMessage.success(feiniuStatus.message)
       else ElMessage.error(feiniuStatus.message)
@@ -2767,12 +2857,13 @@ const handleSaveFeiniu = async () => {
   try {
     await settingsApi.updateRuntime({
       feiniu_url: feiniuForm.value.url,
-      feiniu_secret: feiniuForm.value.secret,
-      feiniu_api_key: feiniuForm.value.apiKey
+      feiniu_sync_enabled: feiniuForm.value.syncEnabled,
+      feiniu_sync_interval_hours: feiniuForm.value.syncIntervalHours
     })
     await fetchRuntimeSettings()
     ElMessage.success('飞牛影视配置已保存')
     await checkFeiniu(false)
+    await fetchFeiniuSyncStatus(false)
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '飞牛影视配置保存失败')
   } finally {
@@ -2783,14 +2874,6 @@ const handleSaveFeiniu = async () => {
 const handleTestFeiniu = async () => {
   if (!String(feiniuForm.value.url || '').trim()) {
     ElMessage.warning('请输入飞牛影视 URL')
-    return
-  }
-  if (!String(feiniuForm.value.secret || '').trim()) {
-    ElMessage.warning('请输入飞牛影视 Secret')
-    return
-  }
-  if (!String(feiniuForm.value.apiKey || '').trim()) {
-    ElMessage.warning('请输入飞牛影视 API Key')
     return
   }
   testingFeiniu.value = true
@@ -2822,6 +2905,8 @@ const handleFeiniuLogin = async () => {
       feiniuLoginDialogVisible.value = false
       feiniuLoginForm.value.username = ''
       feiniuLoginForm.value.password = ''
+      await checkFeiniu(false)
+      await fetchFeiniuSyncStatus(false)
     } else {
       ElMessage.error(data.message || '飞牛影视登录失败')
     }
@@ -2829,6 +2914,72 @@ const handleFeiniuLogin = async () => {
     ElMessage.error(error.response?.data?.detail || '飞牛影视登录失败')
   } finally {
     loggingInFeiniu.value = false
+  }
+}
+
+const applyFeiniuSyncStatus = (data = {}) => {
+  feiniuSyncStatus.status = String(data.status || '')
+  feiniuSyncStatus.running = !!data.running
+  feiniuSyncStatus.hasSnapshot = !!data.has_snapshot
+  feiniuSyncStatus.lastTrigger = String(data.last_trigger || '')
+  feiniuSyncStatus.lastSyncStartedAt = data.last_sync_started_at || ''
+  feiniuSyncStatus.lastSyncFinishedAt = data.last_sync_finished_at || ''
+  feiniuSyncStatus.lastSuccessfulSyncAt = data.last_successful_sync_at || ''
+  feiniuSyncStatus.lastSyncDurationMs = Number.isFinite(Number(data.last_sync_duration_ms))
+    ? Number(data.last_sync_duration_ms)
+    : null
+  feiniuSyncStatus.lastSyncError = String(data.last_sync_error || '')
+  feiniuSyncStatus.movieCount = Number(data.movie_count || 0)
+  feiniuSyncStatus.tvCount = Number(data.tv_count || 0)
+  feiniuSyncStatus.episodeCount = Number(data.episode_count || 0)
+}
+
+const stopFeiniuSyncPolling = () => {
+  if (feiniuSyncPollTimer) {
+    clearInterval(feiniuSyncPollTimer)
+    feiniuSyncPollTimer = null
+  }
+}
+
+const startFeiniuSyncPolling = () => {
+  if (feiniuSyncPollTimer) return
+  feiniuSyncPollTimer = window.setInterval(async () => {
+    await fetchFeiniuSyncStatus(false)
+    if (!feiniuSyncStatus.running) {
+      stopFeiniuSyncPolling()
+      runningFeiniuSync.value = false
+    }
+  }, 5000)
+}
+
+const fetchFeiniuSyncStatus = async (notifyOnError = false) => {
+  try {
+    const { data } = await settingsApi.getFeiniuSyncStatus()
+    applyFeiniuSyncStatus(data || {})
+    runningFeiniuSync.value = feiniuSyncStatus.running
+    if (feiniuSyncStatus.running) startFeiniuSyncPolling()
+    else stopFeiniuSyncPolling()
+  } catch (error) {
+    if (notifyOnError) {
+      ElMessage.error(error.response?.data?.detail || error.message || '获取飞牛同步状态失败')
+    }
+  }
+}
+
+const handleRunFeiniuSync = async () => {
+  runningFeiniuSync.value = true
+  try {
+    const { data } = await settingsApi.runFeiniuSync()
+    applyFeiniuSyncStatus(data?.status || {})
+    if (data?.started === false) {
+      ElMessage.info(data.message || '飞牛同步任务已在运行')
+    } else {
+      ElMessage.success(data?.message || '飞牛同步任务已启动')
+    }
+    startFeiniuSyncPolling()
+  } catch (error) {
+    runningFeiniuSync.value = false
+    ElMessage.error(error.response?.data?.detail || '启动飞牛同步失败')
   }
 }
 
@@ -3633,8 +3784,8 @@ const fetchRuntimeSettings = async () => {
     embyForm.value.syncEnabled = !!data.emby_sync_enabled
     embyForm.value.syncIntervalHours = Number(data.emby_sync_interval_hours || 24)
     feiniuForm.value.url = data.feiniu_url || ''
-    feiniuForm.value.secret = data.feiniu_secret || ''
-    feiniuForm.value.apiKey = data.feiniu_api_key || ''
+    feiniuForm.value.syncEnabled = !!data.feiniu_sync_enabled
+    feiniuForm.value.syncIntervalHours = Number(data.feiniu_sync_interval_hours || 24)
 
     if (!pansouForm.value.baseUrl) {
       pansouForm.value.baseUrl = data.pansou_base_url || ''
@@ -4103,6 +4254,10 @@ onMounted(() => {
       checkEmby(false)
     }
     fetchEmbySyncStatus(false)
+    if (String(feiniuForm.value.url || '').trim()) {
+      checkFeiniu(false)
+    }
+    fetchFeiniuSyncStatus(false)
     if (String(tgForm.value.session || '').trim()) {
       checkTg(false)
     }
@@ -4126,6 +4281,7 @@ onBeforeUnmount(() => {
   stopPan115QrPolling()
   stopTgQrPolling()
   stopEmbySyncPolling()
+  stopFeiniuSyncPolling()
 })
 </script>
 

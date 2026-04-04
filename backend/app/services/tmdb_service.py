@@ -282,13 +282,15 @@ class TmdbService:
 
     async def get_movie_detail(self, tmdb_id: int) -> dict[str, Any]:
         params = self._required_params()
-        params["append_to_response"] = "credits,release_dates,videos"
+        params["append_to_response"] = "credits,release_dates,videos,external_ids"
         cache_key = f"movie:{tmdb_id}"
         return await self._get_cached(cache_key, f"/movie/{tmdb_id}", params)
 
     async def get_tv_detail(self, tmdb_id: int) -> dict[str, Any]:
         params = self._required_params()
-        params["append_to_response"] = "aggregate_credits,content_ratings,videos"
+        params["append_to_response"] = (
+            "aggregate_credits,content_ratings,videos,external_ids"
+        )
         cache_key = f"tv:{tmdb_id}"
         return await self._get_cached(cache_key, f"/tv/{tmdb_id}", params)
 

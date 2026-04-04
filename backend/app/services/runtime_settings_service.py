@@ -115,6 +115,8 @@ class RuntimeSettingsService:
             "feiniu_secret": settings.FEINIU_SECRET or "",
             "feiniu_api_key": settings.FEINIU_API_KEY or "",
             "feiniu_session_token": "",
+            "feiniu_sync_enabled": False,
+            "feiniu_sync_interval_hours": 24,
             "auth_username": "admin",
             "auth_password_hash": "",
             "auth_secret": "",
@@ -576,6 +578,16 @@ class RuntimeSettingsService:
     def get_feiniu_session_token(self) -> str:
         return str(self._data.get("feiniu_session_token") or "")
 
+    def get_feiniu_sync_enabled(self) -> bool:
+        return bool(self._data.get("feiniu_sync_enabled", False))
+
+    def get_feiniu_sync_interval_hours(self) -> int:
+        value = self._data.get("feiniu_sync_interval_hours", 24)
+        try:
+            return max(1, int(value))
+        except Exception:
+            return 24
+
     def get_auth_username(self) -> str:
         return str(self._data.get("auth_username") or "admin").strip() or "admin"
 
@@ -899,6 +911,8 @@ class RuntimeSettingsService:
             "feiniu_secret": self.get_feiniu_secret(),
             "feiniu_api_key": self.get_feiniu_api_key(),
             "feiniu_session_token": self.get_feiniu_session_token(),
+            "feiniu_sync_enabled": self.get_feiniu_sync_enabled(),
+            "feiniu_sync_interval_hours": self.get_feiniu_sync_interval_hours(),
             "auth_username": self.get_auth_username(),
             "subscription_nullbr_enabled": bool(
                 self._data.get("subscription_nullbr_enabled", False)

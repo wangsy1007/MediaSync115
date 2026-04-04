@@ -68,9 +68,12 @@
               @error="handleImageError"
             />
             <div class="rank-badge">#{{ item.rank }}</div>
-            <div v-if="item.isInMediaLibrary" class="emby-badge" title="已入库">
-              <el-icon><Check /></el-icon>
-            </div>
+            <LibraryBadge
+              v-if="item.isInMediaLibrary"
+              class="emby-badge"
+              :in-emby="item.isInEmby"
+              :in-feiniu="item.isInFeiniu"
+            />
             <div class="explore-card-actions">
               <el-button
                 class="explore-action-btn"
@@ -107,8 +110,9 @@
 
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, ArrowRight, Star, FolderAdd, Check } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, Star, FolderAdd } from '@element-plus/icons-vue'
 import { searchApi } from '@/api'
+import LibraryBadge from '@/components/media/LibraryBadge.vue'
 
 const props = defineProps({
   source: {
@@ -366,12 +370,12 @@ watch(
     loading.value = false
     loadError.value = ''
     await nextTick()
-    setupObserver()
+    fetchSection()
   }
 )
 
 onMounted(() => {
-  setupObserver()
+  fetchSection()
 })
 
 onBeforeUnmount(() => {
@@ -558,15 +562,6 @@ onBeforeUnmount(() => {
         top: 10px;
         right: 10px;
         z-index: 4;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 28px;
-        height: 28px;
-        border-radius: 999px;
-        background: rgba(52, 199, 89, 0.95);
-        color: #fff;
-        box-shadow: 0 6px 16px rgba(52, 199, 89, 0.35);
       }
 
       .explore-card-actions {

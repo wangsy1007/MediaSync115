@@ -4,6 +4,7 @@ from typing import Any, Callable
 
 from app.services.emby_service import emby_service
 from app.services.emby_sync_index_service import emby_sync_index_service
+from app.services.feiniu_sync_index_service import feiniu_sync_index_service
 from app.services.explore_home_warmup_service import explore_home_warmup_service
 from app.core.database import async_session_maker
 from app.services.hdhive_service import hdhive_service
@@ -17,6 +18,7 @@ class JobRegistry:
         self._registry: dict[str, Callable[..., Any]] = {
             "system.refresh_emby": self._refresh_emby,
             "system.sync_emby_index": self._sync_emby_index,
+            "system.sync_feiniu_index": self._sync_feiniu_index,
             "system.cleanup_runtime_cache": self._cleanup_runtime_cache,
             "system.warmup_explore_home_cache": self._warmup_explore_home_cache,
             "system.noop": self._noop,
@@ -44,6 +46,9 @@ class JobRegistry:
     async def _sync_emby_index(self, **kwargs) -> dict[str, Any]:
         return await emby_sync_index_service.sync_index(trigger="scheduler")
 
+    async def _sync_feiniu_index(self, **kwargs) -> dict[str, Any]:
+        return await feiniu_sync_index_service.sync_index(trigger="scheduler")
+
     async def _cleanup_runtime_cache(self, **kwargs) -> dict[str, Any]:
         from app.api import search as search_api
         from app.services import douban_explore_service, tmdb_explore_service
@@ -51,6 +56,7 @@ class JobRegistry:
         search_api._movie_pan115_cache.clear()
         search_api._tv_pan115_cache.clear()
         search_api._emby_badge_cache.clear()
+        search_api._feiniu_badge_cache.clear()
         explore_home_warmup_service.clear_snapshots()
         for cache_item in search_api._popular_sections_cache.values():
             cache_item["payload"] = None
@@ -66,15 +72,20 @@ class JobRegistry:
 
     async def _noop(self, **kwargs) -> dict[str, Any]:
         await asyncio.sleep(0)
-        return {"success": True, "message": f"noop executed at {datetime.utcnow().isoformat()}"}
+        return {
+            "success": True,
+            "message": f"noop executed at {datetime.utcnow().isoformat()}",
+        }
 
     async def _hdhive_checkin(self, **kwargs) -> dict[str, Any]:
         gamble = runtime_settings_service.get_hdhive_auto_checkin_mode() == "gamble"
         method = runtime_settings_service.get_hdhive_auto_checkin_method()
         method_label = "Cookie" if method == "cookie" else "API Key"
         await operation_log_service.log_background_event(
-            source_type="scheduler", module="hdhive",
-            action="hdhive.checkin.start", status="info",
+            source_type="scheduler",
+            module="hdhive",
+            action="hdhive.checkin.start",
+            status="info",
             message=f"HDHive 自动签到开始（方式：{method_label}，模式：{'赌博' if gamble else '普通'}）",
         )
         if method == "cookie":
@@ -83,23 +94,29 @@ class JobRegistry:
             result = await hdhive_service.check_in(gamble=gamble)
         if str(result.get("status") or "") == "already_checked_in":
             await operation_log_service.log_background_event(
-                source_type="scheduler", module="hdhive",
-                action="hdhive.checkin.skipped", status="info",
+                source_type="scheduler",
+                module="hdhive",
+                action="hdhive.checkin.skipped",
+                status="info",
                 message=f"HDHive 今日已签到（{method_label}）：{result.get('message') or ''}",
                 extra={"method": method, "gamble": gamble, "result": result},
             )
             return result
         if not bool(result.get("success")):
             await operation_log_service.log_background_event(
-                source_type="scheduler", module="hdhive",
-                action="hdhive.checkin.failed", status="failed",
+                source_type="scheduler",
+                module="hdhive",
+                action="hdhive.checkin.failed",
+                status="failed",
                 message=f"HDHive 签到失败：{result.get('message') or '未知错误'}",
                 extra={"method": method, "gamble": gamble},
             )
             raise ValueError(str(result.get("message") or "HDHive 自动签到失败"))
         await operation_log_service.log_background_event(
-            source_type="scheduler", module="hdhive",
-            action="hdhive.checkin.success", status="success",
+            source_type="scheduler",
+            module="hdhive",
+            action="hdhive.checkin.success",
+            status="success",
             message=f"HDHive 签到成功（{method_label}）：{result.get('message') or ''}",
             extra={"method": method, "gamble": gamble, "result": result},
         )
@@ -123,6 +140,7 @@ class JobRegistry:
 
     async def _chart_subscription_sync(self, **kwargs) -> dict[str, Any]:
         from app.services.chart_subscription_service import run_chart_subscription
+
         return await run_chart_subscription()
 
 

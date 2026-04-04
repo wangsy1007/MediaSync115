@@ -23,6 +23,8 @@ from app.services.hdhive_checkin_scheduler_service import (
 )
 from app.services.emby_sync_index_service import emby_sync_index_service
 from app.services.emby_sync_scheduler_service import emby_sync_scheduler_service
+from app.services.feiniu_sync_index_service import feiniu_sync_index_service
+from app.services.feiniu_sync_scheduler_service import feiniu_sync_scheduler_service
 from app.services.tg_sync_service import tg_sync_service
 from app.services.tg_service import tg_service
 from app.services.tmdb_service import tmdb_service
@@ -87,6 +89,9 @@ class RuntimeSettingsRequest(BaseModel):
     feiniu_url: Optional[str] = None
     feiniu_secret: Optional[str] = None
     feiniu_api_key: Optional[str] = None
+    feiniu_session_token: Optional[str] = None
+    feiniu_sync_enabled: Optional[bool] = None
+    feiniu_sync_interval_hours: Optional[int] = None
     subscription_nullbr_enabled: Optional[bool] = None
     subscription_nullbr_interval_hours: Optional[int] = None
     subscription_nullbr_run_time: Optional[str] = None
@@ -332,6 +337,28 @@ def _validate_emby_sync_settings(merged_settings: dict) -> None:
         interval_hours = 0
     if interval_hours < 1:
         raise HTTPException(status_code=400, detail="Emby 同步间隔必须大于等于 1 小时")
+
+
+def _validate_feiniu_sync_settings(merged_settings: dict) -> None:
+    enabled = bool(merged_settings.get("feiniu_sync_enabled", False))
+    if not enabled:
+        return
+    feiniu_url = str(merged_settings.get("feiniu_url") or "").strip()
+    feiniu_session_token = str(
+        merged_settings.get("feiniu_session_token") or ""
+    ).strip()
+    if not feiniu_url or not feiniu_session_token:
+        raise HTTPException(
+            status_code=400, detail="启用飞牛定时同步前必须先配置 URL 并完成登录"
+        )
+    try:
+        interval_hours = int(
+            merged_settings.get("feiniu_sync_interval_hours", 24) or 24
+        )
+    except Exception:
+        interval_hours = 0
+    if interval_hours < 1:
+        raise HTTPException(status_code=400, detail="飞牛同步间隔必须大于等于 1 小时")
 
 
 @router.get("/runtime")
@@ -609,6 +636,16 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
         }
     ):
         _validate_emby_sync_settings(merged_settings)
+    if any(
+        key in payload
+        for key in {
+            "feiniu_url",
+            "feiniu_session_token",
+            "feiniu_sync_enabled",
+            "feiniu_sync_interval_hours",
+        }
+    ):
+        _validate_feiniu_sync_settings(merged_settings)
     if any(key in payload for key in {"update_source_type", "update_repository"}):
         _validate_update_source_settings(merged_settings)
     _invalidate_settings_check_cache()
@@ -618,6 +655,7 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
         await subscription_scheduler_service.ensure_chart_subscription_task()
         await hdhive_checkin_scheduler_service.ensure_checkin_task()
         await emby_sync_scheduler_service.ensure_sync_task()
+        await feiniu_sync_scheduler_service.ensure_sync_task()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -631,6 +669,7 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
         "emby_api_key",
         "feiniu_secret",
         "feiniu_api_key",
+        "feiniu_session_token",
         "tg_bot_token",
         "license_key",
     }
@@ -800,6 +839,13 @@ async def check_feiniu_credentials(
         payload = await feiniu_service.check_connection_with_config(
             custom_url, custom_secret, custom_key
         )
+    elif custom_url:
+        feiniu_service.set_config(
+            custom_url,
+            runtime_settings_service.get_feiniu_secret(),
+            runtime_settings_service.get_feiniu_api_key(),
+        )
+        payload = await feiniu_service.check_connection()
     else:
         payload = await feiniu_service.check_connection()
     return payload
@@ -832,7 +878,12 @@ async def login_feiniu(payload: FeiniuLoginRequest):
 
     if result.get("success") and result.get("token"):
         token = result["token"]
-        runtime_settings_service.update_bulk({"feiniu_session_token": token})
+        runtime_settings_service.update_bulk(
+            {
+                "feiniu_url": feiniu_url,
+                "feiniu_session_token": token,
+            }
+        )
         return {
             "success": True,
             "message": "登录成功",
@@ -863,6 +914,28 @@ async def run_emby_sync():
     if not result.get("success"):
         raise HTTPException(
             status_code=400, detail=result.get("message") or "Emby 同步启动失败"
+        )
+    return result
+
+
+@router.get("/feiniu/sync/status")
+async def get_feiniu_sync_status():
+    status = await feiniu_sync_index_service.get_status()
+    return {
+        **status,
+        "configured": bool(
+            runtime_settings_service.get_feiniu_url()
+            and runtime_settings_service.get_feiniu_session_token()
+        ),
+    }
+
+
+@router.post("/feiniu/sync/run")
+async def run_feiniu_sync():
+    result = await feiniu_sync_index_service.start_background_sync(trigger="manual")
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=400, detail=result.get("message") or "飞牛同步启动失败"
         )
     return result
 
