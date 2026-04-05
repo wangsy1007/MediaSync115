@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import init_db
 from app.api import (
+    archive as archive_api,
     auth as auth_api,
     license as license_api,
     logs as logs_api,
@@ -37,6 +38,7 @@ from app.services.hdhive_checkin_scheduler_service import (
 )
 from app.services.subscription_scheduler_service import subscription_scheduler_service
 from app.services.tg_bot import tg_bot_service
+from app.services.archive_scheduler_service import archive_scheduler_service
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +166,7 @@ async def lifespan(app: FastAPI):
     await hdhive_checkin_scheduler_service.ensure_checkin_task()
     await emby_sync_scheduler_service.ensure_sync_task()
     await feiniu_sync_scheduler_service.ensure_sync_task()
+    await archive_scheduler_service.ensure_scan_task()
     await explore_home_warmup_service.warmup(force_refresh=False)
     await tg_bot_service.start()
     global _app_ready
@@ -348,6 +351,7 @@ async def operation_logging_middleware(request: Request, call_next):
 
 
 app.include_router(search.router, prefix="/api")
+app.include_router(archive_api.router, prefix="/api")
 app.include_router(auth_api.router, prefix="/api")
 app.include_router(subscriptions.router, prefix="/api")
 app.include_router(pan115.router, prefix="/api")

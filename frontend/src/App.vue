@@ -54,6 +54,10 @@
             <el-icon><Download /></el-icon>
             <span>离线下载</span>
           </el-menu-item>
+          <el-menu-item index="/archive">
+            <el-icon><FolderOpened /></el-icon>
+            <span>归档刮削</span>
+          </el-menu-item>
           <el-menu-item index="/logs">
             <el-icon><Document /></el-icon>
             <span>日志</span>
@@ -155,6 +159,10 @@
             <el-icon><Download /></el-icon>
             <span>离线下载</span>
           </el-menu-item>
+          <el-menu-item index="/archive">
+            <el-icon><FolderOpened /></el-icon>
+            <span>归档刮削</span>
+          </el-menu-item>
           <el-menu-item index="/logs">
             <el-icon><Document /></el-icon>
             <span>日志</span>
@@ -202,6 +210,7 @@ import {
   Search,
   Star,
   Download,
+  FolderOpened,
   Document,
   Setting,
   Monitor,

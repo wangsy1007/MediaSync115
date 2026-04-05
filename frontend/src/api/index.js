@@ -215,6 +215,16 @@ export const logsApi = {
   prune: (days = 30) => api.post('/logs/prune', null, { params: { days } })
 }
 
+export const archiveApi = {
+  getConfig: () => api.get('/archive/config'),
+  updateConfig: (payload) => api.put('/archive/config', payload),
+  listFolders: (cid = '0') => api.get('/archive/folders', { params: { cid } }),
+  listTasks: (params) => api.get('/archive/tasks', { params }),
+  runScan: () => api.post('/archive/scan', null, { timeout: 300000 }),
+  retryTask: (taskId) => api.post(`/archive/tasks/${taskId}/retry`, null, { timeout: 300000 }),
+  clearTasks: (includeFailed = false) => api.delete('/archive/tasks/clear', { params: { include_failed: includeFailed } })
+}
+
 export const subscriptionApi = {
   list: (params) => api.get('/subscriptions', { params }),
   listForStatus: (params) => api.get('/subscriptions/status-map', {

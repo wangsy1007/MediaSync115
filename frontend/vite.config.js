@@ -8,7 +8,7 @@ import Components from 'unplugin-vue-components/vite'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const apiProxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8001'
+  const apiProxyTarget = env.VITE_API_PROXY_TARGET || 'http://localhost:8000'
 
   return {
     plugins: [

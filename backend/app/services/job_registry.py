@@ -11,6 +11,7 @@ from app.services.hdhive_service import hdhive_service
 from app.services.operation_log_service import operation_log_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.subscription_service import subscription_service
+from app.services.archive_service import archive_service
 
 
 class JobRegistry:
@@ -22,6 +23,7 @@ class JobRegistry:
             "system.cleanup_runtime_cache": self._cleanup_runtime_cache,
             "system.warmup_explore_home_cache": self._warmup_explore_home_cache,
             "system.noop": self._noop,
+            "system.archive_scan": self._archive_scan,
             "hdhive.checkin": self._hdhive_checkin,
             "subscription.check_nullbr": self._check_subscription_nullbr,
             "subscription.check_hdhive": self._check_subscription_hdhive,
@@ -76,6 +78,9 @@ class JobRegistry:
             "success": True,
             "message": f"noop executed at {datetime.utcnow().isoformat()}",
         }
+
+    async def _archive_scan(self, **kwargs) -> dict[str, Any]:
+        return await archive_service.run_scan(trigger="scheduler")
 
     async def _hdhive_checkin(self, **kwargs) -> dict[str, Any]:
         gamble = runtime_settings_service.get_hdhive_auto_checkin_mode() == "gamble"

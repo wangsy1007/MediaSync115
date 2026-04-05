@@ -165,6 +165,10 @@ class RuntimeSettingsService:
             "chart_subscription_limit": 20,
             "chart_subscription_interval_hours": 24,
             "chart_subscription_run_time": "02:00",
+            "archive_enabled": False,
+            "archive_watch_cid": "",
+            "archive_output_cid": "",
+            "archive_interval_minutes": 10,
         }
         self._data = dict(self._defaults)
         self._load()
@@ -676,6 +680,58 @@ class RuntimeSettingsService:
         value = str(self._data.get("update_repository") or "").strip()
         return value or "wangsy1007/mediasync115"
 
+    def get_archive_enabled(self) -> bool:
+        return bool(self._data.get("archive_enabled", False))
+
+    def get_archive_watch_cid(self) -> str:
+        return str(self._data.get("archive_watch_cid") or "").strip()
+
+    def get_archive_output_cid(self) -> str:
+        return str(self._data.get("archive_output_cid") or "").strip()
+
+    def get_archive_interval_minutes(self) -> int:
+        value = self._data.get("archive_interval_minutes", 10)
+        try:
+            return max(1, int(value))
+        except Exception:
+            return 10
+
+    def get_archive_config(self) -> dict[str, Any]:
+        return {
+            "archive_enabled": self.get_archive_enabled(),
+            "archive_watch_cid": self.get_archive_watch_cid(),
+            "archive_output_cid": self.get_archive_output_cid(),
+            "archive_interval_minutes": self.get_archive_interval_minutes(),
+        }
+
+    def update_archive_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("归档配置格式无效")
+
+        if "archive_enabled" in payload and payload["archive_enabled"] is not None:
+            self._data["archive_enabled"] = bool(payload["archive_enabled"])
+        if "archive_watch_cid" in payload and payload["archive_watch_cid"] is not None:
+            self._data["archive_watch_cid"] = str(
+                payload["archive_watch_cid"] or ""
+            ).strip()
+        if (
+            "archive_output_cid" in payload
+            and payload["archive_output_cid"] is not None
+        ):
+            self._data["archive_output_cid"] = str(
+                payload["archive_output_cid"] or ""
+            ).strip()
+        if (
+            "archive_interval_minutes" in payload
+            and payload["archive_interval_minutes"] is not None
+        ):
+            self._data["archive_interval_minutes"] = max(
+                1, int(payload["archive_interval_minutes"])
+            )
+
+        self._save()
+        return self.get_archive_config()
+
     def update_bulk(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise ValueError("配置数据格式无效")
@@ -981,6 +1037,10 @@ class RuntimeSettingsService:
             "chart_subscription_run_time": str(
                 self._data.get("chart_subscription_run_time", "02:00") or "02:00"
             ),
+            "archive_enabled": self.get_archive_enabled(),
+            "archive_watch_cid": self.get_archive_watch_cid(),
+            "archive_output_cid": self.get_archive_output_cid(),
+            "archive_interval_minutes": self.get_archive_interval_minutes(),
         }
 
 

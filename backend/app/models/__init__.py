@@ -12,6 +12,7 @@ from app.models.models import (
 )
 from app.models.scheduler_task import SchedulerTask
 from app.models.workflow import Workflow
+from app.models.archive import ArchiveStatus, ArchiveTask
 from app.models.emby_sync_index import EmbyMediaIndex, EmbyTvEpisodeIndex, EmbySyncState
 from app.models.feiniu_sync_index import (
     FeiniuMediaIndex,
@@ -32,6 +33,8 @@ __all__ = [
     "TgSyncState",
     "SchedulerTask",
     "Workflow",
+    "ArchiveStatus",
+    "ArchiveTask",
     "EmbyMediaIndex",
     "EmbyTvEpisodeIndex",
     "EmbySyncState",

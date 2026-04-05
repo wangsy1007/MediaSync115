@@ -41,6 +41,11 @@ const routes = [
     component: () => import('@/views/Downloads.vue')
   },
   {
+    path: '/archive',
+    name: 'Archive',
+    component: () => import('@/views/Archive.vue')
+  },
+  {
     path: '/subscription-logs',
     redirect: '/logs'
   },
