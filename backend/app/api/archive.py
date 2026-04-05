@@ -71,20 +71,31 @@ async def update_archive_config(payload: ArchiveConfigRequest):
 @router.get("/folders")
 async def list_folders(cid: str = "0"):
     """列出 115 网盘指定目录下的子文件夹（用于目录选择器）"""
+    import logging
+    logger = logging.getLogger(__name__)
     try:
         pan115 = Pan115Service()
         result = await pan115.get_file_list(cid=cid, limit=1000)
         items = result.get("data") or []
+        logger.info(f"[list_folders] cid={cid}, items count={len(items)}")
+        if items:
+            logger.info(f"[list_folders] first item keys={list(items[0].keys()) if isinstance(items[0], dict) else 'N/A'}")
+            logger.info(f"[list_folders] first item sample={items[0] if isinstance(items[0], dict) else 'N/A'}")
         folders = []
         for it in items:
             if not isinstance(it, dict):
                 continue
-            fid = str(it.get("fid") or "")
+            # 115 文件夹使用 cid 作为标识，fid 通常是 None 或空
             cid_val = str(it.get("cid") or "")
-            folder_id = fid or cid_val
+            fid_val = str(it.get("fid") or "")
+            # 优先使用 cid（文件夹ID），如果没有则使用 fid
+            folder_id = cid_val or fid_val
             if not folder_id:
                 continue
-            if not pan115._is_folder_item(it):
+            # 判断是否为文件夹：检查 ico 字段或没有 fid 的情况
+            ico = str(it.get("ico") or "").lower()
+            is_folder = ico == "folder" or not fid_val
+            if not is_folder:
                 continue
             # 尝试多种可能的字段名获取文件夹名称
             name = (
@@ -93,7 +104,7 @@ async def list_folders(cid: str = "0"):
                 or it.get("file_name")
                 or it.get("fn")
                 or it.get("title")
-                or it.get("cid", "")[:8]  # 兜底显示 CID 前 8 位
+                or folder_id[:8]  # 兜底显示 ID 前 8 位
             )
             folders.append(
                 {
@@ -102,8 +113,11 @@ async def list_folders(cid: str = "0"):
                 }
             )
         folders.sort(key=lambda x: x["name"].lower())
+        logger.info(f"[list_folders] folders count={len(folders)}")
         return {"cid": cid, "folders": folders}
     except Exception as exc:
+        import traceback
+        logger.error(f"[list_folders] error: {exc}\n{traceback.format_exc()}")
         raise HTTPException(status_code=400, detail=str(exc))
 
 
