@@ -28,8 +28,8 @@
 
           <el-form-item label="115 监听目录" class="grid-span-2">
             <div class="folder-row">
-              <el-tag v-if="config.archive_watch_cid" closable type="info" @close="config.archive_watch_cid = ''">
-                CID: {{ config.archive_watch_cid }}
+              <el-tag v-if="config.archive_watch_cid" closable type="info" @close="config.archive_watch_cid = ''; config.archive_watch_name = ''">
+                {{ config.archive_watch_name || config.archive_watch_cid }}
               </el-tag>
               <el-button size="small" @click="openPicker('watch')">选择目录</el-button>
             </div>
@@ -38,8 +38,8 @@
 
           <el-form-item label="115 输出目录" class="grid-span-2">
             <div class="folder-row">
-              <el-tag v-if="config.archive_output_cid" closable type="info" @close="config.archive_output_cid = ''">
-                CID: {{ config.archive_output_cid }}
+              <el-tag v-if="config.archive_output_cid" closable type="info" @close="config.archive_output_cid = ''; config.archive_output_name = ''">
+                {{ config.archive_output_name || config.archive_output_cid }}
               </el-tag>
               <el-button size="small" @click="openPicker('output')">选择目录</el-button>
             </div>
@@ -64,12 +64,12 @@
           <el-tag :type="config.archive_enabled ? 'success' : 'info'">{{ config.archive_enabled ? '已启用' : '未启用' }}</el-tag>
         </div>
         <div class="status-item">
-          <span class="status-label">监听目录 CID</span>
-          <span class="status-value">{{ config.archive_watch_cid || '未配置' }}</span>
+          <span class="status-label">监听目录</span>
+          <span class="status-value">{{ config.archive_watch_name || config.archive_watch_cid || '未配置' }}</span>
         </div>
         <div class="status-item">
-          <span class="status-label">输出目录 CID</span>
-          <span class="status-value">{{ config.archive_output_cid || '未配置' }}</span>
+          <span class="status-label">输出目录</span>
+          <span class="status-value">{{ config.archive_output_name || config.archive_output_cid || '未配置' }}</span>
         </div>
         <div class="status-item">
           <span class="status-label">扫描间隔</span>
@@ -155,7 +155,7 @@
         <el-table-column prop="cid" label="CID" width="120" show-overflow-tooltip />
         <el-table-column label="操作" width="120">
           <template #default="{ row }">
-            <el-button size="small" type="primary" text @click.stop="navigatePicker(row.cid)">进入</el-button>
+            <el-button size="small" type="primary" text @click.stop="enterPickerFolder(row)">进入</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -189,7 +189,9 @@ const tasks = ref([])
 const config = reactive({
   archive_enabled: false,
   archive_watch_cid: '',
+  archive_watch_name: '',
   archive_output_cid: '',
+  archive_output_name: '',
   archive_interval_minutes: 10
 })
 
@@ -210,6 +212,13 @@ const pickerHistory = ref([])
 const pickerTitle = computed(() => pickerTarget.value === 'watch' ? '选择 115 监听目录' : '选择 115 输出目录')
 const pickerBreadcrumbs = computed(() => [{ cid: '0', name: '根目录' }, ...pickerHistory.value])
 
+// 获取当前目录的名称
+const getCurrentFolderName = () => {
+  if (pickerCurrentCid.value === '0') return '根目录'
+  const found = pickerHistory.value.find(h => h.cid === pickerCurrentCid.value)
+  return found?.name || pickerCurrentCid.value
+}
+
 const mediaTypeLabel = (v) => v === 'movie' ? '电影' : v === 'tv' ? '剧集' : '-'
 const statusLabel = (v) => ({ processing: '处理中', success: '成功', failed: '失败', skipped: '跳过' }[v] || '待处理')
 const statusTagType = (v) => ({ success: 'success', failed: 'danger', processing: 'warning' }[v] || 'info')
@@ -218,7 +227,9 @@ const loadConfig = async () => {
   const { data } = await archiveApi.getConfig()
   config.archive_enabled = !!data.archive_enabled
   config.archive_watch_cid = data.archive_watch_cid || ''
+  config.archive_watch_name = data.archive_watch_name || ''
   config.archive_output_cid = data.archive_output_cid || ''
+  config.archive_output_name = data.archive_output_name || ''
   config.archive_interval_minutes = Number(data.archive_interval_minutes || 10)
 }
 
@@ -250,7 +261,9 @@ const saveConfig = async () => {
     await archiveApi.updateConfig({
       archive_enabled: config.archive_enabled,
       archive_watch_cid: config.archive_watch_cid,
+      archive_watch_name: config.archive_watch_name,
       archive_output_cid: config.archive_output_cid,
+      archive_output_name: config.archive_output_name,
       archive_interval_minutes: config.archive_interval_minutes
     })
     ElMessage.success('归档配置已保存')
@@ -312,8 +325,40 @@ const loadPickerFolders = async (cid) => {
   }
 }
 
-const navigatePicker = (cid) => loadPickerFolders(cid)
-const handlePickerRowClick = (row) => navigatePicker(row.cid)
+const navigatePicker = (cid) => {
+  // 如果点击的是当前目录，不做任何事
+  if (cid === pickerCurrentCid.value) return
+  
+  // 查找目标目录在面包屑中的索引
+  const index = pickerHistory.value.findIndex(h => h.cid === cid)
+  if (index >= 0) {
+    // 点击的是面包屑中的某个目录，截断历史
+    pickerHistory.value = pickerHistory.value.slice(0, index)
+  }
+  // 否则是点击面包屑的根目录，清空历史
+  else if (cid === '0') {
+    pickerHistory.value = []
+  }
+  
+  loadPickerFolders(cid)
+}
+
+const handlePickerRowClick = (row) => {
+  enterPickerFolder(row)
+}
+
+const enterPickerFolder = (row) => {
+  // 进入子目录前，将当前目录加入历史
+  const currentName = getCurrentFolderName()
+  if (pickerCurrentCid.value !== '0' && !pickerHistory.value.find(h => h.cid === pickerCurrentCid.value)) {
+    pickerHistory.value.push({ cid: pickerCurrentCid.value, name: currentName })
+  }
+  // 将目标目录加入历史（使用 row.name）
+  if (!pickerHistory.value.find(h => h.cid === row.cid)) {
+    pickerHistory.value.push({ cid: row.cid, name: row.name })
+  }
+  loadPickerFolders(row.cid)
+}
 
 const createPickerFolder = async () => {
   try {
@@ -343,8 +388,14 @@ const createPickerFolder = async () => {
 }
 
 const confirmPicker = () => {
-  if (pickerTarget.value === 'watch') config.archive_watch_cid = pickerCurrentCid.value
-  else config.archive_output_cid = pickerCurrentCid.value
+  const folderName = getCurrentFolderName()
+  if (pickerTarget.value === 'watch') {
+    config.archive_watch_cid = pickerCurrentCid.value
+    config.archive_watch_name = folderName
+  } else {
+    config.archive_output_cid = pickerCurrentCid.value
+    config.archive_output_name = folderName
+  }
   pickerVisible.value = false
   ElMessage.success('目录已选择，点击保存配置生效')
 }

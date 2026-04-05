@@ -14,8 +14,13 @@ router = APIRouter(prefix="/archive", tags=["archive"])
 class ArchiveConfigRequest(BaseModel):
     archive_enabled: Optional[bool] = None
     archive_watch_cid: Optional[str] = None
+    archive_watch_name: Optional[str] = None
     archive_output_cid: Optional[str] = None
+    archive_output_name: Optional[str] = None
     archive_interval_minutes: Optional[int] = None
+
+    class Config:
+        extra = "allow"
 
 
 @router.get("/config")
@@ -81,10 +86,19 @@ async def list_folders(cid: str = "0"):
                 continue
             if not pan115._is_folder_item(it):
                 continue
+            # 尝试多种可能的字段名获取文件夹名称
+            name = (
+                it.get("n")
+                or it.get("name")
+                or it.get("file_name")
+                or it.get("fn")
+                or it.get("title")
+                or it.get("cid", "")[:8]  # 兜底显示 CID 前 8 位
+            )
             folders.append(
                 {
                     "cid": folder_id,
-                    "name": it.get("n") or it.get("name") or "",
+                    "name": name,
                 }
             )
         folders.sort(key=lambda x: x["name"].lower())

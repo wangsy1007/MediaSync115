@@ -167,7 +167,9 @@ class RuntimeSettingsService:
             "chart_subscription_run_time": "02:00",
             "archive_enabled": False,
             "archive_watch_cid": "",
+            "archive_watch_name": "",
             "archive_output_cid": "",
+            "archive_output_name": "",
             "archive_interval_minutes": 10,
         }
         self._data = dict(self._defaults)
@@ -686,8 +688,14 @@ class RuntimeSettingsService:
     def get_archive_watch_cid(self) -> str:
         return str(self._data.get("archive_watch_cid") or "").strip()
 
+    def get_archive_watch_name(self) -> str:
+        return str(self._data.get("archive_watch_name") or "").strip()
+
     def get_archive_output_cid(self) -> str:
         return str(self._data.get("archive_output_cid") or "").strip()
+
+    def get_archive_output_name(self) -> str:
+        return str(self._data.get("archive_output_name") or "").strip()
 
     def get_archive_interval_minutes(self) -> int:
         value = self._data.get("archive_interval_minutes", 10)
@@ -700,7 +708,9 @@ class RuntimeSettingsService:
         return {
             "archive_enabled": self.get_archive_enabled(),
             "archive_watch_cid": self.get_archive_watch_cid(),
+            "archive_watch_name": self.get_archive_watch_name(),
             "archive_output_cid": self.get_archive_output_cid(),
+            "archive_output_name": self.get_archive_output_name(),
             "archive_interval_minutes": self.get_archive_interval_minutes(),
         }
 
@@ -714,12 +724,23 @@ class RuntimeSettingsService:
             self._data["archive_watch_cid"] = str(
                 payload["archive_watch_cid"] or ""
             ).strip()
+        if "archive_watch_name" in payload and payload["archive_watch_name"] is not None:
+            self._data["archive_watch_name"] = str(
+                payload["archive_watch_name"] or ""
+            ).strip()
         if (
             "archive_output_cid" in payload
             and payload["archive_output_cid"] is not None
         ):
             self._data["archive_output_cid"] = str(
                 payload["archive_output_cid"] or ""
+            ).strip()
+        if (
+            "archive_output_name" in payload
+            and payload["archive_output_name"] is not None
+        ):
+            self._data["archive_output_name"] = str(
+                payload["archive_output_name"] or ""
             ).strip()
         if (
             "archive_interval_minutes" in payload
