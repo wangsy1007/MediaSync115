@@ -7,18 +7,25 @@ from typing import Any
 
 import httpx
 
-from app.services.douban_explore_service import DOUBAN_SECTION_SOURCES, fetch_douban_section
+from app.services.douban_explore_service import (
+    DOUBAN_SECTION_SOURCES,
+    fetch_douban_section,
+)
 from app.services.tmdb_explore_service import TMDB_SECTION_SOURCES, fetch_tmdb_section
 
 logger = logging.getLogger("uvicorn.error")
 
 EXPLORE_HOME_WARMUP_LIMIT = 12
+
+
 class ExploreHomeWarmupService:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._section_snapshots: dict[str, dict[str, Any]] = {}
 
-    def _build_snapshot_key(self, source: str, section_key: str, start: int, limit: int) -> str:
+    def _build_snapshot_key(
+        self, source: str, section_key: str, start: int, limit: int
+    ) -> str:
         return f"{source}:{section_key}:{start}:{limit}"
 
     def _should_cache_request(self, start: int, limit: int) -> bool:
@@ -27,12 +34,16 @@ class ExploreHomeWarmupService:
     def clear_snapshots(self) -> None:
         self._section_snapshots.clear()
 
-    def get_cached_section(self, source: str, section_key: str, start: int, limit: int) -> dict[str, Any] | None:
+    def get_cached_section(
+        self, source: str, section_key: str, start: int, limit: int
+    ) -> dict[str, Any] | None:
         normalized_source = "tmdb" if source == "tmdb" else "douban"
         if not self._should_cache_request(start, limit):
             return None
         snapshot = self._section_snapshots.get(
-            self._build_snapshot_key(normalized_source, section_key, int(start), int(limit))
+            self._build_snapshot_key(
+                normalized_source, section_key, int(start), int(limit)
+            )
         )
         if not isinstance(snapshot, dict):
             return None
@@ -40,14 +51,17 @@ class ExploreHomeWarmupService:
         if not isinstance(payload, dict):
             return None
         return {
-            "source": snapshot.get("source") or ("tmdb" if normalized_source == "tmdb" else "douban-frodo"),
+            "source": snapshot.get("source")
+            or ("tmdb" if normalized_source == "tmdb" else "douban-frodo"),
             "fetched_at": snapshot.get("fetched_at"),
             "cache_warmed_at": snapshot.get("cache_warmed_at"),
             "section": deepcopy(payload),
             "emby_status_map": deepcopy(snapshot.get("emby_status_map") or {}),
         }
 
-    def _replace_source_snapshots(self, source: str, snapshots: list[dict[str, Any]]) -> None:
+    def _replace_source_snapshots(
+        self, source: str, snapshots: list[dict[str, Any]]
+    ) -> None:
         prefix = f"{source}:"
         for key in list(self._section_snapshots.keys()):
             if key.startswith(prefix):
@@ -56,7 +70,9 @@ class ExploreHomeWarmupService:
             section_key = str(snapshot.get("section_key") or "").strip()
             if not section_key:
                 continue
-            cache_key = self._build_snapshot_key(source, section_key, 0, EXPLORE_HOME_WARMUP_LIMIT)
+            cache_key = self._build_snapshot_key(
+                source, section_key, 0, EXPLORE_HOME_WARMUP_LIMIT
+            )
             self._section_snapshots[cache_key] = snapshot
 
     async def warmup(self, force_refresh: bool = False) -> dict[str, Any]:
@@ -88,7 +104,9 @@ class ExploreHomeWarmupService:
     async def _warmup_all_sources(self, force_refresh: bool) -> dict[str, Any]:
         results = []
         for source_name in ("douban", "tmdb"):
-            results.append(await self._warmup_source(source_name, force_refresh=force_refresh))
+            results.append(
+                await self._warmup_source(source_name, force_refresh=force_refresh)
+            )
 
         success = all(bool(item.get("success")) for item in results)
         return {
@@ -96,12 +114,20 @@ class ExploreHomeWarmupService:
             "sources": results,
         }
 
-    async def _warmup_source(self, source_name: str, force_refresh: bool) -> dict[str, Any]:
-        source_rows = TMDB_SECTION_SOURCES if source_name == "tmdb" else DOUBAN_SECTION_SOURCES
+    async def _warmup_source(
+        self, source_name: str, force_refresh: bool
+    ) -> dict[str, Any]:
+        source_rows = (
+            TMDB_SECTION_SOURCES if source_name == "tmdb" else DOUBAN_SECTION_SOURCES
+        )
         started_at = time.perf_counter()
         source_label = "tmdb" if source_name == "tmdb" else "douban-frodo"
 
-        async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
+        from app.utils.proxy import proxy_manager
+
+        async with proxy_manager.create_httpx_client(
+            timeout=30.0, http2=False
+        ) as client:
             if source_name == "tmdb":
                 tasks = [
                     fetch_tmdb_section(
@@ -164,9 +190,16 @@ class ExploreHomeWarmupService:
             try:
                 from app.api import search as search_api
 
-                section_status_map = await search_api._build_emby_status_map(section_payload["items"])
+                section_status_map = await search_api._build_emby_status_map(
+                    section_payload["items"]
+                )
             except Exception as exc:
-                logger.warning("explore home warmup emby badge cache failed for %s/%s: %s", source_name, section_payload["key"], exc)
+                logger.warning(
+                    "explore home warmup emby badge cache failed for %s/%s: %s",
+                    source_name,
+                    section_payload["key"],
+                    exc,
+                )
                 section_status_map = {}
             snapshots.append(
                 {

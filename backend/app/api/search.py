@@ -36,6 +36,7 @@ from app.services.tg_service import tg_service
 from app.services.tmdb_service import tmdb_service
 from app.services.tmdb_explore_service import TMDB_SECTION_SOURCES, fetch_tmdb_section
 from app.services.tv_missing_service import tv_missing_service
+from app.utils.proxy import proxy_manager
 
 router = APIRouter(prefix="/search", tags=["search"])
 logger = logging.getLogger(__name__)
@@ -155,7 +156,9 @@ def _normalize_emby_media_type(raw_media_type: Any) -> str:
     return ""
 
 
-def _extract_emby_status_candidates(items: list[dict[str, Any]]) -> list[tuple[str, str, int]]:
+def _extract_emby_status_candidates(
+    items: list[dict[str, Any]],
+) -> list[tuple[str, str, int]]:
     candidates: list[tuple[str, str, int]] = []
     seen: set[str] = set()
     for item in items:
@@ -201,7 +204,9 @@ async def _get_cached_emby_badge_status(cache_key: str) -> dict[str, Any] | None
         return dict(payload) if isinstance(payload, dict) else None
 
 
-async def _set_cached_emby_badge_status(cache_key: str, payload: dict[str, Any]) -> None:
+async def _set_cached_emby_badge_status(
+    cache_key: str, payload: dict[str, Any]
+) -> None:
     async with _emby_badge_cache_lock:
         _emby_badge_cache[cache_key] = {
             "expires_at": time.time() + EMBY_BADGE_CACHE_TTL_SECONDS,
@@ -217,7 +222,9 @@ async def _set_cached_emby_badge_status(cache_key: str, payload: dict[str, Any])
 
 async def _resolve_emby_status_payload(media_type: str, tmdb_id: int) -> dict[str, Any]:
     if media_type == "tv":
-        tv_status = await tv_missing_service.get_tv_missing_status(tmdb_id, include_specials=False)
+        tv_status = await tv_missing_service.get_tv_missing_status(
+            tmdb_id, include_specials=False
+        )
         status_text = str(tv_status.get("status") or "")
         missing_count = int((tv_status.get("counts") or {}).get("missing") or 0)
         exists_in_emby = status_text == "ok" and missing_count == 0
@@ -237,7 +244,9 @@ async def _resolve_emby_status_payload(media_type: str, tmdb_id: int) -> dict[st
     }
 
 
-async def _build_emby_status_map(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+async def _build_emby_status_map(
+    items: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
     candidates = _extract_emby_status_candidates(items)
     if not candidates:
         return {}
@@ -252,7 +261,10 @@ async def _build_emby_status_map(items: list[dict[str, Any]]) -> dict[str, dict[
         uncached.append((cache_key, media_type, tmdb_id))
 
     results = await asyncio.gather(
-        *(_resolve_emby_status_payload(media_type, tmdb_id) for _, media_type, tmdb_id in uncached),
+        *(
+            _resolve_emby_status_payload(media_type, tmdb_id)
+            for _, media_type, tmdb_id in uncached
+        ),
         return_exceptions=True,
     )
     for (cache_key, _, _), result in zip(uncached, results):
@@ -297,11 +309,7 @@ def _is_115_share_url(url: str) -> bool:
     except Exception:
         return False
     host = (parsed.hostname or "").lower()
-    return (
-        "115.com" in host
-        or "115cdn.com" in host
-        or "anxia.com" in host
-    )
+    return "115.com" in host or "115cdn.com" in host or "anxia.com" in host
 
 
 def _is_likely_115_share_identifier(value: str) -> bool:
@@ -345,7 +353,9 @@ def _iter_string_values(node: Any, depth: int = 0) -> list[str]:
     return []
 
 
-def _extract_pan115_share_link_from_text(text: str, allow_plain_code: bool = False) -> str:
+def _extract_pan115_share_link_from_text(
+    text: str, allow_plain_code: bool = False
+) -> str:
     raw = str(text or "").strip()
     if not raw:
         return ""
@@ -393,7 +403,9 @@ def _extract_pansou_share_link(row: dict) -> str:
         ],
     )
     if prioritized_candidate:
-        parsed = _extract_pan115_share_link_from_text(prioritized_candidate, allow_plain_code=True)
+        parsed = _extract_pan115_share_link_from_text(
+            prioritized_candidate, allow_plain_code=True
+        )
         if parsed:
             return parsed
 
@@ -447,8 +459,13 @@ def _normalize_pansou_items(payload: Any) -> list[dict]:
         if not title:
             title = "盘搜资源"
 
-        cloud_type = _extract_first_string_value(row, ["cloud_type", "cloud", "pan_type"]) or "115"
-        summary = _extract_first_string_value(row, ["summary", "desc", "description", "content"])
+        cloud_type = (
+            _extract_first_string_value(row, ["cloud_type", "cloud", "pan_type"])
+            or "115"
+        )
+        summary = _extract_first_string_value(
+            row, ["summary", "desc", "description", "content"]
+        )
         size = _extract_first_string_value(row, ["size"])
         if size:
             summary = f"{summary} | {size}" if summary else size
@@ -526,17 +543,27 @@ def _strip_keyword_punctuation(value: str) -> str:
     return re.sub(r"[\s\-_·:：,.，。!！?？'\"“”‘’()（）\[\]【】/\\]+", "", value or "")
 
 
-def _build_pansou_keyword_candidates(payload: dict, media_type: str, tmdb_id: int) -> list[str]:
+def _build_pansou_keyword_candidates(
+    payload: dict, media_type: str, tmdb_id: int
+) -> list[str]:
     candidates: list[str] = []
     seen: set[str] = set()
 
     if media_type == "tv":
         title = _normalize_keyword_text(payload.get("name") or payload.get("title"))
-        original_title = _normalize_keyword_text(payload.get("original_name") or payload.get("original_title"))
-        date_like = payload.get("first_air_date") or payload.get("release_date") or payload.get("release")
+        original_title = _normalize_keyword_text(
+            payload.get("original_name") or payload.get("original_title")
+        )
+        date_like = (
+            payload.get("first_air_date")
+            or payload.get("release_date")
+            or payload.get("release")
+        )
     else:
         title = _normalize_keyword_text(payload.get("title") or payload.get("name"))
-        original_title = _normalize_keyword_text(payload.get("original_title") or payload.get("original_name"))
+        original_title = _normalize_keyword_text(
+            payload.get("original_title") or payload.get("original_name")
+        )
         date_like = payload.get("release_date") or payload.get("release")
 
     year = _extract_year_from_date_like(date_like)
@@ -585,17 +612,27 @@ def _build_pansou_keyword_candidates(payload: dict, media_type: str, tmdb_id: in
     return candidates
 
 
-def _build_tg_keyword_candidates(payload: dict, media_type: str, tmdb_id: int) -> list[str]:
+def _build_tg_keyword_candidates(
+    payload: dict, media_type: str, tmdb_id: int
+) -> list[str]:
     candidates: list[str] = []
     seen: set[str] = set()
 
     if media_type == "tv":
         title = _normalize_keyword_text(payload.get("name") or payload.get("title"))
-        original_title = _normalize_keyword_text(payload.get("original_name") or payload.get("original_title"))
-        date_like = payload.get("first_air_date") or payload.get("release_date") or payload.get("release")
+        original_title = _normalize_keyword_text(
+            payload.get("original_name") or payload.get("original_title")
+        )
+        date_like = (
+            payload.get("first_air_date")
+            or payload.get("release_date")
+            or payload.get("release")
+        )
     else:
         title = _normalize_keyword_text(payload.get("title") or payload.get("name"))
-        original_title = _normalize_keyword_text(payload.get("original_title") or payload.get("original_name"))
+        original_title = _normalize_keyword_text(
+            payload.get("original_title") or payload.get("original_name")
+        )
         date_like = payload.get("release_date") or payload.get("release")
 
     year = _extract_year_from_date_like(date_like)
@@ -623,11 +660,19 @@ def _build_tg_keyword_candidates(payload: dict, media_type: str, tmdb_id: int) -
 def _extract_tg_expected_context(payload: dict, media_type: str) -> dict[str, str]:
     if media_type == "tv":
         title = _normalize_keyword_text(payload.get("name") or payload.get("title"))
-        original_title = _normalize_keyword_text(payload.get("original_name") or payload.get("original_title"))
-        date_like = payload.get("first_air_date") or payload.get("release_date") or payload.get("release")
+        original_title = _normalize_keyword_text(
+            payload.get("original_name") or payload.get("original_title")
+        )
+        date_like = (
+            payload.get("first_air_date")
+            or payload.get("release_date")
+            or payload.get("release")
+        )
     else:
         title = _normalize_keyword_text(payload.get("title") or payload.get("name"))
-        original_title = _normalize_keyword_text(payload.get("original_title") or payload.get("original_name"))
+        original_title = _normalize_keyword_text(
+            payload.get("original_title") or payload.get("original_name")
+        )
         date_like = payload.get("release_date") or payload.get("release")
     year = _extract_year_from_date_like(date_like)
     return {
@@ -798,9 +843,15 @@ async def _get_cached_proxy_image(cache_key: str) -> tuple[bytes, str] | None:
         return content, content_type
 
 
-async def _set_cached_proxy_image(cache_key: str, content: bytes, content_type: str) -> None:
+async def _set_cached_proxy_image(
+    cache_key: str, content: bytes, content_type: str
+) -> None:
     async with _image_proxy_cache_lock:
-        _image_proxy_cache[cache_key] = (time.time() + IMAGE_PROXY_CACHE_TTL_SECONDS, content, content_type)
+        _image_proxy_cache[cache_key] = (
+            time.time() + IMAGE_PROXY_CACHE_TTL_SECONDS,
+            content,
+            content_type,
+        )
         _image_proxy_cache.move_to_end(cache_key)
         while len(_image_proxy_cache) > IMAGE_PROXY_CACHE_MAX_ITEMS:
             _image_proxy_cache.popitem(last=False)
@@ -875,11 +926,17 @@ def _set_pan115_cached_payload(cache: dict, key: str, payload: dict) -> None:
 
 
 def _find_douban_source(section_key: str):
-    return next((source for source in DOUBAN_SECTION_SOURCES if source["key"] == section_key), None)
+    return next(
+        (source for source in DOUBAN_SECTION_SOURCES if source["key"] == section_key),
+        None,
+    )
 
 
 def _find_tmdb_source(section_key: str):
-    return next((source for source in TMDB_SECTION_SOURCES if source["key"] == section_key), None)
+    return next(
+        (source for source in TMDB_SECTION_SOURCES if source["key"] == section_key),
+        None,
+    )
 
 
 async def _fetch_popular_section(source, refresh):
@@ -979,7 +1036,9 @@ async def get_explore_popular_sections(
     limit: int = Query(24, ge=1, le=100, description="Number of items per section"),
     refresh: bool = Query(False, description="Force refresh cache"),
 ):
-    tasks = [_fetch_popular_section(source, refresh) for source in POPULAR_SECTION_SOURCES]
+    tasks = [
+        _fetch_popular_section(source, refresh) for source in POPULAR_SECTION_SOURCES
+    ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     sections = []
@@ -1004,7 +1063,9 @@ async def get_explore_popular_sections(
         )
 
     if not sections:
-        raise HTTPException(status_code=502, detail="Failed to fetch all recommendation sections")
+        raise HTTPException(
+            status_code=502, detail="Failed to fetch all recommendation sections"
+        )
 
     emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
     return {
@@ -1021,7 +1082,7 @@ async def get_explore_douban_sections(
     limit: int = Query(24, ge=1, le=100, description="Number of items per section"),
     refresh: bool = Query(False, description="Force refresh cache"),
 ):
-    async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
+    async with proxy_manager.create_httpx_client(timeout=30.0, http2=False) as client:
         tasks = [
             fetch_douban_section(source, limit, refresh, client=client)
             for source in DOUBAN_SECTION_SOURCES
@@ -1073,14 +1134,18 @@ async def get_explore_douban_sections(
 
 @router.get("/explore/sections")
 async def get_explore_sections(
-    source: str = Query("douban", pattern="^(douban|tmdb)$", description="Explore source"),
+    source: str = Query(
+        "douban", pattern="^(douban|tmdb)$", description="Explore source"
+    ),
     limit: int = Query(24, ge=1, le=100, description="Number of items per section"),
     refresh: bool = Query(False, description="Force refresh cache"),
 ):
     normalized_source = source if source in {"douban", "tmdb"} else "douban"
 
     if normalized_source == "tmdb":
-        async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
+        async with proxy_manager.create_httpx_client(
+            timeout=30.0, http2=False
+        ) as client:
             tasks = [
                 fetch_tmdb_section(section, limit, refresh, client=client)
                 for section in TMDB_SECTION_SOURCES
@@ -1094,7 +1159,9 @@ async def get_explore_sections(
                 errors.append({"key": section["key"], "error": str(result)})
                 continue
             if not isinstance(result, dict):
-                errors.append({"key": section["key"], "error": "Invalid TMDB section payload"})
+                errors.append(
+                    {"key": section["key"], "error": "Invalid TMDB section payload"}
+                )
                 continue
             sections.append(
                 {
@@ -1113,7 +1180,9 @@ async def get_explore_sections(
                 first_error = str(errors[0].get("error") or "")
                 if "TMDB_API_KEY is not configured" in first_error:
                     raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
-            raise HTTPException(status_code=502, detail="Failed to fetch TMDB explore sections")
+            raise HTTPException(
+                status_code=502, detail="Failed to fetch TMDB explore sections"
+            )
 
         emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
         return {
@@ -1124,10 +1193,10 @@ async def get_explore_sections(
             "emby_status_map": emby_status_map,
         }
 
-    async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
+    async with proxy_manager.create_httpx_client(timeout=30.0, http2=False) as client:
         tasks = [
-            fetch_douban_section(section, limit, refresh, client=client)
-            for section in DOUBAN_SECTION_SOURCES
+            fetch_douban_section(source, limit, refresh, client=client)
+            for source in DOUBAN_SECTION_SOURCES
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -1138,7 +1207,9 @@ async def get_explore_sections(
             errors.append({"key": section["key"], "error": str(result)})
             continue
         if not isinstance(result, dict):
-            errors.append({"key": section["key"], "error": "Invalid Douban section payload"})
+            errors.append(
+                {"key": section["key"], "error": "Invalid Douban section payload"}
+            )
             continue
         sections.append(
             {
@@ -1176,10 +1247,14 @@ async def get_explore_sections(
 
 @router.get("/explore/meta")
 async def get_explore_meta(
-    source: str = Query("douban", pattern="^(douban|tmdb)$", description="Explore source"),
+    source: str = Query(
+        "douban", pattern="^(douban|tmdb)$", description="Explore source"
+    ),
 ):
     normalized_source = source if source in {"douban", "tmdb"} else "douban"
-    source_rows = TMDB_SECTION_SOURCES if normalized_source == "tmdb" else DOUBAN_SECTION_SOURCES
+    source_rows = (
+        TMDB_SECTION_SOURCES if normalized_source == "tmdb" else DOUBAN_SECTION_SOURCES
+    )
     return {
         "source": "tmdb" if normalized_source == "tmdb" else "douban-frodo",
         "fetched_at": datetime.now(timezone.utc).isoformat(),
@@ -1196,14 +1271,18 @@ async def get_explore_meta(
 
 @router.get("/explore/home")
 async def get_explore_home(
-    source: str = Query("douban", pattern="^(douban|tmdb)$", description="Explore source"),
+    source: str = Query(
+        "douban", pattern="^(douban|tmdb)$", description="Explore source"
+    ),
     refresh: bool = Query(False, description="Force refresh cache"),
 ):
     normalized_source = source if source in {"douban", "tmdb"} else "douban"
     limit = EXPLORE_HOME_SECTION_LIMIT
 
     if normalized_source == "tmdb":
-        async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
+        async with proxy_manager.create_httpx_client(
+            timeout=30.0, http2=False
+        ) as client:
             tasks = [
                 fetch_tmdb_section(section, limit, refresh, client=client)
                 for section in TMDB_SECTION_SOURCES
@@ -1217,7 +1296,9 @@ async def get_explore_home(
                 errors.append({"key": section["key"], "error": str(result)})
                 continue
             if not isinstance(result, dict):
-                errors.append({"key": section["key"], "error": "Invalid TMDB section payload"})
+                errors.append(
+                    {"key": section["key"], "error": "Invalid TMDB section payload"}
+                )
                 continue
             sections.append(
                 {
@@ -1236,7 +1317,9 @@ async def get_explore_home(
                 first_error = str(errors[0].get("error") or "")
                 if "TMDB_API_KEY is not configured" in first_error:
                     raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
-            raise HTTPException(status_code=502, detail="Failed to fetch TMDB explore home")
+            raise HTTPException(
+                status_code=502, detail="Failed to fetch TMDB explore home"
+            )
 
         emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
         return {
@@ -1247,7 +1330,7 @@ async def get_explore_home(
             "emby_status_map": emby_status_map,
         }
 
-    async with httpx.AsyncClient(timeout=12.0, http2=True) as client:
+    async with proxy_manager.create_httpx_client(timeout=30.0, http2=False) as client:
         tasks = [
             fetch_douban_section(
                 section,
@@ -1267,7 +1350,9 @@ async def get_explore_home(
             errors.append({"key": section["key"], "error": str(result)})
             continue
         if not isinstance(result, dict):
-            errors.append({"key": section["key"], "error": "Invalid Douban section payload"})
+            errors.append(
+                {"key": section["key"], "error": "Invalid Douban section payload"}
+            )
             continue
         sections.append(
             {
@@ -1312,9 +1397,15 @@ async def get_emby_status_map(payload: EmbyStatusMapRequest):
 @router.get("/explore/section/{section_key}")
 async def get_explore_section(
     section_key: str,
-    source: str = Query("douban", pattern="^(douban|tmdb)$", description="Explore source"),
-    limit: int = Query(30, ge=1, le=50, description="Number of items to return per request"),
-    start: int = Query(0, ge=0, le=5000, description="Start offset for batched loading"),
+    source: str = Query(
+        "douban", pattern="^(douban|tmdb)$", description="Explore source"
+    ),
+    limit: int = Query(
+        30, ge=1, le=50, description="Number of items to return per request"
+    ),
+    start: int = Query(
+        0, ge=0, le=5000, description="Start offset for batched loading"
+    ),
     refresh: bool = Query(False, description="Force refresh cache"),
 ):
     normalized_source = source if source in {"douban", "tmdb"} else "douban"
@@ -1325,8 +1416,16 @@ async def get_explore_section(
         limit,
     )
     if home_cached is not None and not refresh:
-        cached_section = home_cached.get("section") if isinstance(home_cached.get("section"), dict) else {}
-        cached_items = cached_section.get("items") if isinstance(cached_section.get("items"), list) else []
+        cached_section = (
+            home_cached.get("section")
+            if isinstance(home_cached.get("section"), dict)
+            else {}
+        )
+        cached_items = (
+            cached_section.get("items")
+            if isinstance(cached_section.get("items"), list)
+            else []
+        )
         return {
             **home_cached,
             "emby_status_map": await _build_emby_status_map(cached_items),
@@ -1337,16 +1436,22 @@ async def get_explore_section(
     if normalized_source == "tmdb":
         section = _find_tmdb_source(section_key)
         if not section:
-            raise HTTPException(status_code=404, detail=f"Unknown section key: {section_key}")
+            raise HTTPException(
+                status_code=404, detail=f"Unknown section key: {section_key}"
+            )
 
         try:
             payload = await fetch_tmdb_section(section, limit, refresh, start=start)
         except Exception as exc:
             if "TMDB_API_KEY is not configured" in str(exc):
                 raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
-            raise HTTPException(status_code=502, detail=f"Failed to fetch section: {str(exc)}")
+            raise HTTPException(
+                status_code=502, detail=f"Failed to fetch section: {str(exc)}"
+            )
 
-        items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
+        items = (
+            payload.get("items", []) if isinstance(payload.get("items"), list) else []
+        )
         return {
             "source": "tmdb",
             "fetched_at": datetime.now(timezone.utc).isoformat(),
@@ -1369,7 +1474,9 @@ async def get_explore_section(
 
     section = _find_douban_source(section_key)
     if not section:
-        raise HTTPException(status_code=404, detail=f"Unknown section key: {section_key}")
+        raise HTTPException(
+            status_code=404, detail=f"Unknown section key: {section_key}"
+        )
 
     try:
         sync_prime_limit = min(limit, EXPLORE_DOUBAN_SECTION_SYNC_PRIME_LIMIT)
@@ -1382,7 +1489,9 @@ async def get_explore_section(
             async_backfill_limit=limit,
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch section: {str(exc)}")
+        raise HTTPException(
+            status_code=502, detail=f"Failed to fetch section: {str(exc)}"
+        )
 
     items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
     return {
@@ -1409,13 +1518,19 @@ async def get_explore_section(
 @router.get("/explore/douban-section/{section_key}")
 async def get_explore_douban_section(
     section_key: str,
-    limit: int = Query(30, ge=1, le=50, description="Number of items to return per request"),
-    start: int = Query(0, ge=0, le=5000, description="Start offset for batched loading"),
+    limit: int = Query(
+        30, ge=1, le=50, description="Number of items to return per request"
+    ),
+    start: int = Query(
+        0, ge=0, le=5000, description="Start offset for batched loading"
+    ),
     refresh: bool = Query(False, description="Force refresh cache"),
 ):
     source = _find_douban_source(section_key)
     if not source:
-        raise HTTPException(status_code=404, detail=f"Unknown section key: {section_key}")
+        raise HTTPException(
+            status_code=404, detail=f"Unknown section key: {section_key}"
+        )
 
     try:
         sync_prime_limit = min(limit, EXPLORE_DOUBAN_SECTION_SYNC_PRIME_LIMIT)
@@ -1428,7 +1543,9 @@ async def get_explore_douban_section(
             async_backfill_limit=limit,
         )
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch section: {str(exc)}")
+        raise HTTPException(
+            status_code=502, detail=f"Failed to fetch section: {str(exc)}"
+        )
 
     items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
     return {
@@ -1486,11 +1603,17 @@ async def resolve_explore_item(payload: dict[str, Any] = Body(default={})):
         }
 
     title = str(payload.get("title") or payload.get("name") or "").strip()
-    original_title = str(payload.get("original_title") or payload.get("original_name") or "").strip()
+    original_title = str(
+        payload.get("original_title") or payload.get("original_name") or ""
+    ).strip()
     aliases_payload = payload.get("aliases")
     aliases: list[str] = []
     if isinstance(aliases_payload, list):
-        aliases = [str(item or "").strip() for item in aliases_payload if str(item or "").strip()]
+        aliases = [
+            str(item or "").strip()
+            for item in aliases_payload
+            if str(item or "").strip()
+        ]
     elif isinstance(aliases_payload, str) and aliases_payload.strip():
         aliases = [aliases_payload.strip()]
     year_value = str(payload.get("year") or "").strip()[:4]
@@ -1549,11 +1672,15 @@ async def get_douban_subject_detail(
 ):
     normalized_type = "tv" if str(media_type or "").strip().lower() == "tv" else "movie"
     try:
-        detail = await fetch_douban_subject_detail(douban_id=douban_id, media_type=normalized_type)
+        detail = await fetch_douban_subject_detail(
+            douban_id=douban_id, media_type=normalized_type
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch douban subject: {str(exc)}")
+        raise HTTPException(
+            status_code=502, detail=f"Failed to fetch douban subject: {str(exc)}"
+        )
     return detail
 
 
@@ -1594,11 +1721,15 @@ async def proxy_explore_poster(
         headers["Origin"] = "https://m.douban.com"
 
     try:
-        async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+        async with proxy_manager.create_httpx_client(
+            timeout=30.0, follow_redirects=True
+        ) as client:
             image_resp = await client.get(effective_url, headers=headers)
             image_resp.raise_for_status()
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch poster: {str(exc)}")
+        raise HTTPException(
+            status_code=502, detail=f"Failed to fetch poster: {str(exc)}"
+        )
 
     content_type = image_resp.headers.get("content-type", "image/jpeg")
     await _set_cached_proxy_image(cache_key, image_resp.content, content_type)
@@ -1716,7 +1847,9 @@ def _normalize_keyword_fingerprint(value: Any) -> str:
     return re.sub(r"[\s\-_:：·•.,，。!！?？'\"“”‘’()（）\[\]【】/\\]+", "", text)
 
 
-def _pick_nullbr_tmdb_candidates(keyword: str, media_type: str, max_candidates: int = 8) -> list[int]:
+def _pick_nullbr_tmdb_candidates(
+    keyword: str, media_type: str, max_candidates: int = 8
+) -> list[int]:
     normalized_media_type = "tv" if media_type == "tv" else "movie"
     normalized_keyword = str(keyword or "").strip()
     if not normalized_keyword:
@@ -1812,7 +1945,13 @@ async def _search_nullbr_resource_by_keyword(
         normalized_media_type,
     )
     if not candidate_tmdb_ids:
-        attempts.append({"service": "nullbr-search", "status": "empty", "keyword": normalized_keyword})
+        attempts.append(
+            {
+                "service": "nullbr-search",
+                "status": "empty",
+                "keyword": normalized_keyword,
+            }
+        )
         return _build_keyword_resource_payload(
             keyword=normalized_keyword,
             media_type=normalized_media_type,
@@ -1822,7 +1961,13 @@ async def _search_nullbr_resource_by_keyword(
         )
 
     for candidate_tmdb_id in candidate_tmdb_ids:
-        attempts.append({"service": "nullbr-search", "status": "candidate", "tmdb_id": candidate_tmdb_id})
+        attempts.append(
+            {
+                "service": "nullbr-search",
+                "status": "candidate",
+                "tmdb_id": candidate_tmdb_id,
+            }
+        )
         fallback = _resource_fallback_payload(
             tmdb_id=candidate_tmdb_id,
             media_type=normalized_media_type,
@@ -1838,16 +1983,22 @@ async def _search_nullbr_resource_by_keyword(
                 return nullbr_service.get_movie_pan115(candidate_tmdb_id, page)
             if resource_kind == "magnet":
                 if normalized_media_type == "tv":
-                    return nullbr_service.get_tv_magnet(candidate_tmdb_id, season, episode)
+                    return nullbr_service.get_tv_magnet(
+                        candidate_tmdb_id, season, episode
+                    )
                 return nullbr_service.get_movie_magnet(candidate_tmdb_id)
             if resource_kind == "ed2k":
                 if normalized_media_type == "tv":
-                    return nullbr_service.get_tv_ed2k(candidate_tmdb_id, season, episode)
+                    return nullbr_service.get_tv_ed2k(
+                        candidate_tmdb_id, season, episode
+                    )
                 return nullbr_service.get_movie_ed2k(candidate_tmdb_id)
             raise ValueError(f"unsupported resource kind: {resource_kind}")
 
         result = await asyncio.to_thread(_call_nullbr_resource, fetcher, fallback)
-        resource_list = list(result.get("list") or []) if isinstance(result, dict) else []
+        resource_list = (
+            list(result.get("list") or []) if isinstance(result, dict) else []
+        )
         if resource_list:
             attempts.append(
                 {
@@ -1866,7 +2017,9 @@ async def _search_nullbr_resource_by_keyword(
                 matched_tmdb_id=candidate_tmdb_id,
             )
 
-        attempts.append({"service": "nullbr", "status": "empty", "tmdb_id": candidate_tmdb_id})
+        attempts.append(
+            {"service": "nullbr", "status": "empty", "tmdb_id": candidate_tmdb_id}
+        )
 
     return _build_keyword_resource_payload(
         keyword=normalized_keyword,
@@ -1890,12 +2043,18 @@ async def _load_media_payload(tmdb_id: int, media_type: str) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
-async def _search_pansou_pan115_resources(tmdb_id: int, media_type: str) -> dict[str, Any]:
+async def _search_pansou_pan115_resources(
+    tmdb_id: int, media_type: str
+) -> dict[str, Any]:
     pansou_service.set_base_url(runtime_settings_service.get_pansou_base_url())
     media_payload = await _load_media_payload(tmdb_id, media_type)
 
-    keyword_candidates = _build_pansou_keyword_candidates(media_payload, media_type, tmdb_id)
-    selected_keyword = keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+    keyword_candidates = _build_pansou_keyword_candidates(
+        media_payload, media_type, tmdb_id
+    )
+    selected_keyword = (
+        keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+    )
     attempted_keywords: list[str] = []
     attempts: list[dict[str, Any]] = []
 
@@ -1904,7 +2063,14 @@ async def _search_pansou_pan115_resources(tmdb_id: int, media_type: str) -> dict
         try:
             pansou_payload = await pansou_service.search_115(keyword, res="results")
             pansou_list = _normalize_pansou_pan115_list(pansou_payload)
-            attempts.append({"service": "pansou", "keyword": keyword, "status": "ok", "count": len(pansou_list)})
+            attempts.append(
+                {
+                    "service": "pansou",
+                    "keyword": keyword,
+                    "status": "ok",
+                    "count": len(pansou_list),
+                }
+            )
             if pansou_list:
                 return {
                     "keyword": keyword,
@@ -1914,7 +2080,14 @@ async def _search_pansou_pan115_resources(tmdb_id: int, media_type: str) -> dict
                     "attempts": attempts,
                 }
         except Exception as exc:
-            attempts.append({"service": "pansou", "keyword": keyword, "status": "error", "error": str(exc)})
+            attempts.append(
+                {
+                    "service": "pansou",
+                    "keyword": keyword,
+                    "status": "error",
+                    "error": str(exc),
+                }
+            )
 
     return {
         "keyword": selected_keyword,
@@ -1927,9 +2100,13 @@ async def _search_pansou_pan115_resources(tmdb_id: int, media_type: str) -> dict
 
 async def _search_tg_pan115_resources(tmdb_id: int, media_type: str) -> dict[str, Any]:
     media_payload = await _load_media_payload(tmdb_id, media_type)
-    keyword_candidates = _build_tg_keyword_candidates(media_payload, media_type, tmdb_id)
+    keyword_candidates = _build_tg_keyword_candidates(
+        media_payload, media_type, tmdb_id
+    )
     context = _extract_tg_expected_context(media_payload, media_type)
-    selected_keyword = keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+    selected_keyword = (
+        keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+    )
     attempted_keywords: list[str] = []
     attempts: list[dict[str, Any]] = []
 
@@ -1964,7 +2141,14 @@ async def _search_tg_pan115_resources(tmdb_id: int, media_type: str) -> dict[str
                     "attempts": attempts,
                 }
         except Exception as exc:
-            attempts.append({"service": "tg", "keyword": keyword, "status": "error", "error": str(exc)})
+            attempts.append(
+                {
+                    "service": "tg",
+                    "keyword": keyword,
+                    "status": "error",
+                    "error": str(exc),
+                }
+            )
     return {
         "keyword": selected_keyword,
         "list": [],
@@ -1974,23 +2158,37 @@ async def _search_tg_pan115_resources(tmdb_id: int, media_type: str) -> dict[str
     }
 
 
-async def _search_seedhub_magnet_resources(tmdb_id: int, media_type: str, limit: int = 40) -> tuple[str, list[dict]]:
+async def _search_seedhub_magnet_resources(
+    tmdb_id: int, media_type: str, limit: int = 40
+) -> tuple[str, list[dict]]:
     media_payload = await _load_media_payload(tmdb_id, media_type)
-    keyword_candidates = _build_pansou_keyword_candidates(media_payload, media_type, tmdb_id)
-    selected_keyword = keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+    keyword_candidates = _build_pansou_keyword_candidates(
+        media_payload, media_type, tmdb_id
+    )
+    selected_keyword = (
+        keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+    )
     normalized_limit = max(1, min(int(limit or 40), 80))
 
     for keyword in keyword_candidates:
-        items = await seedhub_service.search_magnets_by_keyword(keyword, limit=normalized_limit)
+        items = await seedhub_service.search_magnets_by_keyword(
+            keyword, limit=normalized_limit
+        )
         if items:
             return keyword, items
     return selected_keyword, []
 
 
-async def _search_butailing_magnet_resources(tmdb_id: int, media_type: str) -> tuple[str, list[dict]]:
+async def _search_butailing_magnet_resources(
+    tmdb_id: int, media_type: str
+) -> tuple[str, list[dict]]:
     media_payload = await _load_media_payload(tmdb_id, media_type)
-    keyword_candidates = _build_pansou_keyword_candidates(media_payload, media_type, tmdb_id)
-    selected_keyword = keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+    keyword_candidates = _build_pansou_keyword_candidates(
+        media_payload, media_type, tmdb_id
+    )
+    selected_keyword = (
+        keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+    )
 
     for keyword in keyword_candidates:
         items = await butailing_service.search_magnets(keyword, media_type=media_type)
@@ -2035,7 +2233,9 @@ async def create_seedhub_magnet_task(
         raise HTTPException(status_code=400, detail="media_type must be movie or tv")
 
     media_payload = await _load_media_payload(tmdb_id, normalized_media_type)
-    keyword_candidates = _build_pansou_keyword_candidates(media_payload, normalized_media_type, tmdb_id)
+    keyword_candidates = _build_pansou_keyword_candidates(
+        media_payload, normalized_media_type, tmdb_id
+    )
 
     task = await seedhub_task_service.start(
         media_type=normalized_media_type,
@@ -2080,11 +2280,17 @@ async def get_movie_pan115(
     nullbr_list: list[dict] = []
 
     try:
-        nullbr_payload = await asyncio.to_thread(nullbr_service.get_movie_pan115, tmdb_id, page)
-        nullbr_list = _mark_nullbr_pan115_source(
-            list(nullbr_payload.get("list", [])) if isinstance(nullbr_payload, dict) else []
+        nullbr_payload = await asyncio.to_thread(
+            nullbr_service.get_movie_pan115, tmdb_id, page
         )
-        attempts.append({"service": "nullbr", "status": "ok", "count": len(nullbr_list)})
+        nullbr_list = _mark_nullbr_pan115_source(
+            list(nullbr_payload.get("list", []))
+            if isinstance(nullbr_payload, dict)
+            else []
+        )
+        attempts.append(
+            {"service": "nullbr", "status": "ok", "count": len(nullbr_list)}
+        )
         if nullbr_list:
             source_counts["nullbr"] = len(nullbr_list)
     except Exception as exc:
@@ -2160,13 +2366,19 @@ async def get_movie_pan115_with_hdhive(
 
     try:
         hdhive_payload = await hdhive_service.get_movie_pan115_result(tmdb_id)
-        hdhive_list = _mark_hdhive_pan115_source(list(hdhive_payload.get("items") or []))
+        hdhive_list = _mark_hdhive_pan115_source(
+            list(hdhive_payload.get("items") or [])
+        )
         hdhive_diagnostics = {
             "raw_total": int(hdhive_payload.get("raw_total") or 0),
-            "filtered_115_total": int(hdhive_payload.get("filtered_total") or len(hdhive_list)),
+            "filtered_115_total": int(
+                hdhive_payload.get("filtered_total") or len(hdhive_list)
+            ),
             "pan_type_counts": dict(hdhive_payload.get("pan_type_counts") or {}),
         }
-        attempts.append({"service": "hdhive", "status": "ok", "count": len(hdhive_list)})
+        attempts.append(
+            {"service": "hdhive", "status": "ok", "count": len(hdhive_list)}
+        )
     except Exception as exc:
         attempts.append({"service": "hdhive", "status": "error", "error": str(exc)})
 
@@ -2225,22 +2437,35 @@ async def get_movie_pan115_with_tg(
 @router.get("/movie/{tmdb_id}/magnet")
 async def get_movie_magnet(
     tmdb_id: int,
-    source: str = Query("nullbr", pattern="^(nullbr|seedhub)$", description="Magnet source"),
+    source: str = Query(
+        "nullbr", pattern="^(nullbr|seedhub)$", description="Magnet source"
+    ),
     limit: int = Query(40, ge=1, le=80, description="SeedHub 结果上限"),
 ):
     if source == "seedhub":
-        keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "movie", limit=limit)
+        keyword, items = await _search_seedhub_magnet_resources(
+            tmdb_id, "movie", limit=limit
+        )
         return {
             "id": tmdb_id,
             "media_type": "movie",
             "list": items,
-            "attempts": [{"service": "seedhub", "status": "ok", "count": len(items), "keyword": keyword}],
+            "attempts": [
+                {
+                    "service": "seedhub",
+                    "status": "ok",
+                    "count": len(items),
+                    "keyword": keyword,
+                }
+            ],
             "keyword": keyword,
             "search_service": "seedhub",
         }
 
     fallback = _resource_fallback_payload(tmdb_id=tmdb_id, media_type="movie", error="")
-    return _call_nullbr_resource(lambda: nullbr_service.get_movie_magnet(tmdb_id), fallback)
+    return _call_nullbr_resource(
+        lambda: nullbr_service.get_movie_magnet(tmdb_id), fallback
+    )
 
 
 @router.get("/movie/{tmdb_id}/magnet/seedhub")
@@ -2253,8 +2478,17 @@ async def get_movie_magnet_seedhub(
     items: list[dict] = []
 
     try:
-        keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "movie", limit=limit)
-        attempts.append({"service": "seedhub", "status": "ok", "count": len(items), "keyword": keyword})
+        keyword, items = await _search_seedhub_magnet_resources(
+            tmdb_id, "movie", limit=limit
+        )
+        attempts.append(
+            {
+                "service": "seedhub",
+                "status": "ok",
+                "count": len(items),
+                "keyword": keyword,
+            }
+        )
     except Exception as exc:
         attempts.append({"service": "seedhub", "status": "error", "error": str(exc)})
 
@@ -2276,7 +2510,14 @@ async def get_movie_magnet_butailing(tmdb_id: int):
 
     try:
         keyword, items = await _search_butailing_magnet_resources(tmdb_id, "movie")
-        attempts.append({"service": "butailing", "status": "ok", "count": len(items), "keyword": keyword})
+        attempts.append(
+            {
+                "service": "butailing",
+                "status": "ok",
+                "count": len(items),
+                "keyword": keyword,
+            }
+        )
     except Exception as exc:
         attempts.append({"service": "butailing", "status": "error", "error": str(exc)})
 
@@ -2293,13 +2534,17 @@ async def get_movie_magnet_butailing(tmdb_id: int):
 @router.get("/movie/{tmdb_id}/ed2k")
 def get_movie_ed2k(tmdb_id: int):
     fallback = _resource_fallback_payload(tmdb_id=tmdb_id, media_type="movie", error="")
-    return _call_nullbr_resource(lambda: nullbr_service.get_movie_ed2k(tmdb_id), fallback)
+    return _call_nullbr_resource(
+        lambda: nullbr_service.get_movie_ed2k(tmdb_id), fallback
+    )
 
 
 @router.get("/movie/{tmdb_id}/video")
 def get_movie_video(tmdb_id: int):
     fallback = _resource_fallback_payload(tmdb_id=tmdb_id, media_type="movie", error="")
-    return _call_nullbr_resource(lambda: nullbr_service.get_movie_video(tmdb_id), fallback)
+    return _call_nullbr_resource(
+        lambda: nullbr_service.get_movie_video(tmdb_id), fallback
+    )
 
 
 @router.get("/tv/{tmdb_id}")
@@ -2336,11 +2581,17 @@ async def get_tv_pan115(
     nullbr_list: list[dict] = []
 
     try:
-        nullbr_payload = await asyncio.to_thread(nullbr_service.get_tv_pan115, tmdb_id, page)
-        nullbr_list = _mark_nullbr_pan115_source(
-            list(nullbr_payload.get("list", [])) if isinstance(nullbr_payload, dict) else []
+        nullbr_payload = await asyncio.to_thread(
+            nullbr_service.get_tv_pan115, tmdb_id, page
         )
-        attempts.append({"service": "nullbr", "status": "ok", "count": len(nullbr_list)})
+        nullbr_list = _mark_nullbr_pan115_source(
+            list(nullbr_payload.get("list", []))
+            if isinstance(nullbr_payload, dict)
+            else []
+        )
+        attempts.append(
+            {"service": "nullbr", "status": "ok", "count": len(nullbr_list)}
+        )
         if nullbr_list:
             source_counts["nullbr"] = len(nullbr_list)
     except Exception as exc:
@@ -2416,13 +2667,19 @@ async def get_tv_pan115_with_hdhive(
 
     try:
         hdhive_payload = await hdhive_service.get_tv_pan115_result(tmdb_id)
-        hdhive_list = _mark_hdhive_pan115_source(list(hdhive_payload.get("items") or []))
+        hdhive_list = _mark_hdhive_pan115_source(
+            list(hdhive_payload.get("items") or [])
+        )
         hdhive_diagnostics = {
             "raw_total": int(hdhive_payload.get("raw_total") or 0),
-            "filtered_115_total": int(hdhive_payload.get("filtered_total") or len(hdhive_list)),
+            "filtered_115_total": int(
+                hdhive_payload.get("filtered_total") or len(hdhive_list)
+            ),
             "pan_type_counts": dict(hdhive_payload.get("pan_type_counts") or {}),
         }
-        attempts.append({"service": "hdhive", "status": "ok", "count": len(hdhive_list)})
+        attempts.append(
+            {"service": "hdhive", "status": "ok", "count": len(hdhive_list)}
+        )
     except Exception as exc:
         attempts.append({"service": "hdhive", "status": "error", "error": str(exc)})
 
@@ -2491,9 +2748,13 @@ async def get_hdhive_pan115_by_keyword(
     hdhive_list: list[dict] = []
     try:
         hdhive_list = _mark_hdhive_pan115_source(
-            await hdhive_service.get_pan115_by_keyword(normalized_keyword, media_type=media_type)
+            await hdhive_service.get_pan115_by_keyword(
+                normalized_keyword, media_type=media_type
+            )
         )
-        attempts.append({"service": "hdhive", "status": "ok", "count": len(hdhive_list)})
+        attempts.append(
+            {"service": "hdhive", "status": "ok", "count": len(hdhive_list)}
+        )
     except Exception as exc:
         attempts.append({"service": "hdhive", "status": "error", "error": str(exc)})
 
@@ -2518,7 +2779,11 @@ async def get_tg_pan115_by_keyword(
     attempts: list[dict[str, Any]] = []
     tg_list: list[dict] = []
     try:
-        tg_list = _mark_tg_pan115_source(await tg_service.search_115_by_keyword(normalized_keyword, media_type=media_type))
+        tg_list = _mark_tg_pan115_source(
+            await tg_service.search_115_by_keyword(
+                normalized_keyword, media_type=media_type
+            )
+        )
         attempts.append({"service": "tg", "status": "ok", "count": len(tg_list)})
     except Exception as exc:
         attempts.append({"service": "tg", "status": "error", "error": str(exc)})
@@ -2601,10 +2866,26 @@ async def get_seedhub_magnet_by_keyword(
     items: list[dict] = []
     attempts: list[dict[str, Any]] = []
     try:
-        items = await seedhub_service.search_magnets_by_keyword(normalized_keyword, limit=limit)
-        attempts.append({"service": "seedhub", "status": "ok", "count": len(items), "keyword": normalized_keyword})
+        items = await seedhub_service.search_magnets_by_keyword(
+            normalized_keyword, limit=limit
+        )
+        attempts.append(
+            {
+                "service": "seedhub",
+                "status": "ok",
+                "count": len(items),
+                "keyword": normalized_keyword,
+            }
+        )
     except Exception as exc:
-        attempts.append({"service": "seedhub", "status": "error", "error": str(exc), "keyword": normalized_keyword})
+        attempts.append(
+            {
+                "service": "seedhub",
+                "status": "error",
+                "error": str(exc),
+                "keyword": normalized_keyword,
+            }
+        )
     return {
         "keyword": normalized_keyword,
         "media_type": normalized_media_type,
@@ -2631,7 +2912,9 @@ async def unlock_hdhive_resource(payload: HDHiveUnlockRequest):
             detail = str(exc)
             if status in {400, 401, 402, 403, 404, 429}:
                 raise HTTPException(status_code=status, detail=detail)
-            raise HTTPException(status_code=502, detail=detail or f"HDHive 解锁失败({status})")
+            raise HTTPException(
+                status_code=502, detail=detail or f"HDHive 解锁失败({status})"
+            )
         raise HTTPException(status_code=500, detail=f"HDHive 解锁失败: {str(exc)}")
 
 
@@ -2660,13 +2943,17 @@ def get_tv_season_magnet(tmdb_id: int, season_number: int):
         season_number=season_number,
         error="",
     )
-    return _call_nullbr_resource(lambda: nullbr_service.get_tv_season_magnet(tmdb_id, season_number), fallback)
+    return _call_nullbr_resource(
+        lambda: nullbr_service.get_tv_season_magnet(tmdb_id, season_number), fallback
+    )
 
 
 @router.get("/tv/{tmdb_id}/season/{season_number}/episode/{episode_number}")
 async def get_tv_episode(tmdb_id: int, season_number: int, episode_number: int):
     try:
-        return await tmdb_service.get_tv_episode_detail(tmdb_id, season_number, episode_number)
+        return await tmdb_service.get_tv_episode_detail(
+            tmdb_id, season_number, episode_number
+        )
     except ValueError as exc:
         if "TMDB_API_KEY is not configured" in str(exc):
             raise HTTPException(status_code=400, detail="TMDB API Key 未配置")
@@ -2690,7 +2977,9 @@ def get_tv_episode_magnet(tmdb_id: int, season_number: int, episode_number: int)
         error="",
     )
     return _call_nullbr_resource(
-        lambda: nullbr_service.get_tv_episode_magnet(tmdb_id, season_number, episode_number),
+        lambda: nullbr_service.get_tv_episode_magnet(
+            tmdb_id, season_number, episode_number
+        ),
         fallback,
     )
 
@@ -2705,7 +2994,9 @@ def get_tv_episode_ed2k(tmdb_id: int, season_number: int, episode_number: int):
         error="",
     )
     return _call_nullbr_resource(
-        lambda: nullbr_service.get_tv_episode_ed2k(tmdb_id, season_number, episode_number),
+        lambda: nullbr_service.get_tv_episode_ed2k(
+            tmdb_id, season_number, episode_number
+        ),
         fallback,
     )
 
@@ -2720,7 +3011,9 @@ def get_tv_episode_video(tmdb_id: int, season_number: int, episode_number: int):
         error="",
     )
     return _call_nullbr_resource(
-        lambda: nullbr_service.get_tv_episode_video(tmdb_id, season_number, episode_number),
+        lambda: nullbr_service.get_tv_episode_video(
+            tmdb_id, season_number, episode_number
+        ),
         fallback,
     )
 
@@ -2730,16 +3023,27 @@ async def get_tv_magnet(
     tmdb_id: int,
     season: Optional[int] = Query(None, description="Season"),
     episode: Optional[int] = Query(None, description="Episode"),
-    source: str = Query("nullbr", pattern="^(nullbr|seedhub)$", description="Magnet source"),
+    source: str = Query(
+        "nullbr", pattern="^(nullbr|seedhub)$", description="Magnet source"
+    ),
     limit: int = Query(40, ge=1, le=80, description="SeedHub 结果上限"),
 ):
     if source == "seedhub":
-        keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "tv", limit=limit)
+        keyword, items = await _search_seedhub_magnet_resources(
+            tmdb_id, "tv", limit=limit
+        )
         return {
             "id": tmdb_id,
             "media_type": "tv",
             "list": items,
-            "attempts": [{"service": "seedhub", "status": "ok", "count": len(items), "keyword": keyword}],
+            "attempts": [
+                {
+                    "service": "seedhub",
+                    "status": "ok",
+                    "count": len(items),
+                    "keyword": keyword,
+                }
+            ],
             "keyword": keyword,
             "search_service": "seedhub",
         }
@@ -2751,7 +3055,9 @@ async def get_tv_magnet(
         episode_number=episode,
         error="",
     )
-    return _call_nullbr_resource(lambda: nullbr_service.get_tv_magnet(tmdb_id, season, episode), fallback)
+    return _call_nullbr_resource(
+        lambda: nullbr_service.get_tv_magnet(tmdb_id, season, episode), fallback
+    )
 
 
 @router.get("/tv/{tmdb_id}/magnet/seedhub")
@@ -2764,8 +3070,17 @@ async def get_tv_magnet_seedhub(
     items: list[dict] = []
 
     try:
-        keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "tv", limit=limit)
-        attempts.append({"service": "seedhub", "status": "ok", "count": len(items), "keyword": keyword})
+        keyword, items = await _search_seedhub_magnet_resources(
+            tmdb_id, "tv", limit=limit
+        )
+        attempts.append(
+            {
+                "service": "seedhub",
+                "status": "ok",
+                "count": len(items),
+                "keyword": keyword,
+            }
+        )
     except Exception as exc:
         attempts.append({"service": "seedhub", "status": "error", "error": str(exc)})
 
@@ -2787,7 +3102,14 @@ async def get_tv_magnet_butailing(tmdb_id: int):
 
     try:
         keyword, items = await _search_butailing_magnet_resources(tmdb_id, "tv")
-        attempts.append({"service": "butailing", "status": "ok", "count": len(items), "keyword": keyword})
+        attempts.append(
+            {
+                "service": "butailing",
+                "status": "ok",
+                "count": len(items),
+                "keyword": keyword,
+            }
+        )
     except Exception as exc:
         attempts.append({"service": "butailing", "status": "error", "error": str(exc)})
 
@@ -2814,7 +3136,9 @@ def get_tv_ed2k(
         episode_number=episode,
         error="",
     )
-    return _call_nullbr_resource(lambda: nullbr_service.get_tv_ed2k(tmdb_id, season, episode), fallback)
+    return _call_nullbr_resource(
+        lambda: nullbr_service.get_tv_ed2k(tmdb_id, season, episode), fallback
+    )
 
 
 @router.get("/tv/{tmdb_id}/video")
@@ -2830,7 +3154,9 @@ def get_tv_video(
         episode_number=episode,
         error="",
     )
-    return _call_nullbr_resource(lambda: nullbr_service.get_tv_video(tmdb_id, season, episode), fallback)
+    return _call_nullbr_resource(
+        lambda: nullbr_service.get_tv_video(tmdb_id, season, episode), fallback
+    )
 
 
 @router.get("/collection/{collection_id}")
@@ -2848,7 +3174,9 @@ def get_collection_pan115(collection_id: int, page: int = Query(1, ge=1)):
 @router.get("/bridge/imdb/{imdb_id}")
 async def get_bridge_by_imdb_id(
     imdb_id: str,
-    media_type: str = Query("movie", pattern="^(movie|tv)$", description="媒体类型: movie 或 tv"),
+    media_type: str = Query(
+        "movie", pattern="^(movie|tv)$", description="媒体类型: movie 或 tv"
+    ),
 ):
     """通过 IMDB ID 获取豆瓣和 TMDB 的关联信息
 
@@ -2890,10 +3218,18 @@ async def get_bridge_by_imdb_id(
     try:
         tmdb_find_result = await tmdb_service.find_by_imdb_id(normalized_imdb)
         if tmdb_find_result.get("found"):
-            tmdb_item = tmdb_find_result.get("movie") if normalized_type == "movie" else tmdb_find_result.get("tv")
+            tmdb_item = (
+                tmdb_find_result.get("movie")
+                if normalized_type == "movie"
+                else tmdb_find_result.get("tv")
+            )
             if not tmdb_item:
                 # 如果没有找到对应类型的结果，尝试使用另一个类型
-                tmdb_item = tmdb_find_result.get("tv") if normalized_type == "movie" else tmdb_find_result.get("movie")
+                tmdb_item = (
+                    tmdb_find_result.get("tv")
+                    if normalized_type == "movie"
+                    else tmdb_find_result.get("movie")
+                )
 
             if tmdb_item:
                 tmdb_result = {
@@ -2903,7 +3239,8 @@ async def get_bridge_by_imdb_id(
                     "poster_path": tmdb_item.get("poster_path"),
                     "overview": tmdb_item.get("overview"),
                     "vote_average": tmdb_item.get("vote_average"),
-                    "release_date": tmdb_item.get("release_date") or tmdb_item.get("first_air_date"),
+                    "release_date": tmdb_item.get("release_date")
+                    or tmdb_item.get("first_air_date"),
                     "media_type": tmdb_item.get("media_type"),
                 }
     except Exception as exc:
@@ -2929,9 +3266,9 @@ LIMIT 1
             )
             response.raise_for_status()
             payload = response.json()
-            bindings = (((payload or {}).get("results") or {}).get("bindings") or [])
+            bindings = ((payload or {}).get("results") or {}).get("bindings") or []
             if bindings:
-                douban_id = ((bindings[0].get("doubanId") or {}).get("value"))
+                douban_id = (bindings[0].get("doubanId") or {}).get("value")
                 if douban_id:
                     douban_result = {
                         "found": True,

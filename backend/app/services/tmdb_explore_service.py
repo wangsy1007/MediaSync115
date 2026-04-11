@@ -133,7 +133,9 @@ def _normalize_media_type(source_type: str, raw_item: dict[str, Any]) -> str:
     return "movie"
 
 
-def _normalize_item(raw_item: dict[str, Any], source_type: str, rank: int) -> Optional[dict[str, Any]]:
+def _normalize_item(
+    raw_item: dict[str, Any], source_type: str, rank: int
+) -> Optional[dict[str, Any]]:
     media_type = _normalize_media_type(source_type, raw_item)
     raw_id = raw_item.get("id")
     try:
@@ -294,7 +296,11 @@ async def fetch_tmdb_section(
 
     try:
         if client is None:
-            async with httpx.AsyncClient(timeout=12.0, http2=True) as local_client:
+            from app.utils.proxy import proxy_manager
+
+            async with proxy_manager.create_httpx_client(
+                timeout=30.0, http2=False
+            ) as local_client:
                 result = await _request_with_client(local_client)
         else:
             result = await _request_with_client(client)
