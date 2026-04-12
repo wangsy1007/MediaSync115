@@ -313,13 +313,23 @@ class Pan115Service:
         Returns:
             创建结果（包含错误信息的原始响应，不抛出异常）
         """
-        result = await self._async_call("fs_mkdir", {"pid": pid, "cname": name})
-        # 返回原始结果，不抛出异常，让调用者自己处理错误
-        return (
-            result
-            if isinstance(result, dict)
-            else {"state": False, "error": "Invalid response"}
-        )
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                result = await self._async_call("fs_mkdir", {"pid": pid, "cname": name})
+                return (
+                    result
+                    if isinstance(result, dict)
+                    else {"state": False, "error": "Invalid response"}
+                )
+            except Exception as exc:
+                last_error = exc
+                if self._is_method_not_allowed_error(str(exc)) and attempt < 2:
+                    await asyncio.sleep(self._save_retry_delay(attempt))
+                    continue
+                raise
+
+        raise last_error or Exception("创建文件夹失败")
 
     async def delete_file(self, fid: List[str]) -> Dict[str, Any]:
         """
@@ -365,8 +375,21 @@ class Pan115Service:
         """
         if isinstance(fid, str):
             fid = [fid]
-        result = await self._async_call("fs_move", {"fid": ",".join(fid), "pid": pid})
-        return check_response(result)
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                result = await self._async_call(
+                    "fs_move", {"fid": ",".join(fid), "pid": pid}
+                )
+                return check_response(result)
+            except Exception as exc:
+                last_error = exc
+                if self._is_method_not_allowed_error(str(exc)) and attempt < 2:
+                    await asyncio.sleep(self._save_retry_delay(attempt))
+                    continue
+                raise
+
+        raise last_error or Exception("移动文件失败")
 
     async def rename_file(self, fid: str, name: str) -> Dict[str, Any]:
         """
@@ -406,10 +429,23 @@ class Pan115Service:
         Returns:
             搜索结果
         """
-        result = await self._async_call(
-            "fs_search", {"search_value": search_value, "cid": cid}
-        )
-        data = check_response(result)
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                result = await self._async_call(
+                    "fs_search", {"search_value": search_value, "cid": cid}
+                )
+                data = check_response(result)
+                break
+            except Exception as exc:
+                last_error = exc
+                if self._is_method_not_allowed_error(str(exc)) and attempt < 2:
+                    await asyncio.sleep(self._save_retry_delay(attempt))
+                    continue
+                raise
+        else:
+            raise last_error or Exception("搜索文件失败")
+
         # 确保返回字典格式
         if isinstance(data, list):
             return {"list": data}

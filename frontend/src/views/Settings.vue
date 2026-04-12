@@ -2315,7 +2315,6 @@ const pollPan115QrStatus = async (token) => {
         pan115QrState.statusText = data.message || '扫码登录成功'
         await fetchCookieInfo()
         await checkCookie()
-        await fetchRiskHealth()
         ElMessage.success('115 扫码登录成功')
         break
       }
@@ -4194,7 +4193,6 @@ onMounted(() => {
   })
   fetchCookieInfo()
   checkCookie()
-  fetchRiskHealth()
   fetchDefaultFolder()
   fetchOfflineDefaultFolder()
   fetchPansouConfig()

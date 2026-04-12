@@ -15,6 +15,9 @@ from app.services.tmdb_service import tmdb_service
 
 logger = logging.getLogger(__name__)
 
+ARCHIVE_LIST_PAGE_DELAY_SECONDS = 0.35
+ARCHIVE_FILE_OPERATION_DELAY_SECONDS = 0.8
+
 
 VIDEO_EXTENSIONS = {
     ".mkv",
@@ -116,6 +119,7 @@ class ArchiveService:
 
             pan115 = self._get_pan115()
             source_items = await self._list_video_files(pan115, watch_cid)
+            folder_cache: dict[tuple[str, ...], str] = {}
 
             await operation_log_service.log_background_event(
                 source_type="background_task"
@@ -139,9 +143,13 @@ class ArchiveService:
                 "total": len(source_items),
                 "items": [],
             }
-            for item in source_items:
+            for index, item in enumerate(source_items):
                 result = await self._process_one(
-                    pan115, item, output_cid, trigger=trigger
+                    pan115,
+                    item,
+                    output_cid,
+                    trigger=trigger,
+                    folder_cache=folder_cache,
                 )
                 summary["items"].append(result)
                 s = str(result.get("status") or "")
@@ -151,6 +159,9 @@ class ArchiveService:
                     summary["skipped"] += 1
                 else:
                     summary["failed"] += 1
+
+                if index < len(source_items) - 1:
+                    await asyncio.sleep(ARCHIVE_FILE_OPERATION_DELAY_SECONDS)
 
             finish_status = "success" if summary["failed"] == 0 else "warning"
             await operation_log_service.log_background_event(
@@ -227,7 +238,11 @@ class ArchiveService:
 
                 if len(batch) < limit:
                     break
+                await asyncio.sleep(ARCHIVE_LIST_PAGE_DELAY_SECONDS)
                 offset += limit
+
+            if pending_dirs:
+                await asyncio.sleep(ARCHIVE_LIST_PAGE_DELAY_SECONDS)
 
         items.sort(
             key=lambda x: str(x.get("relative_path") or x.get("name") or "").lower()
@@ -240,6 +255,7 @@ class ArchiveService:
         item: dict[str, Any],
         output_cid: str,
         trigger: str = "manual",
+        folder_cache: dict[tuple[str, ...], str] | None = None,
     ) -> dict[str, Any]:
         """处理单个 115 文件"""
         fid = item["fid"]
@@ -284,12 +300,21 @@ class ArchiveService:
 
             if parsed["media_type"] == "tv":
                 target_cid = await self._ensure_tv_path(
-                    pan115, output_cid, genre_name, title_folder, parsed
+                    pan115,
+                    output_cid,
+                    genre_name,
+                    title_folder,
+                    parsed,
+                    folder_cache=folder_cache,
                 )
                 target_desc = f"tv/{genre_name}/{title_folder}/Season {int(parsed.get('season') or 1):02d}"
             else:
                 target_cid = await self._ensure_movie_path(
-                    pan115, output_cid, genre_name, title_folder
+                    pan115,
+                    output_cid,
+                    genre_name,
+                    title_folder,
+                    folder_cache=folder_cache,
                 )
                 target_desc = f"movies/{genre_name}/{title_folder}"
 
@@ -360,12 +385,23 @@ class ArchiveService:
             }
 
     async def _ensure_movie_path(
-        self, pan115: Pan115Service, root_cid: str, genre: str, title_folder: str
+        self,
+        pan115: Pan115Service,
+        root_cid: str,
+        genre: str,
+        title_folder: str,
+        folder_cache: dict[tuple[str, ...], str] | None = None,
     ) -> str:
         """确保电影归档目录存在，返回最终目录 CID"""
+        cache_key = ("movie", str(root_cid), str(genre), str(title_folder))
+        if folder_cache and cache_key in folder_cache:
+            return folder_cache[cache_key]
+
         movies_cid = await pan115.get_or_create_folder(root_cid, "movies")
         genre_cid = await pan115.get_or_create_folder(movies_cid, genre)
         folder_cid = await pan115.get_or_create_folder(genre_cid, title_folder)
+        if folder_cache is not None:
+            folder_cache[cache_key] = folder_cid
         return folder_cid
 
     async def _ensure_tv_path(
@@ -375,14 +411,27 @@ class ArchiveService:
         genre: str,
         title_folder: str,
         parsed: dict[str, Any],
+        folder_cache: dict[tuple[str, ...], str] | None = None,
     ) -> str:
         """确保剧集归档目录存在，返回最终目录 CID"""
+        season = int(parsed.get("season") or 1)
+        cache_key = (
+            "tv",
+            str(root_cid),
+            str(genre),
+            str(title_folder),
+            f"S{season:02d}",
+        )
+        if folder_cache and cache_key in folder_cache:
+            return folder_cache[cache_key]
+
         tv_cid = await pan115.get_or_create_folder(root_cid, "tv")
         genre_cid = await pan115.get_or_create_folder(tv_cid, genre)
         title_cid = await pan115.get_or_create_folder(genre_cid, title_folder)
-        season = int(parsed.get("season") or 1)
         season_dir = f"Season {season:02d}"
         season_cid = await pan115.get_or_create_folder(title_cid, season_dir)
+        if folder_cache is not None:
+            folder_cache[cache_key] = season_cid
         return season_cid
 
     # ---------- TMDB 识别 ----------
@@ -510,6 +559,7 @@ class ArchiveService:
             {"fid": fid, "name": filename, "cid": ""},
             output_cid,
             trigger="retry",
+            folder_cache={},
         )
 
     async def clear_tasks(self, include_failed: bool = False) -> int:

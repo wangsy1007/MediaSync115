@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2>归档刮削</h2>
-        <p class="page-subtitle">自动扫描 115 网盘离线目录，识别影片并按电影/剧集 + 类型归档到分类文件夹。</p>
+        <p class="page-subtitle">自动扫描 115 网盘离线目录，识别影片并按电影/剧集 + 类型归档到分类文件夹。为降低 115 风控概率，扫描会按低频模式顺序执行。</p>
       </div>
       <div class="header-actions">
         <el-button :loading="refreshing" @click="refreshAll">刷新</el-button>
@@ -293,8 +293,10 @@ const runScan = async () => {
   scanLoading.value = true
   try {
     const { data } = await archiveApi.runScan()
-    ElMessage.success(`归档扫描完成：成功 ${data.success || 0}，失败 ${data.failed || 0}`)
+    ElMessage.success(`归档扫描完成：总计 ${data.total || 0}，成功 ${data.success || 0}，跳过 ${data.skipped || 0}，失败 ${data.failed || 0}`)
     await loadTasks()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '归档扫描失败')
   } finally {
     scanLoading.value = false
   }
