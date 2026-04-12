@@ -1857,7 +1857,7 @@ onMounted(() => {
         align-items: center;
         gap: 10px;
         font-size: 13px;
-        color: #909399;
+        color: var(--ms-text-muted);
 
         .link-label {
           color: var(--ms-text-secondary);

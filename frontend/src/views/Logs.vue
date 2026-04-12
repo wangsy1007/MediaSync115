@@ -657,8 +657,8 @@ onMounted(async () => {
     gap: 12px;
 
     &__block {
-      background: #f7f8fa;
-      border: 1px solid #ebeef5;
+      background: var(--ms-bg-subtle);
+      border: 1px solid var(--ms-border-color);
       border-radius: 10px;
       padding: 12px;
 
@@ -668,7 +668,7 @@ onMounted(async () => {
         word-break: break-word;
         font-size: 12px;
         line-height: 1.6;
-        color: var(--ms-text-regular);
+        color: var(--ms-text-secondary);
       }
     }
 

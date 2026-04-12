@@ -424,7 +424,7 @@ onMounted(() => {
     .default-folder-tip {
       margin-top: 10px;
       font-size: 12px;
-      color: #a0a0a0;
+      color: var(--ms-text-muted);
     }
   }
 
@@ -436,7 +436,7 @@ onMounted(() => {
 
     h2 {
       margin: 0;
-      color: #e0e0e0;
+      color: var(--ms-text-primary);
     }
   }
 
@@ -457,7 +457,7 @@ onMounted(() => {
   }
 
   .file-name {
-    color: #e0e0e0;
+    color: var(--ms-text-primary);
   }
 }
 

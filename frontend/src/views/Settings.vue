@@ -4427,7 +4427,7 @@ onBeforeUnmount(() => {
       height: 220px;
       border: 1px solid var(--ms-border-light, #d8e2ef);
       border-radius: 8px;
-      background: #fff;
+      background: var(--ms-bg-elevated);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -4465,7 +4465,7 @@ onBeforeUnmount(() => {
       border: 1px solid var(--ms-border-light, #d8e2ef);
       border-radius: 8px;
       padding: 8px;
-      background: #fff;
+      background: var(--ms-bg-elevated);
 
       img {
         width: 100%;

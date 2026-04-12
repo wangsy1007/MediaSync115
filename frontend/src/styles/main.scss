@@ -5,14 +5,16 @@
 :root,
 [data-theme='dark'] {
   --ms-bg-primary: radial-gradient(circle at 18% 14%, #1a335f 0%, #0a1530 38%, #061025 100%);
-  --ms-bg-secondary: rgba(10, 22, 46, 0.72);
-  --ms-bg-card: rgba(12, 28, 58, 0.58);
-  --ms-bg-elevated: rgba(18, 36, 70, 0.78);
-  --ms-border-color: rgba(130, 183, 255, 0.18);
-  --ms-border-light: rgba(158, 205, 255, 0.38);
-  --ms-text-primary: #eaf3ff;
-  --ms-text-secondary: #c4d8f4;
-  --ms-text-muted: #8da8cb;
+  --ms-bg-secondary: rgba(9, 20, 40, 0.8);
+  --ms-bg-card: rgba(10, 24, 50, 0.72);
+  --ms-bg-elevated: rgba(14, 30, 58, 0.92);
+  --ms-bg-control: rgba(14, 28, 54, 0.9);
+  --ms-bg-subtle: rgba(255, 255, 255, 0.05);
+  --ms-border-color: rgba(142, 191, 255, 0.24);
+  --ms-border-light: rgba(176, 214, 255, 0.42);
+  --ms-text-primary: #f3f8ff;
+  --ms-text-secondary: #d9e7fb;
+  --ms-text-muted: #abc2e1;
   --ms-accent-primary: #2d99ff;
   --ms-accent-secondary: #65b7ff;
   --ms-accent-success: #2ac37e;
@@ -37,6 +39,8 @@
   --ms-bg-secondary: rgba(241, 248, 255, 0.82);
   --ms-bg-card: rgba(255, 255, 255, 0.7);
   --ms-bg-elevated: rgba(255, 255, 255, 0.86);
+  --ms-bg-control: rgba(255, 255, 255, 0.82);
+  --ms-bg-subtle: rgba(49, 124, 214, 0.06);
   --ms-border-color: rgba(95, 142, 201, 0.26);
   --ms-border-light: rgba(79, 135, 207, 0.44);
   --ms-text-primary: #15345f;
@@ -57,6 +61,35 @@
   --ms-shadow-md: 0 14px 34px rgba(66, 108, 156, 0.2);
   --ms-shadow-lg: 0 20px 50px rgba(66, 108, 156, 0.25);
   --ms-shadow-glow: 0 0 22px rgba(69, 149, 240, 0.24);
+}
+
+[data-theme='dark'] {
+  --el-bg-color: #0b1831;
+  --el-bg-color-page: #081221;
+  --el-bg-color-overlay: #102344;
+  --el-fill-color-blank: #0b1831;
+  --el-fill-color-extra-light: rgba(150, 196, 255, 0.05);
+  --el-fill-color-lighter: rgba(150, 196, 255, 0.08);
+  --el-fill-color-light: rgba(150, 196, 255, 0.11);
+  --el-fill-color: rgba(150, 196, 255, 0.14);
+  --el-fill-color-dark: rgba(150, 196, 255, 0.18);
+  --el-fill-color-darker: rgba(150, 196, 255, 0.24);
+  --el-text-color-primary: var(--ms-text-primary);
+  --el-text-color-regular: var(--ms-text-secondary);
+  --el-text-color-secondary: var(--ms-text-muted);
+  --el-text-color-placeholder: #90aacd;
+  --el-text-color-disabled: #6d86a8;
+  --el-border-color: var(--ms-border-color);
+  --el-border-color-light: rgba(148, 194, 255, 0.2);
+  --el-border-color-lighter: rgba(148, 194, 255, 0.16);
+  --el-border-color-extra-light: rgba(148, 194, 255, 0.12);
+  --el-border-color-dark: rgba(148, 194, 255, 0.3);
+  --el-mask-color: rgba(4, 10, 22, 0.78);
+  --el-mask-color-extra-light: rgba(4, 10, 22, 0.48);
+  --el-overlay-color-lighter: rgba(4, 10, 22, 0.78);
+  --el-disabled-bg-color: rgba(110, 134, 168, 0.12);
+  --el-disabled-border-color: rgba(110, 134, 168, 0.16);
+  --el-disabled-text-color: #6d86a8;
 }
 
 body {
@@ -127,7 +160,7 @@ img {
 .el-textarea__inner,
 .el-input-number,
 .el-picker {
-  background: var(--ms-glass-bg) !important;
+  background: var(--ms-bg-control) !important;
   border: 1px solid var(--ms-border-color) !important;
   box-shadow: none !important;
   color: var(--ms-text-primary) !important;
@@ -143,6 +176,11 @@ img {
 .el-input__inner,
 .el-textarea__inner {
   color: var(--ms-text-primary) !important;
+}
+
+.el-input__inner::placeholder,
+.el-textarea__inner::placeholder {
+  color: var(--ms-text-muted) !important;
 }
 
 .el-button {
@@ -197,6 +235,7 @@ img {
 .el-dialog,
 .el-drawer,
 .el-message,
+.el-notification,
 .el-message-box,
 .el-select-dropdown,
 .el-dropdown-menu,
@@ -237,6 +276,156 @@ img {
     background: rgba(72, 154, 248, 0.16);
     box-shadow: inset 0 0 0 1px rgba(131, 195, 255, 0.18);
   }
+}
+
+[data-theme='dark'] .el-dialog__header,
+[data-theme='dark'] .el-drawer__header,
+[data-theme='dark'] .el-message-box__header,
+[data-theme='dark'] .el-card__header,
+[data-theme='dark'] .el-popconfirm__main,
+[data-theme='dark'] .el-picker-panel__footer {
+  border-bottom: 1px solid var(--ms-border-color);
+}
+
+[data-theme='dark'] .el-dialog__footer,
+[data-theme='dark'] .el-message-box__btns,
+[data-theme='dark'] .el-drawer__footer {
+  border-top: 1px solid var(--ms-border-color);
+}
+
+[data-theme='dark'] .el-dialog__title,
+[data-theme='dark'] .el-drawer__title,
+[data-theme='dark'] .el-message-box__title,
+[data-theme='dark'] .el-message__content,
+[data-theme='dark'] .el-notification__title,
+[data-theme='dark'] .el-popconfirm__main,
+[data-theme='dark'] .el-dropdown-menu__item,
+[data-theme='dark'] .el-select-dropdown__item,
+[data-theme='dark'] .el-cascader-node,
+[data-theme='dark'] .el-tree-node__label,
+[data-theme='dark'] .el-checkbox__label,
+[data-theme='dark'] .el-radio__label,
+[data-theme='dark'] .el-switch__label,
+[data-theme='dark'] .el-picker-panel,
+[data-theme='dark'] .el-date-table th,
+[data-theme='dark'] .el-month-table td .cell,
+[data-theme='dark'] .el-year-table td .cell,
+[data-theme='dark'] .el-time-panel__btn,
+[data-theme='dark'] .el-time-spinner__item,
+[data-theme='dark'] .el-table-filter__content,
+[data-theme='dark'] .el-descriptions,
+[data-theme='dark'] .el-empty,
+[data-theme='dark'] .el-result,
+[data-theme='dark'] .el-statistic,
+[data-theme='dark'] .el-transfer-panel,
+[data-theme='dark'] .el-collapse-item__header,
+[data-theme='dark'] .el-collapse-item__wrap,
+[data-theme='dark'] .el-tree,
+[data-theme='dark'] .el-table__empty-text {
+  color: var(--ms-text-secondary) !important;
+}
+
+[data-theme='dark'] .el-dialog__body,
+[data-theme='dark'] .el-drawer__body,
+[data-theme='dark'] .el-message-box__message,
+[data-theme='dark'] .el-notification__content,
+[data-theme='dark'] .el-empty__description p,
+[data-theme='dark'] .el-result__subtitle p,
+[data-theme='dark'] .el-form-item__label,
+[data-theme='dark'] .el-descriptions__label,
+[data-theme='dark'] .el-descriptions__content,
+[data-theme='dark'] .el-divider__text,
+[data-theme='dark'] .el-radio-group,
+[data-theme='dark'] .el-checkbox-group {
+  color: var(--ms-text-secondary) !important;
+}
+
+[data-theme='dark'] .el-result__title p,
+[data-theme='dark'] .el-statistic__content,
+[data-theme='dark'] .el-message-box__title,
+[data-theme='dark'] .el-date-picker__header-label,
+[data-theme='dark'] .el-picker-panel__icon-btn,
+[data-theme='dark'] .el-collapse-item__header,
+[data-theme='dark'] .el-tabs__item.is-active,
+[data-theme='dark'] .el-form-item__content,
+[data-theme='dark'] .el-text {
+  color: var(--ms-text-primary) !important;
+}
+
+[data-theme='dark'] .el-select-dropdown__item.hover,
+[data-theme='dark'] .el-select-dropdown__item:hover,
+[data-theme='dark'] .el-dropdown-menu__item:hover,
+[data-theme='dark'] .el-cascader-node:hover,
+[data-theme='dark'] .el-tree-node__content:hover,
+[data-theme='dark'] .el-menu-item:hover,
+[data-theme='dark'] .el-sub-menu__title:hover,
+[data-theme='dark'] .el-date-table td.available:hover,
+[data-theme='dark'] .el-time-spinner__item:hover,
+[data-theme='dark'] .el-table-filter__list-item:hover {
+  background: rgba(101, 183, 255, 0.12) !important;
+  color: var(--ms-text-primary) !important;
+}
+
+[data-theme='dark'] .el-select-dropdown__item.selected,
+[data-theme='dark'] .el-dropdown-menu__item:not(.is-disabled):focus,
+[data-theme='dark'] .el-tabs__item,
+[data-theme='dark'] .el-link {
+  color: var(--ms-text-secondary) !important;
+}
+
+[data-theme='dark'] .el-select-dropdown__item.selected {
+  color: var(--ms-accent-secondary) !important;
+  font-weight: 600;
+}
+
+[data-theme='dark'] .el-popper__arrow::before {
+  background: var(--ms-bg-elevated) !important;
+  border-color: var(--ms-glass-border) !important;
+}
+
+[data-theme='dark'] .el-pagination button,
+[data-theme='dark'] .el-pagination .el-pager li {
+  background: var(--ms-bg-control) !important;
+  border: 1px solid var(--ms-border-color) !important;
+  color: var(--ms-text-secondary) !important;
+}
+
+[data-theme='dark'] .el-pagination .el-pager li.is-active,
+[data-theme='dark'] .el-pagination button:hover,
+[data-theme='dark'] .el-pagination .el-pager li:hover {
+  color: var(--ms-text-primary) !important;
+  border-color: var(--ms-border-light) !important;
+}
+
+[data-theme='dark'] .el-tabs__nav-wrap::after,
+[data-theme='dark'] .el-divider,
+[data-theme='dark'] .el-table__inner-wrapper::before,
+[data-theme='dark'] .el-table-filter,
+[data-theme='dark'] .el-picker-panel,
+[data-theme='dark'] .el-time-panel,
+[data-theme='dark'] .el-transfer-panel,
+[data-theme='dark'] .el-collapse-item__wrap {
+  border-color: var(--ms-border-color) !important;
+}
+
+[data-theme='dark'] .el-date-table td.current:not(.disabled) .el-date-table-cell__text,
+[data-theme='dark'] .el-month-table td.current:not(.disabled) .cell,
+[data-theme='dark'] .el-year-table td.current:not(.disabled) .cell,
+[data-theme='dark'] .el-time-panel__btn.confirm {
+  color: var(--ms-text-primary) !important;
+}
+
+[data-theme='dark'] .el-table td.el-table__cell,
+[data-theme='dark'] .el-table th.el-table__cell,
+[data-theme='dark'] .el-descriptions__body,
+[data-theme='dark'] .el-collapse-item__wrap,
+[data-theme='dark'] .el-transfer-panel,
+[data-theme='dark'] .el-tree,
+[data-theme='dark'] .el-picker-panel,
+[data-theme='dark'] .el-time-panel,
+[data-theme='dark'] .el-date-picker,
+[data-theme='dark'] .el-table-filter {
+  background: transparent !important;
 }
 
 .el-tabs .el-tabs__item {

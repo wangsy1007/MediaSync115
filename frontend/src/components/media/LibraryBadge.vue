@@ -79,6 +79,12 @@ const badgeTitle = computed(() => {
   overflow: hidden;
 }
 
+:global([data-theme='dark']) .library-badge__icon {
+  background: rgba(10, 24, 50, 0.96);
+  border-color: rgba(148, 194, 255, 0.38);
+  box-shadow: 0 8px 16px rgba(2, 10, 24, 0.34);
+}
+
 .library-badge.is-inline .library-badge__icon {
   width: 28px;
   height: 28px;

@@ -1929,14 +1929,14 @@ onMounted(async () => {
 
       .original-title {
         margin-top: 6px;
-        color: #606266;
+        color: var(--ms-text-secondary);
       }
 
       .meta {
         display: flex;
         gap: 14px;
         margin-top: 8px;
-        color: #606266;
+        color: var(--ms-text-secondary);
       }
 
       .genres {
@@ -1960,7 +1960,7 @@ onMounted(async () => {
 
       .mapping-tip {
         margin-top: 10px;
-        color: #909399;
+        color: var(--ms-text-muted);
         font-size: 13px;
 
         .tmdb-link {
