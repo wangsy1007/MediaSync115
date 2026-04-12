@@ -139,11 +139,11 @@
 
     <el-dialog v-model="pickerVisible" :title="pickerTitle" width="520px" :close-on-click-modal="false">
       <div class="picker-breadcrumb">
-        <el-breadcrumb separator="/">
-          <el-breadcrumb-item v-for="crumb in pickerBreadcrumbs" :key="crumb.cid">
-            <a @click.prevent="navigatePicker(crumb.cid)">{{ crumb.name }}</a>
-          </el-breadcrumb-item>
-        </el-breadcrumb>
+          <el-breadcrumb separator="/">
+            <el-breadcrumb-item v-for="crumb in pickerBreadcrumbs" :key="crumb.cid">
+            <a @click.prevent="navigatePicker(crumb.cid)">{{ getFolderDisplayName(crumb) }}</a>
+            </el-breadcrumb-item>
+          </el-breadcrumb>
       </div>
 
       <div class="picker-toolbar">
@@ -151,7 +151,11 @@
       </div>
 
       <el-table :data="pickerFolders" v-loading="pickerLoading" size="small" max-height="400px" @row-click="handlePickerRowClick">
-        <el-table-column prop="name" label="文件夹名称" min-width="300" />
+        <el-table-column label="文件夹名称" min-width="300">
+          <template #default="{ row }">
+            <span>{{ getFolderDisplayName(row) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="cid" label="CID" width="120" show-overflow-tooltip />
         <el-table-column label="操作" width="120">
           <template #default="{ row }">
@@ -212,11 +216,24 @@ const pickerHistory = ref([])
 const pickerTitle = computed(() => pickerTarget.value === 'watch' ? '选择 115 监听目录' : '选择 115 输出目录')
 const pickerBreadcrumbs = computed(() => [{ cid: '0', name: '根目录' }, ...pickerHistory.value])
 
+const getFolderDisplayName = (folder) => {
+  if (!folder || typeof folder !== 'object') return '-'
+  return String(
+    folder.name
+    || folder.n
+    || folder.fn
+    || folder.folder_name
+    || folder.file_name
+    || folder.cid
+    || '-'
+  ).trim() || '-'
+}
+
 // 获取当前目录的名称
 const getCurrentFolderName = () => {
   if (pickerCurrentCid.value === '0') return '根目录'
   const found = pickerHistory.value.find(h => h.cid === pickerCurrentCid.value)
-  return found?.name || pickerCurrentCid.value
+  return getFolderDisplayName(found) || pickerCurrentCid.value
 }
 
 const mediaTypeLabel = (v) => v === 'movie' ? '电影' : v === 'tv' ? '剧集' : '-'
@@ -317,7 +334,10 @@ const loadPickerFolders = async (cid) => {
   pickerCurrentCid.value = cid
   try {
     const { data } = await archiveApi.listFolders(cid)
-    pickerFolders.value = data.folders || []
+    pickerFolders.value = (Array.isArray(data?.folders) ? data.folders : []).map(folder => ({
+      cid: String(folder.cid || ''),
+      name: getFolderDisplayName(folder)
+    }))
   } catch {
     pickerFolders.value = []
   } finally {
@@ -348,6 +368,7 @@ const handlePickerRowClick = (row) => {
 }
 
 const enterPickerFolder = (row) => {
+  const rowName = getFolderDisplayName(row)
   // 进入子目录前，将当前目录加入历史
   const currentName = getCurrentFolderName()
   if (pickerCurrentCid.value !== '0' && !pickerHistory.value.find(h => h.cid === pickerCurrentCid.value)) {
@@ -355,7 +376,7 @@ const enterPickerFolder = (row) => {
   }
   // 将目标目录加入历史（使用 row.name）
   if (!pickerHistory.value.find(h => h.cid === row.cid)) {
-    pickerHistory.value.push({ cid: row.cid, name: row.name })
+    pickerHistory.value.push({ cid: row.cid, name: rowName })
   }
   loadPickerFolders(row.cid)
 }

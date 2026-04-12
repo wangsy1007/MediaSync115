@@ -175,19 +175,15 @@
             <el-form :model="defaultFolderForm" label-width="120px">
               <el-form-item label="默认保存位置">
                 <div class="folder-selector">
-                  <el-tree-select
-                    v-model="defaultFolderForm.folderId"
-                    class="default-folder-select"
-                    :data="folderTree"
-                    :props="folderTreeProps"
-                    placeholder="选择默认转存目录"
-                    check-strictly
-                    lazy
-                    :load="loadFolderChildren"
-                    :render-after-expand="false"
-                    clearable
-                    @change="handleDefaultFolderChange"
-                  />
+                  <div class="folder-tag-row">
+                    <el-tag v-if="defaultFolderForm.folderId" type="info">
+                      {{ defaultFolderForm.folderName || defaultFolderForm.folderId }}
+                    </el-tag>
+                    <span v-else class="not-configured">未配置</span>
+                  </div>
+                  <el-button @click="openSettingsFolderPicker('default')">
+                    选择目录
+                  </el-button>
                   <el-button type="primary" @click="handleSaveDefaultFolder" :loading="savingFolder">
                     保存设置
                   </el-button>
@@ -212,9 +208,18 @@
                 <div class="current-folder">
                   <el-text>{{ currentOfflineDefaultFolderText }}</el-text>
                 </div>
-                <div class="folder-action">
-                  <el-button type="primary" @click="handleOpenOfflineFolderDialog">
-                    修改默认设置
+                <div class="folder-selector" style="margin-top: 10px">
+                  <div class="folder-tag-row">
+                    <el-tag v-if="offlineDefaultFolderForm.folderId" type="info">
+                      {{ offlineDefaultFolderForm.folderName || offlineDefaultFolderForm.folderId }}
+                    </el-tag>
+                    <span v-else class="not-configured">未配置</span>
+                  </div>
+                  <el-button @click="openSettingsFolderPicker('offline')">
+                    选择目录
+                  </el-button>
+                  <el-button type="primary" :loading="savingOfflineFolder" @click="handleSaveOfflineDefaultFolder">
+                    保存设置
                   </el-button>
                 </div>
                 <div class="folder-tips">
@@ -1587,33 +1592,51 @@
     </el-tabs>
 
     <el-dialog
-      v-model="offlineFolderDialogVisible"
-      title="修改默认离线目录"
-      width="560px"
-      destroy-on-close
+      v-model="settingsFolderPickerVisible"
+      :title="settingsFolderPickerTitle"
+      width="520px"
+      :close-on-click-modal="false"
     >
-      <el-form :model="offlineDefaultFolderForm" label-width="120px">
-        <el-form-item label="离线目录">
-          <el-tree-select
-            v-model="offlineDefaultFolderForm.folderId"
-            :data="folderTree"
-            :props="folderTreeProps"
-            placeholder="选择默认离线下载目录"
-            check-strictly
-            lazy
-            :load="loadFolderChildren"
-            :render-after-expand="false"
-            clearable
-            @change="handleOfflineDefaultFolderChange"
-            style="width: 100%"
-          />
-        </el-form-item>
-      </el-form>
+      <div class="folder-picker-breadcrumb">
+        <el-breadcrumb separator="/">
+          <el-breadcrumb-item v-for="crumb in settingsFolderPickerBreadcrumbs" :key="crumb.cid">
+            <a @click.prevent="navigateSettingsFolderPicker(crumb.cid)">{{ getSettingsFolderDisplayName(crumb) }}</a>
+          </el-breadcrumb-item>
+        </el-breadcrumb>
+      </div>
+
+      <div class="folder-picker-toolbar">
+        <el-button size="small" :loading="settingsFolderPickerCreating" @click="createSettingsFolderPickerFolder">新建文件夹</el-button>
+      </div>
+
+      <el-table
+        :data="settingsFolderPickerFolders"
+        v-loading="settingsFolderPickerLoading"
+        size="small"
+        max-height="400px"
+        @row-click="handleSettingsFolderPickerRowClick"
+      >
+        <el-table-column label="文件夹名称" min-width="300">
+          <template #default="{ row }">
+            <span>{{ getSettingsFolderDisplayName(row) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="cid" label="CID" width="120" show-overflow-tooltip />
+        <el-table-column label="操作" width="120">
+          <template #default="{ row }">
+            <el-button size="small" type="primary" text @click.stop="enterSettingsFolderPickerFolder(row)">进入</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
       <template #footer>
-        <el-button @click="offlineFolderDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="savingOfflineFolder" @click="handleSaveOfflineDefaultFolder">
-          保存设置
-        </el-button>
+        <div class="folder-picker-footer">
+          <span>当前目录 CID: {{ settingsFolderPickerCurrentCid }}</span>
+          <div>
+            <el-button @click="settingsFolderPickerVisible = false">取消</el-button>
+            <el-button type="primary" @click="confirmSettingsFolderPicker">选择当前目录</el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
 
@@ -1649,14 +1672,13 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount, reactive, computed } from 'vue'
-import { ElMessage } from 'element-plus'
-import { authApi, pan115Api, pansouApi, settingsApi, subscriptionApi, licenseApi } from '@/api'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { authApi, pan115Api, pansouApi, settingsApi, subscriptionApi, licenseApi, archiveApi } from '@/api'
 import { resetAuthSessionCache } from '@/router'
 import { useRouter } from 'vue-router'
 import { formatBeijingDateTime, formatBeijingTableCell } from '@/utils/timezone'
 import { ALL_TABS, saveVisibleTabs } from '@/utils/detailTabs'
 import { ALL_RESOLUTIONS, ALL_FORMATS } from '@/utils/resourceTags'
-import { normalizePan115FolderOptions } from '@/utils/pan115'
 
 const router = useRouter()
 const activeSettingsTab = ref('pan115')
@@ -2231,14 +2253,13 @@ const defaultFolderForm = ref({
 })
 const savingFolder = ref(false)
 const savingOfflineFolder = ref(false)
-const offlineFolderDialogVisible = ref(false)
-const folderTree = ref([])
-const folderTreeProps = {
-  label: 'name',
-  value: 'id',
-  children: 'children',
-  isLeaf: (data) => data.isLeaf === true
-}
+const settingsFolderPickerVisible = ref(false)
+const settingsFolderPickerTarget = ref('default')
+const settingsFolderPickerFolders = ref([])
+const settingsFolderPickerLoading = ref(false)
+const settingsFolderPickerCreating = ref(false)
+const settingsFolderPickerCurrentCid = ref('0')
+const settingsFolderPickerHistory = ref([])
 
 const currentDefaultFolderText = computed(() => {
   const folderId = defaultFolderForm.value.folderId || '0'
@@ -2257,6 +2278,18 @@ const currentOfflineDefaultFolderText = computed(() => {
   const folderName = offlineDefaultFolderForm.value.folderName || ''
   if (folderId === '0') return '根目录'
   return folderName ? `${folderName} (ID: ${folderId})` : `ID: ${folderId}`
+})
+
+const settingsFolderPickerTitle = computed(() => settingsFolderPickerTarget.value === 'offline' ? '选择默认离线目录' : '选择默认保存位置')
+
+const settingsFolderPickerBreadcrumbs = computed(() => {
+  const breadcrumbs = [{ cid: '0', name: '根目录' }]
+  for (const item of settingsFolderPickerHistory.value) {
+    if (item?.cid && item.cid !== '0') {
+      breadcrumbs.push(item)
+    }
+  }
+  return breadcrumbs
 })
 
 const formatSize = (bytes) => {
@@ -4134,62 +4167,135 @@ const handleRunAllChannels = async () => {
   }
 }
 
-// 获取文件夹列表
-const fetchFolders = async (cid = '0') => {
+const getSettingsFolderForm = (target = settingsFolderPickerTarget.value) => {
+  return target === 'offline' ? offlineDefaultFolderForm.value : defaultFolderForm.value
+}
+
+const getSettingsFolderDisplayName = (folder) => {
+  if (!folder || typeof folder !== 'object') return '-'
+  return String(
+    folder.name
+    || folder.n
+    || folder.fn
+    || folder.folder_name
+    || folder.file_name
+    || folder.cid
+    || '-'
+  ).trim() || '-'
+}
+
+const getSettingsFolderPickerCurrentName = () => {
+  if (settingsFolderPickerCurrentCid.value === '0') return '根目录'
+
+  const currentForm = getSettingsFolderForm()
+  if (
+    String(currentForm.folderId || '') === settingsFolderPickerCurrentCid.value
+    && String(currentForm.folderName || '').trim()
+  ) {
+    return String(currentForm.folderName).trim()
+  }
+
+  const currentItem = settingsFolderPickerHistory.value.find(item => item.cid === settingsFolderPickerCurrentCid.value)
+  return getSettingsFolderDisplayName(currentItem) || settingsFolderPickerCurrentCid.value
+}
+
+const loadSettingsFolderPickerFolders = async (cid) => {
+  settingsFolderPickerLoading.value = true
+  settingsFolderPickerCurrentCid.value = cid
   try {
-    const { data } = await pan115Api.getFileList(cid, 0, 50)
-    return normalizePan115FolderOptions(data.data)
+    const { data } = await archiveApi.listFolders(cid)
+    settingsFolderPickerFolders.value = (Array.isArray(data?.folders) ? data.folders : []).map(folder => ({
+      cid: String(folder.cid || ''),
+      name: getSettingsFolderDisplayName(folder)
+    }))
+  } catch {
+    settingsFolderPickerFolders.value = []
+  } finally {
+    settingsFolderPickerLoading.value = false
+  }
+}
+
+const openSettingsFolderPicker = (target) => {
+  const currentForm = getSettingsFolderForm(target)
+  const currentCid = String(currentForm.folderId || '0') || '0'
+  const currentName = String(currentForm.folderName || '').trim()
+
+  settingsFolderPickerTarget.value = target
+  settingsFolderPickerCurrentCid.value = currentCid
+  settingsFolderPickerHistory.value = currentCid !== '0'
+    ? [{ cid: currentCid, name: currentName || currentCid }]
+    : []
+  settingsFolderPickerFolders.value = []
+  settingsFolderPickerVisible.value = true
+  loadSettingsFolderPickerFolders(currentCid)
+}
+
+const navigateSettingsFolderPicker = (cid) => {
+  if (cid === settingsFolderPickerCurrentCid.value) return
+
+  const index = settingsFolderPickerHistory.value.findIndex(item => item.cid === cid)
+  if (index >= 0) {
+    settingsFolderPickerHistory.value = settingsFolderPickerHistory.value.slice(0, index + 1)
+  } else if (cid === '0') {
+    settingsFolderPickerHistory.value = []
+  }
+
+  loadSettingsFolderPickerFolders(cid)
+}
+
+const handleSettingsFolderPickerRowClick = (row) => {
+  enterSettingsFolderPickerFolder(row)
+}
+
+const enterSettingsFolderPickerFolder = (row) => {
+  const rowName = getSettingsFolderDisplayName(row)
+  const currentName = getSettingsFolderPickerCurrentName()
+
+  if (
+    settingsFolderPickerCurrentCid.value !== '0'
+    && !settingsFolderPickerHistory.value.find(item => item.cid === settingsFolderPickerCurrentCid.value)
+  ) {
+    settingsFolderPickerHistory.value.push({ cid: settingsFolderPickerCurrentCid.value, name: currentName })
+  }
+
+  if (!settingsFolderPickerHistory.value.find(item => item.cid === row.cid)) {
+    settingsFolderPickerHistory.value.push({ cid: row.cid, name: rowName })
+  }
+
+  loadSettingsFolderPickerFolders(row.cid)
+}
+
+const createSettingsFolderPickerFolder = async () => {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新文件夹名称', '新建文件夹', {
+      confirmButtonText: '创建',
+      cancelButtonText: '取消',
+      inputPattern: /\S+/,
+      inputErrorMessage: '文件夹名称不能为空'
+    })
+
+    const folderName = String(value || '').trim()
+    if (!folderName) return
+
+    settingsFolderPickerCreating.value = true
+    await pan115Api.createFolder(settingsFolderPickerCurrentCid.value, folderName)
+    ElMessage.success(`已创建文件夹：${folderName}`)
+    await loadSettingsFolderPickerFolders(settingsFolderPickerCurrentCid.value)
   } catch (error) {
-    console.error('Failed to fetch folders:', error)
-    return []
-  }
-}
-
-// 懒加载子文件夹
-const loadFolderChildren = async (node, resolve) => {
-  // node.level === 0 表示根级别，需要返回根目录
-  const cid = node.level === 0 ? '0' : node.data?.id || '0'
-  const folders = await fetchFolders(cid)
-  
-  if (node.level === 0) {
-    // 根级别，添加根目录选项
-    resolve([
-      { id: '0', name: '根目录', isLeaf: false },
-      ...folders
-    ])
-  } else {
-    resolve(folders)
-  }
-}
-
-const findFolderNameById = (nodes, folderId) => {
-  const id = String(folderId || '0')
-  if (id === '0') return '根目录'
-  for (const node of nodes || []) {
-    if (String(node.id) === id) return node.name || ''
-    if (node.children && node.children.length > 0) {
-      const childName = findFolderNameById(node.children, id)
-      if (childName) return childName
+    if (error === 'cancel' || error === 'close') {
+      return
     }
+  } finally {
+    settingsFolderPickerCreating.value = false
   }
-  return ''
 }
 
-const handleDefaultFolderChange = (value) => {
-  const folderId = value ? String(value) : '0'
-  defaultFolderForm.value.folderId = folderId
-  defaultFolderForm.value.folderName = findFolderNameById(folderTree.value, folderId)
-}
-
-const handleOfflineDefaultFolderChange = (value) => {
-  const folderId = value ? String(value) : '0'
-  offlineDefaultFolderForm.value.folderId = folderId
-  offlineDefaultFolderForm.value.folderName = findFolderNameById(folderTree.value, folderId)
-}
-
-const handleOpenOfflineFolderDialog = async () => {
-  await fetchOfflineDefaultFolder()
-  offlineFolderDialogVisible.value = true
+const confirmSettingsFolderPicker = () => {
+  const targetForm = getSettingsFolderForm()
+  targetForm.folderId = settingsFolderPickerCurrentCid.value
+  targetForm.folderName = getSettingsFolderPickerCurrentName()
+  settingsFolderPickerVisible.value = false
+  ElMessage.success('目录已选择，点击保存设置生效')
 }
 
 // 获取默认转存文件夹设置
@@ -4234,7 +4340,6 @@ const handleSaveOfflineDefaultFolder = async () => {
     const folderId = offlineDefaultFolderForm.value.folderId || '0'
     const folderName = offlineDefaultFolderForm.value.folderName || (folderId === '0' ? '根目录' : '')
     await pan115Api.setOfflineDefaultFolder(folderId, folderName)
-    offlineFolderDialogVisible.value = false
     ElMessage.success('默认离线目录设置成功')
   } catch (error) {
     ElMessage.error('设置失败')
@@ -4476,12 +4581,14 @@ onBeforeUnmount(() => {
       .folder-selector {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 10px;
+      }
 
-        .default-folder-select {
-          flex: 1 1 520px;
-          min-width: 460px;
-        }
+      .folder-tag-row {
+        display: flex;
+        align-items: center;
+        min-width: 0;
       }
 
       .folder-tips {
@@ -4503,6 +4610,19 @@ onBeforeUnmount(() => {
         margin-top: 10px;
       }
 
+      .folder-selector {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .folder-tag-row {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+      }
+
       .folder-tips {
         margin-top: 8px;
       }
@@ -4510,6 +4630,21 @@ onBeforeUnmount(() => {
       .current-folder {
         margin-top: 4px;
       }
+    }
+
+    .folder-picker-breadcrumb {
+      margin-bottom: 12px;
+    }
+
+    .folder-picker-toolbar {
+      margin-bottom: 12px;
+    }
+
+    .folder-picker-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
     }
 
     .about-info {
@@ -4680,11 +4815,19 @@ onBeforeUnmount(() => {
         .folder-selector {
           flex-direction: column;
           align-items: stretch;
-
-          .default-folder-select {
-            min-width: 100%;
-          }
         }
+      }
+
+      .offline-folder-section {
+        .folder-selector {
+          flex-direction: column;
+          align-items: stretch;
+        }
+      }
+
+      .folder-picker-footer {
+        flex-direction: column;
+        align-items: flex-start;
       }
 
       :deep(.el-form-item) {
