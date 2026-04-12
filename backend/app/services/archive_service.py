@@ -174,154 +174,139 @@ class ArchiveService:
                 raise ValueError("请先配置归档输出目录（115 文件夹 ID）")
 
             pan115 = self._get_pan115()
-            source_items = await self._list_video_files(pan115, watch_cid)
             folder_cache: dict[tuple[str, ...], str] = {}
+            log_source_type = (
+                "background_task" if trigger != "scheduler" else "scheduler"
+            )
 
             await operation_log_service.log_background_event(
-                source_type="background_task"
-                if trigger != "scheduler"
-                else "scheduler",
+                source_type=log_source_type,
                 module="archive",
                 action="archive.scan.start",
                 status="info",
-                message=f"归档扫描开始：触发方式={trigger}，待处理文件数={len(source_items)}",
+                message=f"归档扫描开始：触发方式={trigger}，正在扫描监听目录",
                 extra={
                     "trigger": trigger,
                     "watch_cid": watch_cid,
-                    "file_count": len(source_items),
+                    "output_cid": output_cid,
                 },
             )
+            try:
+                source_items = await self._list_video_files(pan115, watch_cid)
+                summary = {
+                    "success": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                    "total": len(source_items),
+                    "items": [],
+                }
+                for item in source_items:
+                    result = await self._process_one(
+                        pan115,
+                        item,
+                        output_cid,
+                        trigger=trigger,
+                        folder_cache=folder_cache,
+                    )
+                    summary["items"].append(result)
+                    s = str(result.get("status") or "")
+                    if s == ArchiveStatus.SUCCESS.value:
+                        summary["success"] += 1
+                    elif s == ArchiveStatus.SKIPPED.value:
+                        summary["skipped"] += 1
+                    else:
+                        summary["failed"] += 1
 
-            summary = {
-                "success": 0,
-                "failed": 0,
-                "skipped": 0,
-                "total": len(source_items),
-                "items": [],
-            }
-            for item in source_items:
-                result = await self._process_one(
-                    pan115,
-                    item,
-                    output_cid,
-                    trigger=trigger,
-                    folder_cache=folder_cache,
+                finish_status = "success" if summary["failed"] == 0 else "warning"
+                await operation_log_service.log_background_event(
+                    source_type=log_source_type,
+                    module="archive",
+                    action="archive.scan.finish",
+                    status=finish_status,
+                    message=(
+                        f"归档扫描完成：总计 {summary['total']} 个，"
+                        f"成功 {summary['success']} 个，"
+                        f"跳过 {summary['skipped']} 个，"
+                        f"失败 {summary['failed']} 个"
+                    ),
+                    extra={"trigger": trigger, **summary},
                 )
-                summary["items"].append(result)
-                s = str(result.get("status") or "")
-                if s == ArchiveStatus.SUCCESS.value:
-                    summary["success"] += 1
-                elif s == ArchiveStatus.SKIPPED.value:
-                    summary["skipped"] += 1
-                else:
-                    summary["failed"] += 1
-
-            finish_status = "success" if summary["failed"] == 0 else "warning"
-            await operation_log_service.log_background_event(
-                source_type="background_task"
-                if trigger != "scheduler"
-                else "scheduler",
-                module="archive",
-                action="archive.scan.finish",
-                status=finish_status,
-                message=(
-                    f"归档扫描完成：总计 {summary['total']} 个，"
-                    f"成功 {summary['success']} 个，"
-                    f"跳过 {summary['skipped']} 个，"
-                    f"失败 {summary['failed']} 个"
-                ),
-                extra={"trigger": trigger, **summary},
-            )
-            return summary
+                return summary
+            except Exception as exc:
+                error_message = str(exc or "未知错误")[:2000]
+                await operation_log_service.log_background_event(
+                    source_type=log_source_type,
+                    module="archive",
+                    action="archive.scan.finish",
+                    status="failed",
+                    message=f"归档扫描失败：{error_message}",
+                    extra={
+                        "trigger": trigger,
+                        "watch_cid": watch_cid,
+                        "output_cid": output_cid,
+                        "error": error_message,
+                    },
+                )
+                raise
 
     async def _list_video_files(
         self, pan115: Pan115Service, cid: str
     ) -> list[dict[str, Any]]:
-        """并发 BFS 列出监听目录及其子目录中的视频文件（两阶段扫描第一阶段）"""
+        """递归 BFS 列出监听目录及其子目录中的视频文件"""
         items: list[dict[str, Any]] = []
+        pending_dirs: list[tuple[str, str]] = [(str(cid or "0").strip() or "0", "")]
         seen_dirs: set[str] = set()
-        dir_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
-        items_lock = asyncio.Lock()
-        seen_lock = asyncio.Lock()
+        limit = 1000
 
-        await dir_queue.put((str(cid or "0").strip() or "0", ""))
+        while pending_dirs:
+            current_cid, current_path = pending_dirs.pop(0)
+            if current_cid in seen_dirs:
+                continue
+            seen_dirs.add(current_cid)
 
-        async def _worker() -> None:
+            offset = 0
             while True:
-                try:
-                    current_cid, current_path = dir_queue.get_nowait()
-                except asyncio.QueueEmpty:
+                result = await pan115.get_file_list(
+                    cid=current_cid, offset=offset, limit=limit
+                )
+                batch = result.get("data") or []
+                if not batch:
                     break
 
-                async with seen_lock:
-                    if current_cid in seen_dirs:
+                for it in batch:
+                    if not isinstance(it, dict):
                         continue
-                    seen_dirs.add(current_cid)
 
-                offset = 0
-                limit = 1000
-                while True:
-                    try:
-                        result = await pan115.get_file_list(
-                            cid=current_cid, offset=offset, limit=limit
-                        )
-                    except Exception:
-                        logger.exception("列出目录 %s 失败", current_cid)
-                        break
+                    name = str(it.get("n") or it.get("name") or "").strip()
+                    if not name:
+                        continue
 
-                    batch = result.get("data") or []
-                    if not batch:
-                        break
+                    if pan115._is_folder_item(it):
+                        folder_cid = str(pan115._extract_folder_id(it) or "").strip()
+                        if folder_cid:
+                            next_path = (
+                                f"{current_path}/{name}" if current_path else name
+                            )
+                            pending_dirs.append((folder_cid, next_path))
+                        continue
 
-                    local_dirs: list[tuple[str, str]] = []
-                    local_items: list[dict[str, Any]] = []
+                    fid = str(it.get("fid") or "").strip()
+                    if not fid or not self._is_video(name):
+                        continue
 
-                    for it in batch:
-                        if not isinstance(it, dict):
-                            continue
-                        name = str(it.get("n") or it.get("name") or "").strip()
-                        if not name:
-                            continue
-                        if pan115._is_folder_item(it):
-                            folder_cid = str(
-                                pan115._extract_folder_id(it) or ""
-                            ).strip()
-                            if folder_cid:
-                                next_path = (
-                                    f"{current_path}/{name}" if current_path else name
-                                )
-                                local_dirs.append((folder_cid, next_path))
-                            continue
+                    relative_path = f"{current_path}/{name}" if current_path else name
+                    items.append(
+                        {
+                            "fid": fid,
+                            "name": name,
+                            "cid": current_cid,
+                            "relative_path": relative_path,
+                        }
+                    )
 
-                        fid = str(it.get("fid") or "").strip()
-                        if not fid or not self._is_video(name):
-                            continue
-
-                        relative_path = (
-                            f"{current_path}/{name}" if current_path else name
-                        )
-                        local_items.append(
-                            {
-                                "fid": fid,
-                                "name": name,
-                                "cid": current_cid,
-                                "relative_path": relative_path,
-                            }
-                        )
-
-                    for d in local_dirs:
-                        await dir_queue.put(d)
-                    async with items_lock:
-                        items.extend(local_items)
-
-                    if len(batch) < limit:
-                        break
-                    offset += limit
-
-        # 启动多个 worker 并发扫描；worker 数与全局队列 worker 数保持一致
-        worker_count = 3
-        workers = [asyncio.create_task(_worker()) for _ in range(worker_count)]
-        await asyncio.gather(*workers, return_exceptions=True)
+                if len(batch) < limit:
+                    break
+                offset += limit
 
         items.sort(
             key=lambda x: str(x.get("relative_path") or x.get("name") or "").lower()
