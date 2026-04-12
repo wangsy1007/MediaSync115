@@ -2,6 +2,7 @@
 115网盘服务模块 - 基于p115client实现
 提供115网盘的文件管理、离线下载、分享链接转存等功能
 """
+
 import asyncio
 import random
 import re
@@ -28,7 +29,9 @@ def _load_p115client() -> None:
         from p115client.util import share_extract_payload as p115_share_extract_payload
     except Exception as exc:  # pragma: no cover - runtime fallback
         _P115CLIENT_IMPORT_ERROR = str(exc)
-        raise RuntimeError(f"p115client 未安装或加载失败: {_P115CLIENT_IMPORT_ERROR}") from exc
+        raise RuntimeError(
+            f"p115client 未安装或加载失败: {_P115CLIENT_IMPORT_ERROR}"
+        ) from exc
 
     P115Client = p115_client_cls
     globals()["check_response"] = p115_check_response
@@ -80,17 +83,17 @@ class Pan115Service:
         "os_mac",
         "os_linux",
     }
-    
+
     def __init__(self, cookie: Optional[str] = None):
         """
         初始化115网盘客户端
-        
+
         Args:
             cookie: 115网盘cookie字符串，如未提供则使用配置文件中的cookie
         """
         self.cookie = cookie or settings.PAN115_COOKIE or ""
         self._client: Optional[Any] = None
-    
+
     @property
     def client(self) -> Any:
         """获取或创建p115client实例"""
@@ -99,39 +102,39 @@ class Pan115Service:
                 raise ValueError("115网盘Cookie未配置，请在设置中更新Cookie")
             self._client = _get_p115_client_cls()(self.cookie)
         return self._client
-    
+
     async def _async_call(self, method_name: str, *args, **kwargs) -> Dict[str, Any]:
         """
         异步调用p115client方法
-        
+
         Args:
             method_name: 方法名称
             *args: 位置参数
             **kwargs: 关键字参数
-            
+
         Returns:
             API响应字典
         """
         method = getattr(self.client, method_name)
         result = await method(*args, async_=True, **kwargs)
         return result
-    
+
     # ==================== 用户信息 ====================
-    
+
     async def get_user_info(self) -> Dict[str, Any]:
         """
         获取用户信息
-        
+
         Returns:
             用户信息字典，包含用户名、空间使用情况等
         """
         result = await self._async_call("user_info")
         return check_response(result)
-    
+
     async def get_user_space_info(self) -> Dict[str, Any]:
         """
         获取用户空间使用情况
-        
+
         Returns:
             空间使用信息字典
         """
@@ -158,23 +161,37 @@ class Pan115Service:
 
         total_quota = (
             self._pick_first_int(nested, "count", "quota", "total", "package_count")
-            if nested else None
+            if nested
+            else None
         )
         if total_quota is None:
-            total_quota = self._pick_first_int(data, "count", "quota", "total", "package_count")
+            total_quota = self._pick_first_int(
+                data, "count", "quota", "total", "package_count"
+            )
 
-        used_quota = self._pick_first_int(nested, "used", "use", "used_count") if nested else None
+        used_quota = (
+            self._pick_first_int(nested, "used", "use", "used_count")
+            if nested
+            else None
+        )
         if used_quota is None:
             used_quota = self._pick_first_int(data, "used", "use", "used_count")
 
         remaining_quota = (
             self._pick_first_int(nested, "remaining", "remain", "left", "surplus")
-            if nested else None
+            if nested
+            else None
         )
         if remaining_quota is None:
-            remaining_quota = self._pick_first_int(data, "remaining", "remain", "left", "surplus")
+            remaining_quota = self._pick_first_int(
+                data, "remaining", "remain", "left", "surplus"
+            )
 
-        if remaining_quota is None and total_quota is not None and used_quota is not None:
+        if (
+            remaining_quota is None
+            and total_quota is not None
+            and used_quota is not None
+        ):
             remaining_quota = max(total_quota - used_quota, 0)
 
         return {
@@ -231,37 +248,31 @@ class Pan115Service:
                 "quota_info": None,
                 "message": message,
             }
-    
+
     # ==================== 文件操作 ====================
-    
+
     async def get_file_list(
-        self, 
-        cid: str = "0", 
-        offset: int = 0, 
+        self,
+        cid: str = "0",
+        offset: int = 0,
         limit: int = 50,
         asc: int = 1,
-        o: str = "user_ptime"
+        o: str = "user_ptime",
     ) -> Dict[str, Any]:
         """
         获取文件列表
-        
+
         Args:
             cid: 目录ID，根目录为"0"
             offset: 偏移量
             limit: 返回数量限制
             asc: 排序方式，1为升序，0为降序
             o: 排序字段
-            
+
         Returns:
             文件列表信息
         """
-        payload = {
-            "cid": cid,
-            "offset": offset,
-            "limit": limit,
-            "asc": asc,
-            "o": o
-        }
+        payload = {"cid": cid, "offset": offset, "limit": limit, "asc": asc, "o": o}
         attempts = (
             ("fs_files", {"base_url": "https://webapi.115.com"}),
             ("fs_files", {}),
@@ -270,41 +281,53 @@ class Pan115Service:
 
         last_error: Exception | None = None
         for method_name, extra_kwargs in attempts:
-            try:
-                result = await self._async_call(method_name, payload, **extra_kwargs)
-                data = check_response(result)
-                return self._normalize_file_list_result(data)
-            except Exception as exc:
-                last_error = exc
-                # 凭证失效时不再回退，直接抛给上层进行鉴权提示
-                if self._is_auth_related_error(str(exc)):
-                    raise
-                continue
+            for retry in range(3):
+                try:
+                    result = await self._async_call(
+                        method_name, payload, **extra_kwargs
+                    )
+                    data = check_response(result)
+                    return self._normalize_file_list_result(data)
+                except Exception as exc:
+                    last_error = exc
+                    error_text = str(exc)
+                    # 凭证失效时不再回退，直接抛给上层进行鉴权提示
+                    if self._is_auth_related_error(error_text):
+                        raise
+                    # 文件列表接口短时 405 通常属于风控，先做退避重试
+                    if self._is_method_not_allowed_error(error_text) and retry < 2:
+                        await asyncio.sleep(0.8 * (retry + 1))
+                        continue
+                    break
 
         raise last_error or Exception("获取文件列表失败")
-    
+
     async def create_folder(self, pid: str, name: str) -> Dict[str, Any]:
         """
         创建文件夹
-        
+
         Args:
             pid: 父目录ID
             name: 文件夹名称
-            
+
         Returns:
             创建结果（包含错误信息的原始响应，不抛出异常）
         """
         result = await self._async_call("fs_mkdir", {"pid": pid, "cname": name})
         # 返回原始结果，不抛出异常，让调用者自己处理错误
-        return result if isinstance(result, dict) else {"state": False, "error": "Invalid response"}
-    
+        return (
+            result
+            if isinstance(result, dict)
+            else {"state": False, "error": "Invalid response"}
+        )
+
     async def delete_file(self, fid: List[str]) -> Dict[str, Any]:
         """
         删除文件/文件夹
-        
+
         Args:
             fid: 文件ID列表
-            
+
         Returns:
             删除结果
         """
@@ -312,15 +335,15 @@ class Pan115Service:
             fid = [fid]
         result = await self._async_call("fs_delete", {"fid": ",".join(fid)})
         return check_response(result)
-    
+
     async def copy_file(self, fid: List[str], pid: str) -> Dict[str, Any]:
         """
         复制文件
-        
+
         Args:
             fid: 源文件ID列表
             pid: 目标目录ID
-            
+
         Returns:
             复制结果
         """
@@ -328,15 +351,15 @@ class Pan115Service:
             fid = [fid]
         result = await self._async_call("fs_copy", {"fid": ",".join(fid), "pid": pid})
         return check_response(result)
-    
+
     async def move_file(self, fid: List[str], pid: str) -> Dict[str, Any]:
         """
         移动文件
-        
+
         Args:
             fid: 源文件ID列表
             pid: 目标目录ID
-            
+
         Returns:
             移动结果
         """
@@ -344,46 +367,48 @@ class Pan115Service:
             fid = [fid]
         result = await self._async_call("fs_move", {"fid": ",".join(fid), "pid": pid})
         return check_response(result)
-    
+
     async def rename_file(self, fid: str, name: str) -> Dict[str, Any]:
         """
         重命名文件/文件夹
-        
+
         Args:
             fid: 文件ID
             name: 新名称
-            
+
         Returns:
             重命名结果
         """
         result = await self._async_call("fs_rename", {"fid": fid, "name": name})
         return check_response(result)
-    
+
     async def get_file_info(self, fid: str) -> Dict[str, Any]:
         """
         获取文件信息
-        
+
         Args:
             fid: 文件ID
-            
+
         Returns:
             文件详细信息
         """
         result = await self._async_call("fs_file", {"fid": fid})
         return check_response(result)
-    
+
     async def search_file(self, search_value: str, cid: str = "0") -> Dict[str, Any]:
         """
         搜索文件
-        
+
         Args:
             search_value: 搜索关键词
             cid: 搜索范围目录ID
-            
+
         Returns:
             搜索结果
         """
-        result = await self._async_call("fs_search", {"search_value": search_value, "cid": cid})
+        result = await self._async_call(
+            "fs_search", {"search_value": search_value, "cid": cid}
+        )
         data = check_response(result)
         # 确保返回字典格式
         if isinstance(data, list):
@@ -391,30 +416,30 @@ class Pan115Service:
         elif isinstance(data, dict):
             return data
         return {"list": []}
-    
+
     async def get_download_url(self, pick_code: str) -> Dict[str, Any]:
         """
         获取下载链接
-        
+
         Args:
             pick_code: 文件提取码
-            
+
         Returns:
             下载链接信息
         """
         result = await self._async_call("download_url", {"pickcode": pick_code})
         return check_response(result)
-    
+
     # ==================== 离线下载 ====================
-    
+
     async def offline_task_add(self, url: str, wp_path_id: str = "") -> Dict[str, Any]:
         """
         添加离线下载任务
-        
+
         Args:
             url: 下载链接（支持磁力、ed2k、http等）
             wp_path_id: 保存目录ID
-            
+
         Returns:
             任务添加结果
         """
@@ -423,14 +448,14 @@ class Pan115Service:
             payload["wp_path_id"] = wp_path_id
         result = await self._async_call("offline_add_url", payload)
         return check_response(result)
-    
+
     async def offline_task_list(self, page: int = 1) -> Dict[str, Any]:
         """
         获取离线任务列表
-        
+
         Args:
             page: 页码
-            
+
         Returns:
             任务列表
         """
@@ -480,14 +505,14 @@ class Pan115Service:
             response["tasks"] = normalized_tasks
             return response
         return {"tasks": normalized_tasks, "state": True}
-    
+
     async def offline_task_delete(self, hash_list: List[str]) -> Dict[str, Any]:
         """
         删除离线任务
-        
+
         Args:
             hash_list: 任务hash列表
-            
+
         Returns:
             删除结果
         """
@@ -508,26 +533,26 @@ class Pan115Service:
         """
         result = await self._async_call("offline_restart", info_hash)
         return check_response(result)
-    
+
     async def offline_task_clear(self, flag: int = 0) -> Dict[str, Any]:
         """
         清空已完成/失败的离线任务
-        
+
         Returns:
             清空结果
         """
         result = await self._async_call("offline_clear", {"flag": int(flag)})
         return check_response(result)
-    
+
     # ==================== 分享链接操作 ====================
-    
+
     async def parse_share_link(self, share_url: str) -> Dict[str, Any]:
         """
         解析分享链接，获取分享信息
-        
+
         Args:
             share_url: 分享链接（格式：https://115.com/s/xxxxx 或直接分享码）
-            
+
         Returns:
             分享信息，包含分享码、文件列表等
         """
@@ -535,29 +560,29 @@ class Pan115Service:
         share_code = self._extract_share_code(share_url)
         if not share_code:
             raise ValueError("无效的分享链接格式")
-        
+
         # 获取分享信息
         result = await self._async_call("share_info", {"share_code": share_code})
         return check_response(result)
-    
+
     async def get_share_file_list(
-        self, 
-        share_code: str, 
+        self,
+        share_code: str,
         receive_code: str = "",
         cid: str = "0",
         offset: int = 0,
-        limit: int = 50
+        limit: int = 50,
     ) -> Dict[str, Any]:
         """
         获取分享链接中的文件列表
-        
+
         Args:
             share_code: 分享码
             receive_code: 提取码（如果有）
             cid: 目录ID
             offset: 偏移量
             limit: 返回数量
-            
+
         Returns:
             文件列表
         """
@@ -566,13 +591,21 @@ class Pan115Service:
             "receive_code": receive_code,
             "cid": cid,
             "offset": offset,
-            "limit": limit
+            "limit": limit,
         }
         attempts = (
-            ("share_snap", {"base_url": "https://webapi.115.com"}, "webapi.115.com/share/snap"),
+            (
+                "share_snap",
+                {"base_url": "https://webapi.115.com"},
+                "webapi.115.com/share/snap",
+            ),
             ("share_snap", {}, "default/share_snap"),
             # proapi 的正确端点是 /{app}/2.0/share/snap，需调用 share_snap_app
-            ("share_snap_app", {"app": "android", "base_url": "https://proapi.115.com"}, "proapi.115.com/android/2.0/share/snap"),
+            (
+                "share_snap_app",
+                {"app": "android", "base_url": "https://proapi.115.com"},
+                "proapi.115.com/android/2.0/share/snap",
+            ),
         )
 
         max_retries_per_attempt = 3
@@ -582,7 +615,9 @@ class Pan115Service:
         for method_name, extra_kwargs, endpoint in attempts:
             for retry in range(max_retries_per_attempt):
                 try:
-                    result = await self._async_call(method_name, payload, **extra_kwargs)
+                    result = await self._async_call(
+                        method_name, payload, **extra_kwargs
+                    )
                     data = check_response(result)
                     break
                 except Exception as exc:
@@ -622,22 +657,22 @@ class Pan115Service:
                 return {"list": data["data"].get("list", [])}
             return data
         return {"list": []}
-    
+
     async def get_share_all_files_recursive(
         self,
         share_code: str,
         receive_code: str = "",
         cid: str = "0",
-        visited_cids: Optional[Set[str]] = None
+        visited_cids: Optional[Set[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         递归获取分享链接中的所有文件（包括子文件夹中的文件）
-        
+
         Args:
             share_code: 分享码
             receive_code: 提取码（如果有）
             cid: 目录ID
-            
+
         Returns:
             所有文件的列表，每个文件包含 fid 和 path（相对路径）
         """
@@ -652,14 +687,16 @@ class Pan115Service:
 
         offset = 0
         limit = 100
-        
+
         while True:
-            result = await self.get_share_file_list(share_code, receive_code, cid, offset, limit)
+            result = await self.get_share_file_list(
+                share_code, receive_code, cid, offset, limit
+            )
             file_list = result.get("list", []) if isinstance(result, dict) else result
-            
+
             if not file_list:
                 break
-            
+
             for item in file_list:
                 if not isinstance(item, dict):
                     continue
@@ -667,11 +704,13 @@ class Pan115Service:
                 # web share_snap 返回中，目录通常没有 fid，文件包含 fid
                 fid = item.get("fid")
                 if fid:
-                    all_files.append({
-                        "fid": str(fid),
-                        "name": item.get("n", ""),
-                        "size": item.get("s", 0)
-                    })
+                    all_files.append(
+                        {
+                            "fid": str(fid),
+                            "name": item.get("n", ""),
+                            "size": item.get("s", 0),
+                        }
+                    )
                     continue
 
                 # 没有 fid 时按目录处理，递归抓取子目录文件
@@ -680,37 +719,30 @@ class Pan115Service:
                     continue
 
                 sub_files = await self.get_share_all_files_recursive(
-                    share_code,
-                    receive_code,
-                    str(sub_folder_cid),
-                    visited_cids
+                    share_code, receive_code, str(sub_folder_cid), visited_cids
                 )
                 all_files.extend(sub_files)
-            
+
             # 如果获取的文件数量小于 limit，说明已经获取完毕
             if len(file_list) < limit:
                 break
-            
+
             offset += limit
-        
+
         return all_files
-    
+
     async def save_share_file(
-        self,
-        share_code: str,
-        file_id: str,
-        pid: str = "0",
-        receive_code: str = ""
+        self, share_code: str, file_id: str, pid: str = "0", receive_code: str = ""
     ) -> Dict[str, Any]:
         """
         转存分享文件到网盘
-        
+
         Args:
             share_code: 分享码
             file_id: 要转存的文件ID
             pid: 保存到的目标目录ID
             receive_code: 提取码（如果有）
-            
+
         Returns:
             转存结果
         """
@@ -718,43 +750,43 @@ class Pan115Service:
             "share_code": share_code,
             "file_id": file_id,
             "cid": pid,
-            "receive_code": receive_code
+            "receive_code": receive_code,
         }
         result = await self._async_call("share_receive", payload)
         return check_response(result)
-    
+
     async def save_share_files(
         self,
         share_code: str,
         file_ids: List[str],
         pid: str = "0",
-        receive_code: str = ""
+        receive_code: str = "",
     ) -> Dict[str, Any]:
         """
         批量转存分享文件到网盘
-        
+
         Args:
             share_code: 分享码
             file_ids: 要转存的文件ID列表
             pid: 保存到的目标目录ID
             receive_code: 提取码（如果有）
-            
+
         Returns:
             转存结果
         """
         if isinstance(file_ids, str):
             file_ids = [file_ids]
-        
+
         # 过滤掉空的 file_id
         file_ids = [fid for fid in file_ids if fid]
         if not file_ids:
             return {"state": False, "error": "没有有效的文件ID"}
-        
+
         payload = {
             "share_code": share_code,
             "file_id": ",".join(file_ids),
             "cid": pid,
-            "receive_code": receive_code
+            "receive_code": receive_code,
         }
         max_attempts = 5
         last_error_text = ""
@@ -765,7 +797,9 @@ class Pan115Service:
             except Exception as exc:
                 error_text = str(exc)
                 last_error_text = error_text
-                if attempt < max_attempts - 1 and self._is_retryable_save_error(error_text):
+                if attempt < max_attempts - 1 and self._is_retryable_save_error(
+                    error_text
+                ):
                     await asyncio.sleep(self._save_retry_delay(attempt))
                     continue
                 raise
@@ -784,7 +818,11 @@ class Pan115Service:
                     or str(data.get("msg") or "")
                 )
                 last_error_text = error_text
-                if not save_success and attempt < max_attempts - 1 and self._is_retryable_save_error(error_text):
+                if (
+                    not save_success
+                    and attempt < max_attempts - 1
+                    and self._is_retryable_save_error(error_text)
+                ):
                     await asyncio.sleep(self._save_retry_delay(attempt))
                     continue
 
@@ -797,27 +835,24 @@ class Pan115Service:
         if last_error_text:
             return {"state": False, "error": f"{retry_hint}: {last_error_text}"}
         return {"state": False, "error": retry_hint}
-    
+
     async def save_share_all(
-        self,
-        share_code: str,
-        pid: str = "0",
-        receive_code: str = ""
+        self, share_code: str, pid: str = "0", receive_code: str = ""
     ) -> Dict[str, Any]:
         """
         转存分享链接中的所有文件（仅当分享为单文件/文件夹时）
-        
+
         Args:
             share_code: 分享码
             pid: 保存到的目标目录ID
             receive_code: 提取码（如果有）
-            
+
         Returns:
             转存结果
         """
         # 先获取分享信息
         share_info = await self.get_share_file_list(share_code, receive_code)
-        
+
         # 处理不同的返回格式
         if isinstance(share_info, list):
             file_list = share_info
@@ -825,7 +860,7 @@ class Pan115Service:
             file_list = share_info.get("list", [])
         else:
             file_list = []
-        
+
         if file_list:
             file_ids = []
             for f in file_list:
@@ -834,9 +869,9 @@ class Pan115Service:
                     if fid:
                         file_ids.append(str(fid))
             return await self.save_share_files(share_code, file_ids, pid, receive_code)
-        
+
         return {"state": False, "error": "分享内容为空或无法获取"}
-    
+
     # ==================== Cookie管理 ====================
 
     async def start_qr_login(self, app: str = "alipaymini") -> Dict[str, Any]:
@@ -949,7 +984,9 @@ class Pan115Service:
                 "status": current_state,
                 "message": str(item.get("message") or ""),
                 "cookie": str(item.get("cookie") or ""),
-                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+                "expires_at": expires_at.isoformat()
+                if isinstance(expires_at, datetime)
+                else "",
             }
 
         try:
@@ -967,12 +1004,16 @@ class Pan115Service:
                 "pending": True,
                 "status": "pending",
                 "message": str(exc)[:300] or "等待扫码",
-                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+                "expires_at": expires_at.isoformat()
+                if isinstance(expires_at, datetime)
+                else "",
             }
 
         status_data = self._extract_qr_data(status_resp)
         status_code = self._safe_int(status_data.get("status"), default=None)
-        status_message = str(status_data.get("msg") or status_data.get("message") or "").strip()
+        status_message = str(
+            status_data.get("msg") or status_data.get("message") or ""
+        ).strip()
 
         if status_code == 0:
             message = status_message or "等待扫码"
@@ -982,7 +1023,9 @@ class Pan115Service:
                 "pending": True,
                 "status": "pending",
                 "message": message,
-                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+                "expires_at": expires_at.isoformat()
+                if isinstance(expires_at, datetime)
+                else "",
             }
 
         if status_code == 1:
@@ -993,7 +1036,9 @@ class Pan115Service:
                 "pending": True,
                 "status": "scanned",
                 "message": message,
-                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+                "expires_at": expires_at.isoformat()
+                if isinstance(expires_at, datetime)
+                else "",
             }
 
         if status_code == -2:
@@ -1004,7 +1049,9 @@ class Pan115Service:
                 "pending": False,
                 "status": "canceled",
                 "message": message,
-                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+                "expires_at": expires_at.isoformat()
+                if isinstance(expires_at, datetime)
+                else "",
             }
 
         if status_code == -1:
@@ -1015,7 +1062,9 @@ class Pan115Service:
                 "pending": False,
                 "status": "expired",
                 "message": message,
-                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+                "expires_at": expires_at.isoformat()
+                if isinstance(expires_at, datetime)
+                else "",
             }
 
         if status_code != 2:
@@ -1026,7 +1075,9 @@ class Pan115Service:
                 "pending": True,
                 "status": "pending",
                 "message": message,
-                "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+                "expires_at": expires_at.isoformat()
+                if isinstance(expires_at, datetime)
+                else "",
             }
 
         result_resp = await asyncio.wait_for(
@@ -1043,14 +1094,18 @@ class Pan115Service:
         if not cookie:
             raise RuntimeError("扫码成功但未获取到Cookie")
 
-        await self._update_qr_session(normalized, state="authorized", message="扫码登录成功", cookie=cookie)
+        await self._update_qr_session(
+            normalized, state="authorized", message="扫码登录成功", cookie=cookie
+        )
         return {
             "authorized": True,
             "pending": False,
             "status": "authorized",
             "message": "扫码登录成功",
             "cookie": cookie,
-            "expires_at": expires_at.isoformat() if isinstance(expires_at, datetime) else "",
+            "expires_at": expires_at.isoformat()
+            if isinstance(expires_at, datetime)
+            else "",
         }
 
     async def cancel_qr_login(self, token: str) -> Dict[str, Any]:
@@ -1104,29 +1159,31 @@ class Pan115Service:
         if isinstance(cookie_raw, str):
             return cookie_raw.strip().rstrip(";")
         if isinstance(cookie_raw, dict):
-            pairs = [f"{str(k)}={str(v)}" for k, v in cookie_raw.items() if str(k).strip()]
+            pairs = [
+                f"{str(k)}={str(v)}" for k, v in cookie_raw.items() if str(k).strip()
+            ]
             return "; ".join(pairs).strip().rstrip(";")
         return ""
-    
+
     async def check_cookie_valid(self) -> Dict[str, Any]:
         """
         检查Cookie是否有效
-        
+
         Returns:
             包含有效状态和用户信息的字典
         """
         try:
             user_info = await self.get_user_info()
             space_info = await self.get_user_space_info()
-            
+
             # 提取用户基本信息
             user_data = user_info.get("data", {})
-            
+
             # 提取空间信息
             space_data = space_info.get("data", {}).get("space_info", {})
             all_total = space_data.get("all_total", {})
             all_use = space_data.get("all_use", {})
-            
+
             # 合并用户信息和空间信息
             combined_info = {
                 "user_id": user_data.get("user_id"),
@@ -1138,66 +1195,62 @@ class Pan115Service:
                 "space_used": all_use.get("size"),
                 "space_used_format": all_use.get("size_format"),
             }
-            
-            return {
-                "valid": True,
-                "user_info": combined_info,
-                "message": "Cookie有效"
-            }
+
+            return {"valid": True, "user_info": combined_info, "message": "Cookie有效"}
         except Exception as e:
-            return {
-                "valid": False,
-                "user_info": None,
-                "message": str(e)
-            }
-    
+            return {"valid": False, "user_info": None, "message": str(e)}
+
     def update_cookie(self, cookie: str) -> None:
         """
         更新Cookie
-        
+
         Args:
             cookie: 新的cookie字符串
         """
         self.cookie = cookie
         self._client = None  # 重置客户端实例
-    
+
     def get_cookie(self) -> str:
         """
         获取当前Cookie
-        
+
         Returns:
             当前cookie字符串
         """
         return self.cookie
-    
+
     @staticmethod
     def _extract_share_code(share_url: str) -> Optional[str]:
         """
         从URL或字符串中提取分享码
-        
+
         Args:
             share_url: 分享链接或分享码
-            
+
         Returns:
             分享码，如果无法提取则返回None
         """
         # 尝试匹配常见分享链接（115.com / 115cdn.com / share.115.com）
-        match = re.search(r'(?:115(?:cdn)?\.com/s/|share\.115\.com/)([a-zA-Z0-9]+)', share_url)
+        match = re.search(
+            r"(?:115(?:cdn)?\.com/s/|share\.115\.com/)([a-zA-Z0-9]+)", share_url
+        )
         if match:
             return match.group(1)
 
         # 尝试匹配 share_code-receive_code 格式
-        short_match = re.match(r'^([a-zA-Z0-9]+)-[a-zA-Z0-9]{4}$', share_url.strip())
+        short_match = re.match(r"^([a-zA-Z0-9]+)-[a-zA-Z0-9]{4}$", share_url.strip())
         if short_match:
             return short_match.group(1)
-        
+
         # 尝试匹配纯分享码（通常是字母数字组合）
-        if re.match(r'^[a-zA-Z0-9]+$', share_url.strip()):
+        if re.match(r"^[a-zA-Z0-9]+$", share_url.strip()):
             return share_url.strip()
-        
+
         return None
 
-    def _resolve_share_payload(self, share_url: str, receive_code: str = "") -> tuple[str, str]:
+    def _resolve_share_payload(
+        self, share_url: str, receive_code: str = ""
+    ) -> tuple[str, str]:
         """Normalize share url into share_code and receive_code."""
         normalized_url = str(share_url or "").strip()
         try:
@@ -1216,11 +1269,15 @@ class Pan115Service:
         if not resolved_receive_code:
             resolved_receive_code = str(share_payload.get("receive_code") or "").strip()
         if not resolved_receive_code:
-            short_receive_match = re.match(r"^[A-Za-z0-9]+-([A-Za-z0-9]{4})$", normalized_url)
+            short_receive_match = re.match(
+                r"^[A-Za-z0-9]+-([A-Za-z0-9]{4})$", normalized_url
+            )
             if short_receive_match:
                 resolved_receive_code = short_receive_match.group(1)
         if not resolved_receive_code:
-            password_match = re.search(r"(?:password|pwd)=([^&#]+)", normalized_url, re.IGNORECASE)
+            password_match = re.search(
+                r"(?:password|pwd)=([^&#]+)", normalized_url, re.IGNORECASE
+            )
             resolved_receive_code = password_match.group(1) if password_match else ""
         if not resolved_receive_code:
             text_receive_match = re.search(
@@ -1228,7 +1285,9 @@ class Pan115Service:
                 normalized_url,
                 re.IGNORECASE,
             )
-            resolved_receive_code = text_receive_match.group(1) if text_receive_match else ""
+            resolved_receive_code = (
+                text_receive_match.group(1) if text_receive_match else ""
+            )
 
         return share_code, resolved_receive_code
 
@@ -1238,16 +1297,16 @@ class Pan115Service:
             return int(value)
         except Exception:
             return default
-    
+
     # ==================== 高级功能 ====================
-    
+
     def _is_folder_item(self, item: dict) -> bool:
         """
         判断文件项是否为文件夹
-        
+
         Args:
             item: 文件信息字典
-            
+
         Returns:
             是否为文件夹
         """
@@ -1255,7 +1314,7 @@ class Pan115Service:
         ico = item.get("ico", "")
         if ico == "folder":
             return True
-        
+
         # 方法2：检查 pc 字段（父目录标识）
         pc = item.get("pc")
         if pc is not None:
@@ -1265,35 +1324,35 @@ class Pan115Service:
             # pc 是数字时，1 表示文件夹
             if isinstance(pc, int):
                 return pc == 1
-        
+
         # 方法3：检查是否没有文件大小（文件夹通常 size 为 0 或无此字段）
         # 同时检查是否有 fid（文件有 fid，文件夹可能没有）
         has_size = item.get("s") is not None and item.get("s", 0) > 0
         has_fid = bool(item.get("fid"))
-        
+
         # 如果有大小或者有 fid，可能是文件
         if has_size:
             return False
-        
+
         return True
-    
+
     def _extract_folder_id(self, item: dict) -> str:
         """
         从文件项中提取文件夹ID
-        
+
         Args:
             item: 文件信息字典
-            
+
         Returns:
             文件夹ID
         """
         # 文件夹可能使用 fid, id, cid 等字段
         return (
-            item.get("fid") or 
-            item.get("id") or 
-            item.get("cid") or 
-            item.get("file_id") or 
-            ""
+            item.get("fid")
+            or item.get("id")
+            or item.get("cid")
+            or item.get("file_id")
+            or ""
         )
 
     async def _wait_for_folder_ready(
@@ -1403,24 +1462,24 @@ class Pan115Service:
     @staticmethod
     def _save_retry_delay(attempt: int) -> float:
         # 指数退避 + 少量随机抖动，降低持续触发风控概率。
-        base = min(0.8 * (2 ** attempt), 20.0)
+        base = min(0.8 * (2**attempt), 20.0)
         jitter = random.uniform(0.0, 0.4)
         return base + jitter
 
     async def get_or_create_folder(self, parent_id: str, folder_name: str) -> str:
         """
         获取或创建文件夹
-        
+
         Args:
             parent_id: 父目录ID
             folder_name: 文件夹名称
-            
+
         Returns:
             文件夹ID
         """
         # 先搜索是否存在同名文件夹
         search_result = await self.search_file(folder_name, parent_id)
-        
+
         # 处理不同的返回格式
         if isinstance(search_result, list):
             file_list = search_result
@@ -1430,10 +1489,12 @@ class Pan115Service:
             if isinstance(data, list):
                 file_list = data
             else:
-                file_list = search_result.get("list") or (data.get("list", []) if isinstance(data, dict) else [])
+                file_list = search_result.get("list") or (
+                    data.get("list", []) if isinstance(data, dict) else []
+                )
         else:
             file_list = []
-        
+
         # 查找同名文件夹
         for item in file_list:
             if isinstance(item, dict):
@@ -1442,26 +1503,32 @@ class Pan115Service:
                     folder_id = self._extract_folder_id(item)
                     if folder_id:
                         return folder_id
-        
+
         # 不存在则创建
         create_result = await self.create_folder(parent_id, folder_name)
-        
+
         # 处理创建结果
         if isinstance(create_result, dict):
             # 创建成功
             if create_result.get("state"):
                 data = create_result.get("data", {})
-                folder_id = data.get("fid") or data.get("file_id") or create_result.get("file_id", "")
+                folder_id = (
+                    data.get("fid")
+                    or data.get("file_id")
+                    or create_result.get("file_id", "")
+                )
                 if folder_id:
                     await self._wait_for_folder_ready(str(folder_id))
                     return folder_id
-            
+
             # 目录已存在（errno 20004 是警告，说明目录已存在）
-            if create_result.get("errno") == 20004 or "该目录名称已存在" in str(create_result.get("error", "")):
+            if create_result.get("errno") == 20004 or "该目录名称已存在" in str(
+                create_result.get("error", "")
+            ):
                 # 等待一小段时间后重新搜索
                 await asyncio.sleep(0.3)
                 retry_result = await self.search_file(folder_name, parent_id)
-                
+
                 # 提取文件列表
                 retry_list = []
                 if isinstance(retry_result, list):
@@ -1474,7 +1541,7 @@ class Pan115Service:
                         retry_list = data.get("list", [])
                     else:
                         retry_list = retry_result.get("list", [])
-                
+
                 # 再次查找同名文件夹
                 for item in retry_list:
                     if isinstance(item, dict):
@@ -1483,14 +1550,16 @@ class Pan115Service:
                             folder_id = self._extract_folder_id(item)
                             if folder_id:
                                 return folder_id
-                
+
                 # 如果还是找不到，尝试直接获取文件列表查找
                 try:
-                    file_list_result = await self.get_file_list(cid=parent_id, limit=100)
+                    file_list_result = await self.get_file_list(
+                        cid=parent_id, limit=100
+                    )
                     direct_list = []
                     if isinstance(file_list_result, dict):
                         direct_list = file_list_result.get("data", [])
-                    
+
                     for item in direct_list:
                         if isinstance(item, dict):
                             item_name = item.get("n", "")
@@ -1500,46 +1569,54 @@ class Pan115Service:
                                     return folder_id
                 except Exception:
                     pass
-        
+
         # 如果以上都失败，抛出异常
-        error_msg = create_result.get("error", "未知错误") if isinstance(create_result, dict) else "未知错误"
+        error_msg = (
+            create_result.get("error", "未知错误")
+            if isinstance(create_result, dict)
+            else "未知错误"
+        )
         raise Exception(f"创建文件夹失败: {error_msg}")
-    
+
     async def save_share_to_folder(
         self,
         share_url: str,
         folder_name: str,
         parent_id: str = "0",
-        receive_code: str = ""
+        receive_code: str = "",
     ) -> Dict[str, Any]:
         """
         将分享链接转存到指定文件夹中（递归转存所有文件）
-        
+
         Args:
             share_url: 分享链接
             folder_name: 目标文件夹名称
             parent_id: 父目录ID
             receive_code: 提取码
-            
+
         Returns:
             转存结果
         """
         share_code, receive_code = self._resolve_share_payload(share_url, receive_code)
-        
+
         # 获取或创建目标文件夹
         target_folder_id = await self.get_or_create_folder(parent_id, folder_name)
         if not str(target_folder_id or "").strip():
             raise ValueError("创建目标文件夹失败，未获取到目录ID")
-        
+
         # 递归获取分享中的所有文件（包括子文件夹中的文件）
         all_files = await self.get_share_all_files_recursive(share_code, receive_code)
-        
+
         if not all_files:
             raise ValueError("分享中没有可转存的文件")
-        
+
         # 批量转存所有文件（去重）
-        file_ids = list(dict.fromkeys([str(f["fid"]) for f in all_files if f.get("fid")]))
-        result = await self.save_share_files(share_code, file_ids, target_folder_id, receive_code)
+        file_ids = list(
+            dict.fromkeys([str(f["fid"]) for f in all_files if f.get("fid")])
+        )
+        result = await self.save_share_files(
+            share_code, file_ids, target_folder_id, receive_code
+        )
         transfer_success = True
         if isinstance(result, dict):
             if "success" in result:
@@ -1561,7 +1638,7 @@ class Pan115Service:
                     or str(result.get("msg") or "")
                 )
             raise ValueError(error_msg or "115转存失败，接口未返回成功状态")
-        
+
         # 返回结果包含文件数量
         return {
             "success": transfer_success,
@@ -1569,7 +1646,7 @@ class Pan115Service:
             "folder_id": target_folder_id,
             "folder_name": folder_name,
             "file_count": len(file_ids),
-            "result": result
+            "result": result,
         }
 
     async def save_share_directly(
@@ -1584,8 +1661,12 @@ class Pan115Service:
         if not all_files:
             raise ValueError("分享中没有可转存的文件")
 
-        file_ids = list(dict.fromkeys([str(f["fid"]) for f in all_files if f.get("fid")]))
-        result = await self.save_share_files(share_code, file_ids, str(parent_id or "0"), receive_code)
+        file_ids = list(
+            dict.fromkeys([str(f["fid"]) for f in all_files if f.get("fid")])
+        )
+        result = await self.save_share_files(
+            share_code, file_ids, str(parent_id or "0"), receive_code
+        )
         transfer_success = True
         if isinstance(result, dict):
             if "success" in result:
@@ -1617,25 +1698,24 @@ class Pan115Service:
             "result": result,
         }
 
-
     async def save_share_files_to_folder(
         self,
         share_url: str,
         file_ids: List[str],
         folder_name: str,
         parent_id: str = "0",
-        receive_code: str = ""
+        receive_code: str = "",
     ) -> Dict[str, Any]:
         """
         选集转存（部分转存）：将指定的 file_ids 转存到目标文件夹中
-        
+
         Args:
             share_url: 分享链接
             file_ids: 要转存的文件 fid 列表
             folder_name: 目标文件夹名称
             parent_id: 父目录ID
             receive_code: 提取码
-            
+
         Returns:
             转存结果
         """
@@ -1643,17 +1723,19 @@ class Pan115Service:
             raise ValueError("未选择任何要转存的文件")
 
         share_code, receive_code = self._resolve_share_payload(share_url, receive_code)
-        
+
         # 获取或创建目标文件夹
         target_folder_id = await self.get_or_create_folder(parent_id, folder_name)
         if not str(target_folder_id or "").strip():
             raise ValueError("创建目标文件夹失败，未获取到目录ID")
-        
+
         # 去重
         file_ids = list(dict.fromkeys(file_ids))
-        
+
         # 批量转存选中文件
-        result = await self.save_share_files(share_code, file_ids, target_folder_id, receive_code)
+        result = await self.save_share_files(
+            share_code, file_ids, target_folder_id, receive_code
+        )
         transfer_success = True
         if isinstance(result, dict):
             if "success" in result:
@@ -1675,14 +1757,14 @@ class Pan115Service:
                     or str(result.get("msg") or "")
                 )
             raise ValueError(error_msg or "115转存失败，接口未返回成功状态")
-        
+
         return {
             "success": transfer_success,
             "message": f"成功转存 {len(file_ids)} 个文件",
             "folder_id": target_folder_id,
             "folder_name": folder_name,
             "file_count": len(file_ids),
-            "result": result
+            "result": result,
         }
 
     async def save_share_files_directly(
@@ -1697,8 +1779,12 @@ class Pan115Service:
             raise ValueError("未选择任何要转存的文件")
 
         share_code, receive_code = self._resolve_share_payload(share_url, receive_code)
-        file_ids = list(dict.fromkeys([str(fid) for fid in file_ids if str(fid or "").strip()]))
-        result = await self.save_share_files(share_code, file_ids, str(parent_id or "0"), receive_code)
+        file_ids = list(
+            dict.fromkeys([str(fid) for fid in file_ids if str(fid or "").strip()])
+        )
+        result = await self.save_share_files(
+            share_code, file_ids, str(parent_id or "0"), receive_code
+        )
         transfer_success = True
         if isinstance(result, dict):
             if "success" in result:
