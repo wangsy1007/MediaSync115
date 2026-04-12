@@ -86,12 +86,23 @@ async def list_folders(cid: str = "0"):
             folder_id = pan115._extract_folder_id(it)
             if not folder_id:
                 continue
-            # 获取文件夹名称（115 API 通常用 "n" 字段）
-            name = it.get("n") or it.get("name") or folder_id[:8]
+            # 获取文件夹名称（115 API 字段在不同接口返回格式下并不完全一致）
+            raw_name = (
+                it.get("n")
+                or it.get("name")
+                or it.get("fn")
+                or it.get("folder_name")
+                or it.get("file_name")
+            )
+            name = str(raw_name or "").strip() or str(folder_id)
             folders.append(
                 {
                     "cid": folder_id,
                     "name": name,
+                    "n": it.get("n"),
+                    "fn": it.get("fn"),
+                    "folder_name": it.get("folder_name"),
+                    "file_name": it.get("file_name"),
                 }
             )
         folders.sort(key=lambda x: x["name"].lower())
