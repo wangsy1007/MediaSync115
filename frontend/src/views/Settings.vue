@@ -188,14 +188,6 @@
                     保存设置
                   </el-button>
                 </div>
-                <div class="current-folder">
-                  <el-text size="small">当前默认转存位置：{{ currentDefaultFolderText }}</el-text>
-                </div>
-                <div class="folder-tips">
-                  <el-text size="small" type="info">
-                    设置后，转存资源时将默认保存到此目录
-                  </el-text>
-                </div>
               </el-form-item>
             </el-form>
           </div>
@@ -205,10 +197,7 @@
             <h4>离线下载设置</h4>
             <el-form label-width="120px">
               <el-form-item label="默认离线目录">
-                <div class="current-folder">
-                  <el-text>{{ currentOfflineDefaultFolderText }}</el-text>
-                </div>
-                <div class="folder-selector" style="margin-top: 10px">
+                <div class="folder-selector">
                   <div class="folder-tag-row">
                     <el-tag v-if="offlineDefaultFolderForm.folderId" type="info">
                       {{ offlineDefaultFolderForm.folderName || offlineDefaultFolderForm.folderId }}
@@ -221,11 +210,6 @@
                   <el-button type="primary" :loading="savingOfflineFolder" @click="handleSaveOfflineDefaultFolder">
                     保存设置
                   </el-button>
-                </div>
-                <div class="folder-tips">
-                  <el-text size="small" type="info">
-                    添加离线任务时会默认使用此目录
-                  </el-text>
                 </div>
               </el-form-item>
             </el-form>
@@ -2261,23 +2245,9 @@ const settingsFolderPickerCreating = ref(false)
 const settingsFolderPickerCurrentCid = ref('0')
 const settingsFolderPickerHistory = ref([])
 
-const currentDefaultFolderText = computed(() => {
-  const folderId = defaultFolderForm.value.folderId || '0'
-  const folderName = defaultFolderForm.value.folderName || ''
-  if (folderId === '0') return '根目录'
-  return folderName ? `${folderName} (ID: ${folderId})` : `ID: ${folderId}`
-})
-
 const offlineDefaultFolderForm = ref({
   folderId: '0',
   folderName: '根目录'
-})
-
-const currentOfflineDefaultFolderText = computed(() => {
-  const folderId = offlineDefaultFolderForm.value.folderId || '0'
-  const folderName = offlineDefaultFolderForm.value.folderName || ''
-  if (folderId === '0') return '根目录'
-  return folderName ? `${folderName} (ID: ${folderId})` : `ID: ${folderId}`
 })
 
 const settingsFolderPickerTitle = computed(() => settingsFolderPickerTarget.value === 'offline' ? '选择默认离线目录' : '选择默认保存位置')
@@ -4591,13 +4561,6 @@ onBeforeUnmount(() => {
         min-width: 0;
       }
 
-      .folder-tips {
-        margin-top: 8px;
-      }
-
-      .current-folder {
-        margin-top: 8px;
-      }
     }
 
     .offline-folder-section {
@@ -4623,13 +4586,6 @@ onBeforeUnmount(() => {
         min-width: 0;
       }
 
-      .folder-tips {
-        margin-top: 8px;
-      }
-
-      .current-folder {
-        margin-top: 4px;
-      }
     }
 
     .folder-picker-breadcrumb {
@@ -4637,6 +4593,9 @@ onBeforeUnmount(() => {
     }
 
     .folder-picker-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
       margin-bottom: 12px;
     }
 
