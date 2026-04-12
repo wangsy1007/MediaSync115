@@ -53,6 +53,172 @@ def _get_p115_client_cls() -> Any:
     return P115Client
 
 
+# ==================== 全局请求队列 + 三层限速 + 熔断器 ====================
+
+from collections import deque
+from dataclasses import dataclass
+import time
+
+
+@dataclass
+class _QueueRequest:
+    """队列请求包装器"""
+
+    coro_factory: Any
+    future: asyncio.Future[Any]
+    bypass_rate_limit: bool = False
+
+
+class _Pan115ThrottleManager:
+    """全局熔断管理器：一旦检测到 405 / 限流，进入冷却期"""
+
+    def __init__(self, cooldown_seconds: float = 60.0):
+        self._cooldown_seconds = cooldown_seconds
+        self._throttled_until: float = 0.0
+        self._lock = asyncio.Lock()
+
+    async def mark_throttled(self) -> None:
+        now = time.monotonic()
+        async with self._lock:
+            new_until = now + self._cooldown_seconds
+            if new_until > self._throttled_until:
+                self._throttled_until = new_until
+
+    async def wait_if_throttled(self) -> None:
+        while True:
+            now = time.monotonic()
+            async with self._lock:
+                remaining = self._throttled_until - now
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(remaining, 1.0))
+
+    def is_throttled(self) -> bool:
+        return time.monotonic() < self._throttled_until
+
+
+class _Pan115RateLimiter:
+    """三层滑动窗口限速器：QPS / QPM / QPH"""
+
+    def __init__(self, qps: int = 2, qpm: int = 120, qph: int = 3000):
+        self.qps = max(qps, 1)
+        self.qpm = max(qpm, 1)
+        self.qph = max(qph, 1)
+        self._second_window: deque[float] = deque()
+        self._minute_window: deque[float] = deque()
+        self._hour_window: deque[float] = deque()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        while True:
+            now = time.monotonic()
+            async with self._lock:
+                cutoff_sec = now - 1.0
+                cutoff_min = now - 60.0
+                cutoff_hour = now - 3600.0
+                while self._second_window and self._second_window[0] <= cutoff_sec:
+                    self._second_window.popleft()
+                while self._minute_window and self._minute_window[0] <= cutoff_min:
+                    self._minute_window.popleft()
+                while self._hour_window and self._hour_window[0] <= cutoff_hour:
+                    self._hour_window.popleft()
+
+                if (
+                    len(self._second_window) < self.qps
+                    and len(self._minute_window) < self.qpm
+                    and len(self._hour_window) < self.qph
+                ):
+                    self._second_window.append(now)
+                    self._minute_window.append(now)
+                    self._hour_window.append(now)
+                    return
+
+            async with self._lock:
+                sleep_sec = 0.0
+                if len(self._second_window) >= self.qps and self._second_window:
+                    sleep_sec = max(sleep_sec, self._second_window[0] + 1.01 - now)
+                if len(self._minute_window) >= self.qpm and self._minute_window:
+                    sleep_sec = max(sleep_sec, self._minute_window[0] + 60.01 - now)
+                if len(self._hour_window) >= self.qph and self._hour_window:
+                    sleep_sec = max(sleep_sec, self._hour_window[0] + 3600.01 - now)
+
+            if sleep_sec > 0:
+                await asyncio.sleep(sleep_sec)
+
+
+class _Pan115QueueExecutor:
+    """115 API 全局队列执行器"""
+
+    def __init__(
+        self, qps: int = 2, qpm: int = 120, qph: int = 3000, worker_count: int = 3
+    ):
+        self._queue: asyncio.Queue[_QueueRequest] = asyncio.Queue(maxsize=500)
+        self._limiter = _Pan115RateLimiter(qps, qpm, qph)
+        self._throttle = _Pan115ThrottleManager()
+        self._worker_count = max(worker_count, 2)
+        self._started = False
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
+        for i in range(self._worker_count):
+            asyncio.create_task(self._worker_loop(), name=f"pan115-queue-worker-{i}")
+
+    async def _worker_loop(self) -> None:
+        while True:
+            req = await self._queue.get()
+            try:
+                if not req.bypass_rate_limit:
+                    await self._limiter.acquire()
+                    await self._throttle.wait_if_throttled()
+
+                result = await req.coro_factory()
+                if not req.future.done():
+                    req.future.set_result(result)
+            except Exception as exc:
+                error_text = str(exc).lower()
+                if (
+                    "code=405" in error_text
+                    or "method not allowed" in error_text
+                    or "访问频率过高" in error_text
+                    or "too many" in error_text
+                    or "rate limit" in error_text
+                ):
+                    await self._throttle.mark_throttled()
+                if not req.future.done():
+                    req.future.set_exception(exc)
+            finally:
+                self._queue.task_done()
+
+    def enqueue(self, req: _QueueRequest) -> None:
+        if not self._started:
+            self.start()
+        try:
+            self._queue.put_nowait(req)
+        except asyncio.QueueFull:
+            if not req.future.done():
+                req.future.set_exception(RuntimeError("115 请求队列已满，请稍后重试"))
+
+
+_global_pan115_executor: Optional[_Pan115QueueExecutor] = None
+_global_executor_lock = asyncio.Lock()
+
+
+async def _get_global_pan115_executor() -> _Pan115QueueExecutor:
+    global _global_pan115_executor
+    if _global_pan115_executor is not None:
+        return _global_pan115_executor
+    async with _global_executor_lock:
+        if _global_pan115_executor is not None:
+            return _global_pan115_executor
+        _global_pan115_executor = _Pan115QueueExecutor(
+            qps=2, qpm=120, qph=3000, worker_count=3
+        )
+        _global_pan115_executor.start()
+        return _global_pan115_executor
+
+
 class Pan115Service:
     """115网盘服务类，封装p115client的功能"""
 
@@ -105,7 +271,7 @@ class Pan115Service:
 
     async def _async_call(self, method_name: str, *args, **kwargs) -> Dict[str, Any]:
         """
-        异步调用p115client方法
+        异步调用p115client方法（经过全局队列限速）
 
         Args:
             method_name: 方法名称
@@ -116,8 +282,15 @@ class Pan115Service:
             API响应字典
         """
         method = getattr(self.client, method_name)
-        result = await method(*args, async_=True, **kwargs)
-        return result
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        async def coro_factory():
+            return await method(*args, async_=True, **kwargs)
+
+        executor = await _get_global_pan115_executor()
+        executor.enqueue(_QueueRequest(coro_factory=coro_factory, future=future))
+        return await future
 
     # ==================== 用户信息 ====================
 
@@ -294,9 +467,8 @@ class Pan115Service:
                     # 凭证失效时不再回退，直接抛给上层进行鉴权提示
                     if self._is_auth_related_error(error_text):
                         raise
-                    # 文件列表接口短时 405 通常属于风控，先做退避重试
+                    # 文件列表接口短时 405 通常属于风控，交由全局队列熔断处理
                     if self._is_method_not_allowed_error(error_text) and retry < 2:
-                        await asyncio.sleep(0.8 * (retry + 1))
                         continue
                     break
 
@@ -325,7 +497,6 @@ class Pan115Service:
             except Exception as exc:
                 last_error = exc
                 if self._is_method_not_allowed_error(str(exc)) and attempt < 2:
-                    await asyncio.sleep(self._save_retry_delay(attempt))
                     continue
                 raise
 
@@ -385,7 +556,6 @@ class Pan115Service:
             except Exception as exc:
                 last_error = exc
                 if self._is_method_not_allowed_error(str(exc)) and attempt < 2:
-                    await asyncio.sleep(self._save_retry_delay(attempt))
                     continue
                 raise
 
@@ -440,7 +610,6 @@ class Pan115Service:
             except Exception as exc:
                 last_error = exc
                 if self._is_method_not_allowed_error(str(exc)) and attempt < 2:
-                    await asyncio.sleep(self._save_retry_delay(attempt))
                     continue
                 raise
         else:
@@ -504,10 +673,9 @@ class Pan115Service:
             except Exception as exc:
                 last_error = exc
                 error_text = str(exc)
-                # 115 离线接口在短时间高频访问时可能返回 405，做短暂退避重试。
+                # 115 离线接口在短时间高频访问时可能返回 405，交由全局队列熔断处理
                 if "code=405" in error_text or "Method Not Allowed" in error_text:
                     if attempt < 2:
-                        await asyncio.sleep(0.8 * (attempt + 1))
                         continue
                 raise
         else:
@@ -668,7 +836,6 @@ class Pan115Service:
                         raise
                     if self._is_method_not_allowed_error(error_text):
                         if retry < max_retries_per_attempt - 1:
-                            await asyncio.sleep(0.6 * (retry + 1))
                             continue
                     break
 
@@ -836,7 +1003,6 @@ class Pan115Service:
                 if attempt < max_attempts - 1 and self._is_retryable_save_error(
                     error_text
                 ):
-                    await asyncio.sleep(self._save_retry_delay(attempt))
                     continue
                 raise
 
@@ -859,7 +1025,6 @@ class Pan115Service:
                     and attempt < max_attempts - 1
                     and self._is_retryable_save_error(error_text)
                 ):
-                    await asyncio.sleep(self._save_retry_delay(attempt))
                     continue
 
             # 确保返回字典格式

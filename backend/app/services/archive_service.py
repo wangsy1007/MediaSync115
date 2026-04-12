@@ -15,10 +15,6 @@ from app.services.tmdb_service import tmdb_service
 
 logger = logging.getLogger(__name__)
 
-ARCHIVE_LIST_PAGE_DELAY_SECONDS = 0.35
-ARCHIVE_FILE_OPERATION_DELAY_SECONDS = 0.8
-
-
 VIDEO_EXTENSIONS = {
     ".mkv",
     ".mp4",
@@ -203,7 +199,7 @@ class ArchiveService:
                 "total": len(source_items),
                 "items": [],
             }
-            for index, item in enumerate(source_items):
+            for item in source_items:
                 result = await self._process_one(
                     pan115,
                     item,
@@ -219,9 +215,6 @@ class ArchiveService:
                     summary["skipped"] += 1
                 else:
                     summary["failed"] += 1
-
-                if index < len(source_items) - 1:
-                    await asyncio.sleep(ARCHIVE_FILE_OPERATION_DELAY_SECONDS)
 
             finish_status = "success" if summary["failed"] == 0 else "warning"
             await operation_log_service.log_background_event(
@@ -244,65 +237,91 @@ class ArchiveService:
     async def _list_video_files(
         self, pan115: Pan115Service, cid: str
     ) -> list[dict[str, Any]]:
-        """递归列出监听目录及其子目录中的视频文件"""
+        """并发 BFS 列出监听目录及其子目录中的视频文件（两阶段扫描第一阶段）"""
         items: list[dict[str, Any]] = []
-        pending_dirs: list[tuple[str, str]] = [(str(cid or "0").strip() or "0", "")]
         seen_dirs: set[str] = set()
-        limit = 1000
+        dir_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        items_lock = asyncio.Lock()
+        seen_lock = asyncio.Lock()
 
-        while pending_dirs:
-            current_cid, current_path = pending_dirs.pop(0)
-            if current_cid in seen_dirs:
-                continue
-            seen_dirs.add(current_cid)
+        await dir_queue.put((str(cid or "0").strip() or "0", ""))
 
-            offset = 0
+        async def _worker() -> None:
             while True:
-                result = await pan115.get_file_list(
-                    cid=current_cid, offset=offset, limit=limit
-                )
-                batch = result.get("data") or []
-                if not batch:
+                try:
+                    current_cid, current_path = dir_queue.get_nowait()
+                except asyncio.QueueEmpty:
                     break
 
-                for it in batch:
-                    if not isinstance(it, dict):
+                async with seen_lock:
+                    if current_cid in seen_dirs:
                         continue
+                    seen_dirs.add(current_cid)
 
-                    name = str(it.get("n") or it.get("name") or "").strip()
-                    if not name:
-                        continue
+                offset = 0
+                limit = 1000
+                while True:
+                    try:
+                        result = await pan115.get_file_list(
+                            cid=current_cid, offset=offset, limit=limit
+                        )
+                    except Exception:
+                        logger.exception("列出目录 %s 失败", current_cid)
+                        break
 
-                    if pan115._is_folder_item(it):
-                        folder_cid = str(pan115._extract_folder_id(it) or "").strip()
-                        if folder_cid:
-                            next_path = (
-                                f"{current_path}/{name}" if current_path else name
-                            )
-                            pending_dirs.append((folder_cid, next_path))
-                        continue
+                    batch = result.get("data") or []
+                    if not batch:
+                        break
 
-                    fid = str(it.get("fid") or "").strip()
-                    if not fid or not self._is_video(name):
-                        continue
+                    local_dirs: list[tuple[str, str]] = []
+                    local_items: list[dict[str, Any]] = []
 
-                    relative_path = f"{current_path}/{name}" if current_path else name
-                    items.append(
-                        {
-                            "fid": fid,
-                            "name": name,
-                            "cid": current_cid,
-                            "relative_path": relative_path,
-                        }
-                    )
+                    for it in batch:
+                        if not isinstance(it, dict):
+                            continue
+                        name = str(it.get("n") or it.get("name") or "").strip()
+                        if not name:
+                            continue
+                        if pan115._is_folder_item(it):
+                            folder_cid = str(
+                                pan115._extract_folder_id(it) or ""
+                            ).strip()
+                            if folder_cid:
+                                next_path = (
+                                    f"{current_path}/{name}" if current_path else name
+                                )
+                                local_dirs.append((folder_cid, next_path))
+                            continue
 
-                if len(batch) < limit:
-                    break
-                await asyncio.sleep(ARCHIVE_LIST_PAGE_DELAY_SECONDS)
-                offset += limit
+                        fid = str(it.get("fid") or "").strip()
+                        if not fid or not self._is_video(name):
+                            continue
 
-            if pending_dirs:
-                await asyncio.sleep(ARCHIVE_LIST_PAGE_DELAY_SECONDS)
+                        relative_path = (
+                            f"{current_path}/{name}" if current_path else name
+                        )
+                        local_items.append(
+                            {
+                                "fid": fid,
+                                "name": name,
+                                "cid": current_cid,
+                                "relative_path": relative_path,
+                            }
+                        )
+
+                    for d in local_dirs:
+                        await dir_queue.put(d)
+                    async with items_lock:
+                        items.extend(local_items)
+
+                    if len(batch) < limit:
+                        break
+                    offset += limit
+
+        # 启动多个 worker 并发扫描；worker 数与全局队列 worker 数保持一致
+        worker_count = 3
+        workers = [asyncio.create_task(_worker()) for _ in range(worker_count)]
+        await asyncio.gather(*workers, return_exceptions=True)
 
         items.sort(
             key=lambda x: str(x.get("relative_path") or x.get("name") or "").lower()
