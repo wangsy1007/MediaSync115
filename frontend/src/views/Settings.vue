@@ -217,30 +217,6 @@
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane label="Nullbr" name="nullbr">
-        <el-card class="settings-card">
-          <template #header>
-            <span>Nullbr API 配置</span>
-          </template>
-
-          <el-form :model="nullbrForm" label-width="120px">
-            <el-form-item label="APP ID">
-              <el-input v-model="nullbrForm.appId" placeholder="Nullbr APP ID" />
-            </el-form-item>
-            <el-form-item label="API Key">
-              <el-input v-model="nullbrForm.apiKey" placeholder="Nullbr API Key" type="password" show-password />
-            </el-form-item>
-            <el-form-item label="Base URL">
-              <el-input v-model="nullbrForm.baseUrl" placeholder="例如: https://api.nullbr.eu.org/" />
-            </el-form-item>
-            <el-form-item>
-              <el-button type="primary" :loading="savingNullbr" @click="handleSaveNullbr">保存</el-button>
-              <el-button :loading="testingNullbr" @click="handleTestNullbr">测试凭证</el-button>
-            </el-form-item>
-          </el-form>
-        </el-card>
-      </el-tab-pane>
-
       <el-tab-pane label="HDHive" name="hdhive">
         <el-card class="settings-card">
           <template #header>
@@ -884,7 +860,7 @@
               代理配置说明
             </template>
             <template #default>
-              配置代理后，可用于检测 TMDB、HDHive、Nullbr、Telegram 这些目标地址的连通性。保存后会写入后端运行时配置，并持久化到 data 目录。
+                配置代理后，可用于检测 TMDB、HDHive、Telegram 这些目标地址的连通性。保存后会写入后端运行时配置，并持久化到 data 目录。
             </template>
           </el-alert>
 
@@ -1066,30 +1042,8 @@
             <el-form-item label="启用离线转存">
               <el-switch v-model="schedulerForm.offlineTransferEnabled" />
               <el-text size="small" type="info" style="margin-left: 8px">
-                启用后，订阅转存除 115 分享链接外，还会使用磁力链接和 ED2K 资源进行离线下载（保存到离线下载目录）
+                启用后，订阅转存除 115 分享链接外，还会使用磁力资源进行离线下载（保存到离线下载目录）
               </el-text>
-            </el-form-item>
-
-            <el-divider content-position="left">Nullbr 渠道</el-divider>
-            <el-form-item label="启用任务">
-              <el-switch v-model="schedulerForm.nullbr.enabled" />
-            </el-form-item>
-            <el-form-item label="检查间隔(小时)">
-              <el-input-number
-                v-model="schedulerForm.nullbr.intervalHours"
-                :min="1"
-                :max="24"
-                :disabled="!schedulerForm.nullbr.enabled"
-              />
-            </el-form-item>
-            <el-form-item label="执行时间">
-              <el-time-picker
-                v-model="schedulerForm.nullbr.runTime"
-                format="HH:mm"
-                value-format="HH:mm"
-                placeholder="选择时间"
-                :disabled="!schedulerForm.nullbr.enabled"
-              />
             </el-form-item>
 
             <el-divider content-position="left">HDHive 渠道</el-divider>
@@ -1161,7 +1115,6 @@
             <el-form-item>
               <el-button type="primary" :loading="savingScheduler" @click="handleSaveScheduler">保存</el-button>
               <el-button type="success" :loading="runningAllChannels" :disabled="runningSubscriptionChannel !== ''" @click="handleRunAllChannels">立即执行全部渠道</el-button>
-              <el-button :loading="runningNullbr" :disabled="runningSubscriptionChannel !== '' || runningAllChannels" @click="handleRunSubscriptionChannel('nullbr')">立即执行 Nullbr</el-button>
               <el-button :loading="runningHdhive" :disabled="runningSubscriptionChannel !== '' || runningAllChannels" @click="handleRunSubscriptionChannel('hdhive')">立即执行 HDHive</el-button>
               <el-button :loading="runningPansou" :disabled="runningSubscriptionChannel !== '' || runningAllChannels" @click="handleRunSubscriptionChannel('pansou')">立即执行 Pansou</el-button>
               <el-button :loading="runningTg" :disabled="runningSubscriptionChannel !== '' || runningAllChannels" @click="handleRunSubscriptionChannel('tg')">立即执行 Telegram</el-button>
@@ -1312,7 +1265,6 @@
             </el-form-item>
             <el-form-item label="子标签页" v-if="detailTabsForm.pan115">
               <el-checkbox-group v-model="detailTabsForm.pan115_children">
-                <el-checkbox label="pan115_nullbr">Nullbr</el-checkbox>
                 <el-checkbox label="pan115_pansou">Pansou</el-checkbox>
                 <el-checkbox label="pan115_hdhive">HDHive</el-checkbox>
                 <el-checkbox label="pan115_tg">Telegram</el-checkbox>
@@ -1325,15 +1277,9 @@
             </el-form-item>
             <el-form-item label="子标签页" v-if="detailTabsForm.magnet">
               <el-checkbox-group v-model="detailTabsForm.magnet_children">
-                <el-checkbox label="magnet_nullbr">Nullbr</el-checkbox>
                 <el-checkbox label="magnet_seedhub">SeedHub</el-checkbox>
                 <el-checkbox label="magnet_butailing">不太灵</el-checkbox>
               </el-checkbox-group>
-            </el-form-item>
-
-            <el-divider content-position="left">其他</el-divider>
-            <el-form-item label="ED2K">
-              <el-checkbox v-model="detailTabsForm.ed2k">显示 ED2K 标签页</el-checkbox>
             </el-form-item>
 
             <el-form-item>
@@ -1679,12 +1625,6 @@ const accountForm = ref({
   confirmPassword: ''
 })
 
-const nullbrForm = ref({
-  appId: '',
-  apiKey: '',
-  baseUrl: ''
-})
-
 const hdhiveForm = ref({
   apiKey: '',
   cookie: '',
@@ -1749,25 +1689,20 @@ const tmdbForm = ref({
 
 const schedulerForm = ref({
   offlineTransferEnabled: false,
-  nullbr: {
+  hdhive: {
     enabled: false,
     intervalHours: 24,
     runTime: '03:00'
   },
-  hdhive: {
+  pansou: {
     enabled: false,
     intervalHours: 24,
     runTime: '03:15'
   },
-  pansou: {
-    enabled: false,
-    intervalHours: 24,
-    runTime: '03:30'
-  },
   tg: {
     enabled: false,
     intervalHours: 24,
-    runTime: '04:00'
+    runTime: '03:30'
   },
   hdhiveUnlock: {
     enabled: false,
@@ -1784,12 +1719,11 @@ const resourcePrefForm = reactive({
   formats: [],
 })
 const sourceLabelMap = {
-  nullbr: 'Nullbr',
   hdhive: 'HDHive',
   pansou: 'Pansou',
   tg: 'Telegram'
 }
-const resourcePriority = ref(['nullbr', 'hdhive', 'pansou', 'tg'])
+const resourcePriority = ref(['hdhive', 'pansou', 'tg'])
 
 const pansouForm = ref({
   baseUrl: ''
@@ -1813,7 +1747,6 @@ const healthStatus = ref({
   services: {}
 })
 const serviceNameMap = {
-  nullbr: 'Nullbr',
   hdhive: 'HDHive',
   tg: 'Telegram',
   tmdb: 'TMDB'
@@ -1825,10 +1758,9 @@ const savingAccount = ref(false)
 // Detail tabs visibility
 const detailTabsForm = reactive({
   pan115: true,
-  pan115_children: ['pan115_nullbr', 'pan115_pansou', 'pan115_hdhive', 'pan115_tg'],
+  pan115_children: ['pan115_pansou', 'pan115_hdhive', 'pan115_tg'],
   magnet: true,
-  magnet_children: ['magnet_nullbr', 'magnet_seedhub', 'magnet_butailing'],
-  ed2k: true,
+  magnet_children: ['magnet_seedhub', 'magnet_butailing'],
 })
 
 // TG Bot state
@@ -1880,8 +1812,6 @@ const testing = ref(false)
 const testingRiskHealth = ref(false)
 const savingPansou = ref(false)
 const testingPansou = ref(false)
-const savingNullbr = ref(false)
-const testingNullbr = ref(false)
 const savingHdhive = ref(false)
 const testingHdhive = ref(false)
 const runningHdhiveCheckin = ref(false)
@@ -1909,7 +1839,6 @@ const rebuildingTgIndex = ref(false)
 const savingTmdb = ref(false)
 const savingScheduler = ref(false)
 const savingResourcePriority = ref(false)
-const runningNullbr = ref(false)
 const runningHdhive = ref(false)
 const runningPansou = ref(false)
 const runningTg = ref(false)
@@ -2082,7 +2011,6 @@ const embySyncStatus = reactive({
 let embySyncPollTimer = null
 let feiniuSyncPollTimer = null
 const sourceConnectionStatus = reactive({
-  nullbr: { checked: false, ok: false, text: '未检测' },
   hdhive: { checked: false, ok: false, text: '未检测' },
   pansou: { checked: false, ok: false, text: '未检测' },
   tg: { checked: false, ok: false, text: '未检测' }
@@ -2169,25 +2097,11 @@ const updateStatusTagText = computed(() => {
 const refreshSourceConnectionStatus = async () => {
   checkingSourceStatus.value = true
   try {
-    const [nullbrResult, hdhiveResult, pansouResult, tgResult] = await Promise.allSettled([
-      settingsApi.checkNullbr(),
+    const [hdhiveResult, pansouResult, tgResult] = await Promise.allSettled([
       settingsApi.checkHdhive(),
       pansouApi.health(),
       settingsApi.checkTg()
     ])
-
-    if (nullbrResult.status === 'fulfilled') {
-      const payload = nullbrResult.value?.data || {}
-      const ok = !!payload.valid
-      sourceConnectionStatus.nullbr.checked = true
-      sourceConnectionStatus.nullbr.ok = ok
-      sourceConnectionStatus.nullbr.text = ok ? '连接正常' : `连接失败: ${payload.message || '凭证不可用'}`
-    } else {
-      const message = nullbrResult.reason?.response?.data?.detail || nullbrResult.reason?.message || '请求失败'
-      sourceConnectionStatus.nullbr.checked = true
-      sourceConnectionStatus.nullbr.ok = false
-      sourceConnectionStatus.nullbr.text = `连接失败: ${message}`
-    }
 
     if (hdhiveResult.status === 'fulfilled') {
       const payload = hdhiveResult.value?.data || {}
@@ -2656,37 +2570,6 @@ const handleTestPansou = async () => {
     ElMessage.error('Pansou 服务连接失败')
   } finally {
     testingPansou.value = false
-  }
-}
-
-const handleSaveNullbr = async () => {
-  if (!String(nullbrForm.value.appId || '').trim()) {
-    ElMessage.warning('请输入 Nullbr APP ID')
-    return
-  }
-  if (!String(nullbrForm.value.apiKey || '').trim()) {
-    ElMessage.warning('请输入 Nullbr API Key')
-    return
-  }
-  if (!String(nullbrForm.value.baseUrl || '').trim()) {
-    ElMessage.warning('请输入 Nullbr Base URL')
-    return
-  }
-
-  savingNullbr.value = true
-  try {
-    await settingsApi.updateRuntime({
-      nullbr_app_id: nullbrForm.value.appId,
-      nullbr_api_key: nullbrForm.value.apiKey,
-      nullbr_base_url: nullbrForm.value.baseUrl
-    })
-    await fetchRuntimeSettings()
-    await refreshSourceConnectionStatus()
-    ElMessage.success('Nullbr 配置已保存')
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || 'Nullbr 配置保存失败')
-  } finally {
-    savingNullbr.value = false
   }
 }
 
@@ -3426,23 +3309,6 @@ const handleRebuildTgIndex = async () => {
   }
 }
 
-const handleTestNullbr = async () => {
-  testingNullbr.value = true
-  try {
-    const { data } = await settingsApi.checkNullbr()
-    if (data.valid) {
-      ElMessage.success('Nullbr 凭证有效，资源接口可访问')
-    } else {
-      const message = String(data.message || 'Nullbr 凭证不可用')
-      ElMessage.error(`Nullbr 凭证不可用：${message}`)
-    }
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || 'Nullbr 凭证检测失败')
-  } finally {
-    testingNullbr.value = false
-  }
-}
-
 const handleSaveTmdb = () => {
   if (!String(tmdbForm.value.apiKey || '').trim()) {
     ElMessage.warning('请输入 TMDB API Key')
@@ -3726,7 +3592,6 @@ const handleSaveDetailTabs = async () => {
     keys.add('magnet')
     detailTabsForm.magnet_children.forEach(k => keys.add(k))
   }
-  if (detailTabsForm.ed2k) keys.add('ed2k')
   try {
     await saveVisibleTabs(keys)
     ElMessage.success('详情页标签设置已保存，刷新详情页后生效')
@@ -3737,10 +3602,9 @@ const handleSaveDetailTabs = async () => {
 
 const handleResetDetailTabs = async () => {
   detailTabsForm.pan115 = true
-  detailTabsForm.pan115_children = ['pan115_nullbr', 'pan115_pansou', 'pan115_hdhive', 'pan115_tg']
+  detailTabsForm.pan115_children = ['pan115_pansou', 'pan115_hdhive', 'pan115_tg']
   detailTabsForm.magnet = true
-  detailTabsForm.magnet_children = ['magnet_nullbr', 'magnet_seedhub', 'magnet_butailing']
-  detailTabsForm.ed2k = true
+  detailTabsForm.magnet_children = ['magnet_seedhub', 'magnet_butailing']
   try {
     await saveVisibleTabs(new Set(ALL_TABS.map(t => t.key)))
     ElMessage.success('已恢复默认设置，刷新详情页后生效')
@@ -3773,9 +3637,6 @@ const fetchRuntimeSettings = async () => {
     tgIndexForm.value.queryLimitPerChannel = Number(data.tg_index_query_limit_per_channel || 120)
     tgIndexForm.value.backfillBatchSize = Number(data.tg_backfill_batch_size || 200)
     tgIndexForm.value.incrementalIntervalMinutes = Number(data.tg_incremental_interval_minutes || 30)
-    nullbrForm.value.appId = data.nullbr_app_id || ''
-    nullbrForm.value.apiKey = data.nullbr_api_key || ''
-    nullbrForm.value.baseUrl = data.nullbr_base_url || ''
 
     tmdbForm.value.apiKey = data.tmdb_api_key || ''
     tmdbForm.value.language = data.tmdb_language || 'zh-CN'
@@ -3806,26 +3667,22 @@ const fetchRuntimeSettings = async () => {
     if (Array.isArray(data.detail_visible_tabs)) {
       const s = new Set(data.detail_visible_tabs)
       detailTabsForm.pan115 = s.has('pan115')
-      detailTabsForm.pan115_children = ['pan115_nullbr', 'pan115_pansou', 'pan115_hdhive', 'pan115_tg'].filter(k => s.has(k))
+      detailTabsForm.pan115_children = ['pan115_pansou', 'pan115_hdhive', 'pan115_tg'].filter(k => s.has(k))
       detailTabsForm.magnet = s.has('magnet')
-      detailTabsForm.magnet_children = ['magnet_nullbr', 'magnet_seedhub', 'magnet_butailing'].filter(k => s.has(k))
-      detailTabsForm.ed2k = s.has('ed2k')
+      detailTabsForm.magnet_children = ['magnet_seedhub', 'magnet_butailing'].filter(k => s.has(k))
     }
 
     schedulerForm.value.offlineTransferEnabled = !!data.subscription_offline_transfer_enabled
-    schedulerForm.value.nullbr.enabled = !!data.subscription_nullbr_enabled
-    schedulerForm.value.nullbr.intervalHours = Number(data.subscription_nullbr_interval_hours || 24)
-    schedulerForm.value.nullbr.runTime = data.subscription_nullbr_run_time || '03:00'
     schedulerForm.value.hdhive.enabled = !!data.subscription_hdhive_enabled
     schedulerForm.value.hdhive.intervalHours = Number(data.subscription_hdhive_interval_hours || 24)
-    schedulerForm.value.hdhive.runTime = data.subscription_hdhive_run_time || '03:15'
+    schedulerForm.value.hdhive.runTime = data.subscription_hdhive_run_time || '03:00'
 
     schedulerForm.value.pansou.enabled = !!data.subscription_pansou_enabled
     schedulerForm.value.pansou.intervalHours = Number(data.subscription_pansou_interval_hours || 24)
-    schedulerForm.value.pansou.runTime = data.subscription_pansou_run_time || '03:30'
+    schedulerForm.value.pansou.runTime = data.subscription_pansou_run_time || '03:15'
     schedulerForm.value.tg.enabled = !!data.subscription_tg_enabled
     schedulerForm.value.tg.intervalHours = Number(data.subscription_tg_interval_hours || 24)
-    schedulerForm.value.tg.runTime = data.subscription_tg_run_time || '04:00'
+    schedulerForm.value.tg.runTime = data.subscription_tg_run_time || '03:30'
     schedulerForm.value.hdhiveUnlock.enabled = !!data.subscription_hdhive_auto_unlock_enabled
     schedulerForm.value.hdhiveUnlock.maxPointsPerItem = Number(data.subscription_hdhive_unlock_max_points_per_item || 10)
     schedulerForm.value.hdhiveUnlock.budgetPointsPerRun = Number(data.subscription_hdhive_unlock_budget_points_per_run || 30)
@@ -3844,7 +3701,7 @@ const fetchRuntimeSettings = async () => {
       if (!sourceLabelMap[source]) continue
       if (!deduped.includes(source)) deduped.push(source)
     }
-    for (const source of ['nullbr', 'hdhive', 'pansou', 'tg']) {
+    for (const source of ['hdhive', 'pansou', 'tg']) {
       if (!deduped.includes(source)) deduped.push(source)
     }
     resourcePriority.value = deduped
@@ -3933,7 +3790,7 @@ const movePriority = (source, direction) => {
 }
 
 const normalizeResourcePriority = (priorityList) => {
-  const fallbackOrder = ['nullbr', 'hdhive', 'pansou', 'tg']
+  const fallbackOrder = ['hdhive', 'pansou', 'tg']
   const normalized = []
   for (const item of Array.isArray(priorityList) ? priorityList : []) {
     const source = String(item || '').trim().toLowerCase()
@@ -3981,18 +3838,15 @@ const handleSaveScheduler = async () => {
     const normalizedPriority = normalizeResourcePriority(resourcePriority.value)
     await settingsApi.updateRuntime({
       subscription_offline_transfer_enabled: schedulerForm.value.offlineTransferEnabled,
-      subscription_nullbr_enabled: schedulerForm.value.nullbr.enabled,
-      subscription_nullbr_interval_hours: Number(schedulerForm.value.nullbr.intervalHours || 24),
-      subscription_nullbr_run_time: schedulerForm.value.nullbr.runTime || '03:00',
       subscription_hdhive_enabled: schedulerForm.value.hdhive.enabled,
       subscription_hdhive_interval_hours: Number(schedulerForm.value.hdhive.intervalHours || 24),
-      subscription_hdhive_run_time: schedulerForm.value.hdhive.runTime || '03:15',
+      subscription_hdhive_run_time: schedulerForm.value.hdhive.runTime || '03:00',
       subscription_pansou_enabled: schedulerForm.value.pansou.enabled,
       subscription_pansou_interval_hours: Number(schedulerForm.value.pansou.intervalHours || 24),
-      subscription_pansou_run_time: schedulerForm.value.pansou.runTime || '03:30',
+      subscription_pansou_run_time: schedulerForm.value.pansou.runTime || '03:15',
       subscription_tg_enabled: schedulerForm.value.tg.enabled,
       subscription_tg_interval_hours: Number(schedulerForm.value.tg.intervalHours || 24),
-      subscription_tg_run_time: schedulerForm.value.tg.runTime || '04:00',
+      subscription_tg_run_time: schedulerForm.value.tg.runTime || '03:30',
       subscription_resource_priority: normalizedPriority,
       subscription_hdhive_auto_unlock_enabled: schedulerForm.value.hdhiveUnlock.enabled,
       subscription_hdhive_unlock_max_points_per_item: Number(schedulerForm.value.hdhiveUnlock.maxPointsPerItem || 10),
@@ -4057,11 +3911,9 @@ const handleRunSubscriptionChannel = async (channel) => {
   if (runningSubscriptionChannel.value) return
   runningSubscriptionChannel.value = channel
   runningTaskMessage.value = '任务已提交，等待执行...'
-  const loadingRef = channel === 'nullbr'
-    ? runningNullbr
-    : channel === 'hdhive'
-      ? runningHdhive
-      : channel === 'pansou'
+  const loadingRef = channel === 'hdhive'
+    ? runningHdhive
+    : channel === 'pansou'
       ? runningPansou
       : runningTg
   loadingRef.value = true

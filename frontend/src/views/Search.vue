@@ -226,8 +226,6 @@ const activeSearchService = ref('')
 const isSearchMode = computed(() => searched.value && Boolean(lastSearchKeyword.value))
 const showBackToExploreButton = computed(() => isSearchMode.value)
 
-const nullbrCheckCache = ref({})
-
 const getExplorePan115CheckTarget = (item) => {
   if (!item || typeof item !== 'object') return null
   const mediaType = item.media_type === 'tv'
@@ -529,29 +527,6 @@ const goToDoubanDetail = (item) => {
   const mediaType = item?.media_type === 'tv' ? 'tv' : 'movie'
   router.push(`/douban/${mediaType}/${encodeURIComponent(doubanId)}`)
   return true
-}
-
-const hasNullbrResources = async (target) => {
-  if (!target) return
-  const cacheValue = nullbrCheckCache.value[target.key]
-  if (cacheValue !== undefined) {
-    return cacheValue
-  }
-
-  try {
-    const response = target.mediaType === 'tv'
-      ? await searchApi.getTvPan115(target.tmdbId)
-      : await searchApi.getMoviePan115(target.tmdbId)
-    const list = Array.isArray(response.data?.list) ? response.data.list : []
-    nullbrCheckCache.value = {
-      ...nullbrCheckCache.value,
-      [target.key]: list.length > 0
-    }
-    return list.length > 0
-  } catch (error) {
-    console.error('Failed to detect nullbr resources:', error)
-    return null
-  }
 }
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
@@ -1147,7 +1122,6 @@ const getMediaTypeTag = (type) => {
 const getServiceLabel = (service) => {
   const labels = {
     tmdb: 'TMDB',
-    nullbr: 'Nullbr',
     pansou: 'Pansou',
     mixed: '混合结果'
   }
@@ -1174,7 +1148,7 @@ const isLikelyPan115ShareLink = (shareLink) => {
 }
 
 const normalizeSearchResultItem = (item, index = 0, fallbackService = '') => {
-  const sourceService = item.source_service || fallbackService || 'nullbr'
+  const sourceService = item.source_service || fallbackService || 'tmdb'
   const shareLink = item.pan115_share_link || item.share_link || item.share_url || item.url || item.link || ''
   const isPansouResult = sourceService === 'pansou'
   const normalizedId = item.tmdbid || item.tmdb_id || item.id || `${sourceService}-${index}`

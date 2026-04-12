@@ -12,7 +12,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.services.hdhive_service import hdhive_service
-from app.services.nullbr_service import nullbr_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
@@ -62,9 +61,6 @@ class RuntimeSettingsRequest(BaseModel):
     hdhive_auto_checkin_method: Optional[str] = None
     hdhive_auto_checkin_run_time: Optional[str] = None
     pansou_base_url: Optional[str] = None
-    nullbr_app_id: Optional[str] = None
-    nullbr_api_key: Optional[str] = None
-    nullbr_base_url: Optional[str] = None
     tg_api_id: Optional[str] = None
     tg_api_hash: Optional[str] = None
     tg_phone: Optional[str] = None
@@ -92,9 +88,6 @@ class RuntimeSettingsRequest(BaseModel):
     feiniu_session_token: Optional[str] = None
     feiniu_sync_enabled: Optional[bool] = None
     feiniu_sync_interval_hours: Optional[int] = None
-    subscription_nullbr_enabled: Optional[bool] = None
-    subscription_nullbr_interval_hours: Optional[int] = None
-    subscription_nullbr_run_time: Optional[str] = None
     subscription_hdhive_enabled: Optional[bool] = None
     subscription_hdhive_interval_hours: Optional[int] = None
     subscription_hdhive_run_time: Optional[str] = None
@@ -179,7 +172,7 @@ def _build_qr_image_url(content: str) -> str:
 
 
 def _normalize_subscription_priority(raw: object) -> list[str]:
-    allowed = {"nullbr", "hdhive", "pansou", "tg"}
+    allowed = {"hdhive", "pansou", "tg"}
     source_items: list[str] = []
     if isinstance(raw, list):
         source_items = [str(item or "").strip().lower() for item in raw]
@@ -205,15 +198,7 @@ async def _validate_priority_source_config(merged_settings: dict) -> None:
     errors: list[str] = []
 
     for source in priority:
-        if source == "nullbr":
-            app_id = str(merged_settings.get("nullbr_app_id") or "").strip()
-            api_key = str(merged_settings.get("nullbr_api_key") or "").strip()
-            base_url = str(merged_settings.get("nullbr_base_url") or "").strip()
-            if not app_id or not api_key or not base_url:
-                errors.append(
-                    "Nullbr 优先级已启用，但缺少 APP ID / API Key / Base URL 配置"
-                )
-        elif source == "hdhive":
+        if source == "hdhive":
             api_key = str(merged_settings.get("hdhive_api_key") or "").strip()
             base_url = str(merged_settings.get("hdhive_base_url") or "").strip()
             if not api_key or not base_url:
@@ -478,22 +463,6 @@ async def _probe_target_health(
         )
 
 
-async def _perform_nullbr_check() -> dict[str, Any]:
-    try:
-        info = await asyncio.to_thread(nullbr_service.get_user_info)
-        return {
-            "valid": True,
-            "message": "Nullbr 凭证可用",
-            "user": info,
-        }
-    except Exception as exc:
-        return {
-            "valid": False,
-            "message": str(exc),
-            "user": None,
-        }
-
-
 async def _perform_hdhive_check_cached() -> dict[str, Any]:
     now = time.time()
     async with _settings_check_cache_lock:
@@ -662,7 +631,6 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
     _secret_keys = {
         "hdhive_cookie",
         "hdhive_api_key",
-        "nullbr_api_key",
         "tg_session",
         "tg_api_hash",
         "tmdb_api_key",
@@ -714,11 +682,6 @@ async def check_updates():
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"检查更新失败: {str(exc)}")
-
-
-@router.get("/nullbr/check")
-async def check_nullbr_credentials():
-    return await _perform_nullbr_check()
 
 
 @router.get("/hdhive/check")
@@ -963,14 +926,9 @@ async def get_proxy_config():
 @router.get("/health/all")
 async def check_all_services_health():
     """Check whether proxy settings are applied to fixed probe targets."""
-    nullbr_target = runtime_settings_service.get_nullbr_base_url()
     tmdb_target = runtime_settings_service.get_tmdb_base_url()
 
-    nullbr_result, hdhive_result, tmdb_result, tg_result = await asyncio.gather(
-        _probe_target_health(
-            target=nullbr_target,
-            not_configured_message="未配置 Nullbr Base URL",
-        ),
+    hdhive_result, tmdb_result, tg_result = await asyncio.gather(
         _probe_target_health(
             target="https://hdhive.com/",
             not_configured_message="",
@@ -986,7 +944,6 @@ async def check_all_services_health():
     )
 
     results = {
-        "nullbr": nullbr_result,
         "hdhive": hdhive_result,
         "tmdb": tmdb_result,
         "tg": tg_result,

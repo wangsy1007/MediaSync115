@@ -52,96 +52,6 @@
       <el-tabs v-model="activeTab" class="resource-tabs">
         <el-tab-pane v-if="tabVisible('pan115')" label="115网盘" name="pan115">
           <el-tabs v-model="pan115SourceTab" class="source-tabs">
-            <el-tab-pane v-if="tabVisible('pan115_nullbr')" label="Nullbr" name="nullbr">
-              <div class="resource-tools">
-                <el-button
-                  size="small"
-                  type="primary"
-                  plain
-                  :loading="pan115Loading"
-                  @click="fetchPan115(true)"
-                >
-                  {{ nullbrTried ? '刷新 Nullbr' : '用 Nullbr 获取资源' }}
-                </el-button>
-              </div>
-              <div v-loading="pan115Loading">
-                <div v-if="pan115Diagnostics.nullbr.visible" class="resource-diagnostics">
-                  <span class="diag-title">诊断</span>
-                  <span v-if="pan115Diagnostics.nullbr.error" class="diag-error">
-                    {{ pan115Diagnostics.nullbr.error }}
-                  </span>
-                  <span v-else class="diag-meta">
-                    {{ pan115Diagnostics.nullbr.attemptText || '已完成查询' }}
-                  </span>
-                </div>
-                <el-table 
-                  v-if="nullbrPan115Resources.length > 0" 
-                  :data="pagedNullbrPan115Resources" 
-                  stripe
-                  class="resource-table"
-                >
-                  <el-table-column label="资源名称" min-width="300" show-overflow-tooltip>
-                    <template #default="{ row }">
-                      <div class="resource-name">{{ row.resource_name || row.title }}</div>
-                      <div v-if="row.resource_name && row.title && row.resource_name !== row.title" class="text-muted">
-                        {{ row.title }}
-                      </div>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="画质" width="160" align="center">
-                    <template #default="{ row }">
-                      <template v-if="row.quality && (Array.isArray(row.quality) ? row.quality.length : row.quality)">
-                        <el-tag size="small">{{ Array.isArray(row.quality) ? row.quality.join(', ') : row.quality }}</el-tag>
-                      </template>
-                      <template v-else-if="getRowTags(row).formats.length">
-                        <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
-                      </template>
-                      <span v-else class="text-muted">-</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="分辨率" width="100" align="center">
-                    <template #default="{ row }">
-                      <el-tag size="small" type="info" v-if="row.resolution">{{ Array.isArray(row.resolution) ? row.resolution.join(', ') : row.resolution }}</el-tag>
-                      <el-tag size="small" type="info" v-else-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
-                      <span v-else class="text-muted">-</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="大小" width="100" align="center">
-                    <template #default="{ row }">
-                      <span class="resource-size">{{ row.size || '-' }}</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="操作" width="100" align="center" fixed="right">
-                    <template #default="{ row }">
-                      <el-button
-                        type="primary"
-                        size="small"
-                        :loading="Boolean(row?.saving) || isHdhiveUnlocking(row)"
-                        :disabled="isPan115ActionDisabled(row)"
-                        @click="handleSaveToPan115(row)"
-                      >
-                        转存
-                      </el-button>
-                    </template>
-                  </el-table-column>
-                </el-table>
-                <div v-if="nullbrPan115Resources.length > pan115PageSize" class="table-pagination">
-                  <el-pagination
-                    background
-                    layout="prev, pager, next"
-                    :total="nullbrPan115Resources.length"
-                    :page-size="pan115PageSize"
-                    :current-page="pan115Pager.nullbr"
-                    @current-change="(page) => (pan115Pager.nullbr = page)"
-                  />
-                </div>
-                <el-empty
-                  v-else
-                  :description="nullbrTried ? 'Nullbr 暂无115网盘资源' : '尚未获取 Nullbr 资源'"
-                />
-              </div>
-            </el-tab-pane>
-
             <el-tab-pane v-if="tabVisible('pan115_pansou')" label="Pansou" name="pansou">
               <div class="resource-tools">
                 <el-button
@@ -445,77 +355,6 @@
 
         <el-tab-pane v-if="tabVisible('magnet')" label="磁力链接" name="magnet">
           <el-tabs v-model="magnetSourceTab" class="source-tabs">
-            <el-tab-pane v-if="tabVisible('magnet_nullbr')" label="Nullbr" name="nullbr">
-              <div class="resource-tools">
-                <el-button
-                  size="small"
-                  type="primary"
-                  plain
-                  :loading="magnetLoading"
-                  @click="fetchMagnet()"
-                >
-                  {{ nullbrMagnetTried ? '刷新 Nullbr' : '用 Nullbr 获取磁链' }}
-                </el-button>
-              </div>
-              <div v-loading="magnetLoading">
-                <el-table
-                  v-if="nullbrMagnetResources.length > 0"
-                  :data="pagedNullbrMagnetResources"
-                  stripe
-                  class="resource-table"
-                >
-                  <el-table-column label="资源名称" min-width="400" show-overflow-tooltip>
-                    <template #default="{ row }">
-                      <span class="resource-name">{{ row.name }}</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="画质" width="160" align="center">
-                    <template #default="{ row }">
-                      <template v-if="getRowTags(row).formats.length">
-                        <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
-                      </template>
-                      <span v-else class="text-muted">-</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="分辨率" width="100" align="center">
-                    <template #default="{ row }">
-                      <el-tag size="small" type="info" v-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
-                      <span v-else class="text-muted">-</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="大小" width="120" align="center">
-                    <template #default="{ row }">
-                      <span class="resource-size">{{ formatSize(row.size) || '-' }}</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="操作" width="160" align="center" fixed="right">
-                    <template #default="{ row }">
-                      <el-button type="primary" size="small" @click="handleSaveMagnet(row)">
-                        离线
-                      </el-button>
-                      <el-button size="small" @click="handleCopyMagnet(row.magnet)">
-                        复制
-                      </el-button>
-                    </template>
-                  </el-table-column>
-                </el-table>
-                <div v-if="nullbrMagnetResources.length > pan115PageSize" class="table-pagination">
-                  <el-pagination
-                    background
-                    layout="prev, pager, next"
-                    :total="nullbrMagnetResources.length"
-                    :page-size="pan115PageSize"
-                    :current-page="magnetPager.nullbr"
-                    @current-change="(page) => (magnetPager.nullbr = page)"
-                  />
-                </div>
-                <el-empty
-                  v-else
-                  :description="nullbrMagnetTried ? 'Nullbr 暂无磁力资源' : '尚未获取 Nullbr 磁力资源'"
-                />
-              </div>
-            </el-tab-pane>
-
             <el-tab-pane v-if="tabVisible('magnet_seedhub')" label="SeedHub" name="seedhub">
               <div class="resource-tools">
                 <el-button
@@ -663,77 +502,6 @@
           </el-tabs>
         </el-tab-pane>
 
-        <el-tab-pane v-if="tabVisible('ed2k')" label="ED2K" name="ed2k">
-          <div class="resource-tools">
-            <el-button
-              size="small"
-              type="primary"
-              plain
-              :loading="ed2kLoading"
-              @click="fetchEd2k()"
-            >
-              {{ ed2kTried ? '刷新 Nullbr' : '用 Nullbr 获取 ED2K' }}
-            </el-button>
-          </div>
-          <div v-loading="ed2kLoading">
-            <el-table 
-              v-if="ed2kResources.length > 0" 
-              :data="pagedEd2kResources" 
-              stripe
-              class="resource-table"
-            >
-              <el-table-column label="资源名称" min-width="400" show-overflow-tooltip>
-                <template #default="{ row }">
-                  <span class="resource-name">{{ row.name }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="画质" width="160" align="center">
-                <template #default="{ row }">
-                  <template v-if="getRowTags(row).formats.length">
-                    <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
-                  </template>
-                  <span v-else class="text-muted">-</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="分辨率" width="100" align="center">
-                <template #default="{ row }">
-                  <el-tag size="small" type="info" v-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
-                  <span v-else class="text-muted">-</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="大小" width="120" align="center">
-                <template #default="{ row }">
-                  <span class="resource-size">{{ formatSize(row.size) || '-' }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="160" align="center" fixed="right">
-                <template #default="{ row }">
-                  <el-button type="primary" size="small" @click="handleSaveEd2k(row)">
-                    离线
-                  </el-button>
-                  <el-button size="small" @click="handleCopyEd2k(row.ed2k)">
-                    复制
-                  </el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-            <div v-if="ed2kResources.length > pan115PageSize" class="table-pagination">
-              <el-pagination
-                background
-                layout="prev, pager, next"
-                :total="ed2kResources.length"
-                :page-size="pan115PageSize"
-                :current-page="ed2kPager"
-                @current-change="(page) => (ed2kPager = page)"
-              />
-            </div>
-            <el-empty
-              v-else
-              :description="ed2kTried ? '暂无 ED2K 资源' : '尚未获取 ED2K 资源'"
-            />
-          </div>
-        </el-tab-pane>
-
       </el-tabs>
     </template>
   </div>
@@ -767,13 +535,11 @@ const loading = ref(true)
 const activeTab = ref('pan115')
 
 const pan115Resources = ref([])
-const pan115SourceTab = ref('nullbr')
-const magnetSourceTab = ref('nullbr')
+const pan115SourceTab = ref('pansou')
+const magnetSourceTab = ref('seedhub')
 const magnetResources = ref([])
-const ed2kResources = ref([])
 
 const pan115Loading = ref(false)
-const nullbrTried = ref(false)
 const pansouLoading = ref(false)
 const pansouTried = ref(false)
 const hdhiveLoading = ref(false)
@@ -781,13 +547,10 @@ const hdhiveTried = ref(false)
 const tgLoading = ref(false)
 const tgTried = ref(false)
 const magnetLoading = ref(false)
-const nullbrMagnetTried = ref(false)
 const seedhubMagnetLoading = ref(false)
 const seedhubMagnetTried = ref(false)
 const butailingMagnetLoading = ref(false)
 const butailingMagnetTried = ref(false)
-const ed2kLoading = ref(false)
-const ed2kTried = ref(false)
 const isSubscribed = ref(false)
 const isInEmby = ref(false)
 const isInFeiniu = ref(false)
@@ -804,7 +567,6 @@ const PAN115_CACHE_VERSION = 2
 const saving = ref(false)
 const hdhiveUnlockingSlugs = ref(new Set())
 const pan115Diagnostics = ref({
-  nullbr: { visible: false, keyword: '', attemptText: '', error: '' },
   pansou: { visible: false, keyword: '', attemptText: '', error: '' },
   hdhive: { visible: false, keyword: '', attemptText: '', error: '' },
   tg: { visible: false, keyword: '', attemptText: '', error: '' }
@@ -819,7 +581,6 @@ const getPan115CacheKey = () => `movie_pan115_${route.params.id}`
 
 const resetPan115Diagnostics = () => {
   pan115Diagnostics.value = {
-    nullbr: { visible: false, keyword: '', attemptText: '', error: '' },
     pansou: { visible: false, keyword: '', attemptText: '', error: '' },
     hdhive: { visible: false, keyword: '', attemptText: '', error: '' },
     tg: { visible: false, keyword: '', attemptText: '', error: '' }
@@ -887,10 +648,6 @@ const writePan115Cache = (list) => {
   }
 }
 
-const nullbrPan115Resources = computed(() =>
-  pan115Resources.value.filter((item) => (item?.source_service || 'nullbr') === 'nullbr')
-)
-
 const pansouPan115Resources = computed(() =>
   pan115Resources.value.filter((item) => item?.source_service === 'pansou')
 )
@@ -905,30 +662,22 @@ const tgPan115Resources = computed(() =>
 const pan115PageSize = 10
 const seedhubFetchLimit = 80
 const pan115Pager = ref({
-  nullbr: 1,
   pansou: 1,
   hdhive: 1,
   tg: 1
 })
 const magnetPager = ref({
-  nullbr: 1,
   seedhub: 1,
   butailing: 1
 })
-const ed2kPager = ref(1)
 const slicePan115Page = (list, page) => {
   const currentPage = Math.max(1, Number(page || 1))
   const start = (currentPage - 1) * pan115PageSize
   return list.slice(start, start + pan115PageSize)
 }
-const pagedNullbrPan115Resources = computed(() => slicePan115Page(nullbrPan115Resources.value, pan115Pager.value.nullbr))
 const pagedPansouPan115Resources = computed(() => slicePan115Page(pansouPan115Resources.value, pan115Pager.value.pansou))
 const pagedHdhivePan115Resources = computed(() => slicePan115Page(hdhivePan115Resources.value, pan115Pager.value.hdhive))
 const pagedTgPan115Resources = computed(() => slicePan115Page(tgPan115Resources.value, pan115Pager.value.tg))
-
-const nullbrMagnetResources = computed(() =>
-  magnetResources.value.filter((item) => (item?.source_service || 'nullbr') === 'nullbr')
-)
 
 const seedhubMagnetResources = computed(() =>
   magnetResources.value.filter((item) => item?.source_service === 'seedhub')
@@ -936,13 +685,11 @@ const seedhubMagnetResources = computed(() =>
 const butailingMagnetResources = computed(() =>
   magnetResources.value.filter((item) => item?.source_service === 'butailing')
 )
-const pagedNullbrMagnetResources = computed(() => slicePan115Page(nullbrMagnetResources.value, magnetPager.value.nullbr))
 const pagedSeedhubMagnetResources = computed(() => slicePan115Page(seedhubMagnetResources.value, magnetPager.value.seedhub))
 const pagedButailingMagnetResources = computed(() => slicePan115Page(butailingMagnetResources.value, magnetPager.value.butailing))
-const pagedEd2kResources = computed(() => slicePan115Page(ed2kResources.value, ed2kPager.value))
 
 const buildPan115MergeKey = (item = {}) => {
-  const sourceService = String(item?.source_service || 'nullbr').trim() || 'nullbr'
+  const sourceService = String(item?.source_service || 'pansou').trim() || 'pansou'
   const slug = String(item?.slug || '').trim()
   if (slug) return `${sourceService}|slug:${slug}`
   const shareLink = String(item?.share_link || '').trim()
@@ -1005,7 +752,6 @@ const getResourceSourceLabel = (service) => {
   if (service === 'pansou') return 'Pansou'
   if (service === 'hdhive') return 'HDHive'
   if (service === 'tg') return 'Telegram'
-  if (service === 'nullbr') return 'Nullbr'
   return service || '未知'
 }
 
@@ -1240,7 +986,6 @@ const fetchExternalIds = async () => {
 }
 
 const fetchPan115 = async (forceRefresh = false) => {
-  nullbrTried.value = true
   const cachedList = readPan115Cache()
   if (!forceRefresh && cachedList && cachedList.length > 0) {
     pan115Resources.value = cachedList
@@ -1256,13 +1001,13 @@ const fetchPan115 = async (forceRefresh = false) => {
 
   try {
     const { data } = await searchApi.getMoviePan115(route.params.id, 1, forceRefresh)
-    const nullbrList = Array.isArray(data.list) ? data.list : []
-    updatePan115Diagnostics('nullbr', data)
+    const pansouList = Array.isArray(data.list) ? data.list : []
+    updatePan115Diagnostics('pansou', data)
     const cachedPansouList = pan115Resources.value.filter((item) => item?.source_service === 'pansou')
     const cachedHdhiveList = pan115Resources.value.filter((item) => item?.source_service === 'hdhive')
     const cachedTgList = pan115Resources.value.filter((item) => item?.source_service === 'tg')
     const mergedList = mergePan115Resources(
-      mergePan115Resources(mergePan115Resources(nullbrList, cachedPansouList), cachedHdhiveList),
+      mergePan115Resources(mergePan115Resources(pansouList, cachedPansouList), cachedHdhiveList),
       cachedTgList
     )
     pan115Resources.value = mergedList
@@ -1360,15 +1105,13 @@ const handleFetchTgPan115 = async (forceRefresh = false) => {
 }
 
 const fetchMagnet = async () => {
-  nullbrMagnetTried.value = true
   magnetLoading.value = true
-  magnetPager.value.nullbr = 1
+  magnetPager.value.seedhub = 1
   try {
     const { data } = await searchApi.getMovieMagnet(route.params.id)
-    const nullbrList = Array.isArray(data.list) ? data.list : []
-    const markedNullbrList = nullbrList.map((item) => ({ ...item, source_service: item?.source_service || 'nullbr' }))
-    const existingSeedhub = magnetResources.value.filter((item) => item?.source_service === 'seedhub')
-    magnetResources.value = mergeMagnetResources(markedNullbrList, existingSeedhub)
+    const seedhubList = Array.isArray(data.list) ? data.list : []
+    const markedSeedhubList = seedhubList.map((item) => ({ ...item, source_service: item?.source_service || 'seedhub' }))
+    magnetResources.value = mergeMagnetResources(markedSeedhubList, magnetResources.value)
     if (data?.error) {
       ElMessage.warning(`磁力资源暂不可用：${data.error}`)
     }
@@ -1420,23 +1163,6 @@ const handleFetchButailingMagnet = async () => {
     ElMessage.error(error.response?.data?.detail || error.message || '不太灵磁链获取失败')
   } finally {
     butailingMagnetLoading.value = false
-  }
-}
-
-const fetchEd2k = async () => {
-  ed2kTried.value = true
-  ed2kLoading.value = true
-  ed2kPager.value = 1
-  try {
-    const { data } = await searchApi.getMovieEd2k(route.params.id)
-    ed2kResources.value = data.list || []
-    if (data?.error) {
-      ElMessage.warning(`ED2K 资源暂不可用：${data.error}`)
-    }
-  } catch (error) {
-    console.error('Failed to fetch ed2k:', error)
-  } finally {
-    ed2kLoading.value = false
   }
 }
 
@@ -1594,11 +1320,6 @@ const handleCopyMagnet = (magnet) => {
   ElMessage.success('已复制到剪贴板')
 }
 
-const handleCopyEd2k = (ed2k) => {
-  navigator.clipboard.writeText(ed2k)
-  ElMessage.success('已复制到剪贴板')
-}
-
 const handleSaveMagnet = async (item) => {
   if (!item.magnet) {
     ElMessage.warning('无效的磁力链接')
@@ -1623,32 +1344,7 @@ const handleSaveMagnet = async (item) => {
   }
 }
 
-const handleSaveEd2k = async (item) => {
-  if (!item.ed2k) {
-    ElMessage.warning('无效的ED2K链接')
-    return
-  }
-
-  let defaultFolderId = '0'
-  try {
-    const { data } = await pan115Api.getOfflineDefaultFolder()
-    defaultFolderId = data.folder_id || '0'
-  } catch (error) {
-    console.error('Failed to get offline default folder:', error)
-  }
-
-  const folderName = movie.value.title + ' (' + movie.value.release_date?.split('-')[0] + ')'
-
-  try {
-    await pan115Api.addOfflineTask(item.ed2k, defaultFolderId)
-    ElMessage.success(`已添加到离线下载任务，保存至: ${defaultFolderId === '0' ? '根目录' : folderName}`)
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '添加离线任务失败')
-  }
-}
-
 watch(magnetSourceTab, (tab) => {
-  if (tab === 'nullbr') magnetPager.value.nullbr = 1
   if (tab === 'seedhub') magnetPager.value.seedhub = 1
   if (tab === 'butailing') magnetPager.value.butailing = 1
   if (tab === 'seedhub' && seedhubMagnetResources.value.length === 0 && !seedhubMagnetLoading.value) {
@@ -1659,7 +1355,6 @@ watch(magnetSourceTab, (tab) => {
 })
 
 watch(pan115SourceTab, (tab) => {
-  if (tab === 'nullbr') pan115Pager.value.nullbr = 1
   if (tab === 'pansou') pan115Pager.value.pansou = 1
   if (tab === 'hdhive') pan115Pager.value.hdhive = 1
   if (tab === 'tg') pan115Pager.value.tg = 1
@@ -1676,25 +1371,22 @@ watch(() => route.params.id, () => {
   resetPan115Diagnostics()
   isInEmby.value = false
   isInFeiniu.value = false
-  pan115SourceTab.value = 'nullbr'
-  magnetSourceTab.value = 'nullbr'
+  pan115SourceTab.value = 'pansou'
+  magnetSourceTab.value = 'seedhub'
   pan115Resources.value = []
-  pan115Pager.value = { nullbr: 1, pansou: 1, hdhive: 1, tg: 1 }
-  magnetPager.value = { nullbr: 1, seedhub: 1 }
-  ed2kPager.value = 1
-  nullbrTried.value = false
+  pan115Pager.value = { pansou: 1, hdhive: 1, tg: 1 }
+  magnetPager.value = { seedhub: 1, butailing: 1 }
   pansouTried.value = false
   pansouLoading.value = false
   hdhiveTried.value = false
   hdhiveLoading.value = false
   tgTried.value = false
   tgLoading.value = false
-  nullbrMagnetTried.value = false
   seedhubMagnetTried.value = false
   seedhubMagnetLoading.value = false
+  butailingMagnetTried.value = false
+  butailingMagnetLoading.value = false
   magnetResources.value = []
-  ed2kTried.value = false
-  ed2kResources.value = []
   fetchMovie()
   checkSubscribed()
 })

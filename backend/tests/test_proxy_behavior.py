@@ -69,7 +69,9 @@ def test_proxy_manager_uses_socks_fallback_for_httpx_clients(monkeypatch) -> Non
         )
 
 
-def test_health_all_uses_configured_proxy_for_fixed_targets(client: TestClient, monkeypatch) -> None:
+def test_health_all_uses_configured_proxy_for_fixed_targets(
+    client: TestClient, monkeypatch
+) -> None:
     settings_api = importlib.import_module("app.api.settings")
     original_config = dict(proxy_manager.get_current_config())
     proxy_manager.update_proxy(
@@ -79,12 +81,14 @@ def test_health_all_uses_configured_proxy_for_fixed_targets(client: TestClient, 
         socks_proxy="socks5://127.0.0.1:7890",
     )
 
-    monkeypatch.setattr(settings_api.runtime_settings_service, "get_nullbr_base_url", lambda: "https://nullbr.example/api")
-    monkeypatch.setattr(settings_api.runtime_settings_service, "get_tmdb_base_url", lambda: "https://api.themoviedb.org/3")
+    monkeypatch.setattr(
+        settings_api.runtime_settings_service,
+        "get_tmdb_base_url",
+        lambda: "https://api.themoviedb.org/3",
+    )
 
     calls: list[dict[str, object]] = []
     status_map = {
-        "https://nullbr.example/api": 200,
         "https://hdhive.com/": 302,
         "https://api.themoviedb.org/3": 204,
         "https://api.telegram.org": 200,
@@ -105,12 +109,14 @@ def test_health_all_uses_configured_proxy_for_fixed_targets(client: TestClient, 
             return None
 
         async def get(self, url: str) -> DummyResponse:
-            calls.append({
-                "url": url,
-                "proxy": self.kwargs.get("proxy"),
-                "timeout": self.kwargs.get("timeout"),
-                "follow_redirects": self.kwargs.get("follow_redirects"),
-            })
+            calls.append(
+                {
+                    "url": url,
+                    "proxy": self.kwargs.get("proxy"),
+                    "timeout": self.kwargs.get("timeout"),
+                    "follow_redirects": self.kwargs.get("follow_redirects"),
+                }
+            )
             return DummyResponse(status_map[url])
 
     monkeypatch.setattr(settings_api.httpx, "AsyncClient", DummyAsyncClient)
@@ -125,18 +131,9 @@ def test_health_all_uses_configured_proxy_for_fixed_targets(client: TestClient, 
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["valid_count"] == 4
-        assert payload["total_count"] == 4
+        assert payload["valid_count"] == 3
+        assert payload["total_count"] == 3
         assert payload["all_valid"] is True
-        assert payload["services"]["nullbr"] == {
-            "status": "ok",
-            "valid": True,
-            "message": "连接正常 (HTTP 200)",
-            "target": "https://nullbr.example/api",
-            "applied_proxy": "socks5://127.0.0.1:7890",
-            "proxy_scheme": "socks5",
-            "status_code": 200,
-        }
         assert payload["services"]["hdhive"] == {
             "status": "ok",
             "valid": True,
@@ -164,14 +161,16 @@ def test_health_all_uses_configured_proxy_for_fixed_targets(client: TestClient, 
             "proxy_scheme": "socks5",
             "status_code": 200,
         }
-        assert len(calls) == 4
+        assert len(calls) == 3
         assert {call["proxy"] for call in calls} == {"socks5://127.0.0.1:7890"}
         assert {call["follow_redirects"] for call in calls} == {False}
     finally:
         _restore_proxy_config(original_config)
 
 
-def test_health_all_reports_missing_proxy_without_direct_connect(client: TestClient, monkeypatch) -> None:
+def test_health_all_reports_missing_proxy_without_direct_connect(
+    client: TestClient, monkeypatch
+) -> None:
     settings_api = importlib.import_module("app.api.settings")
     original_config = dict(proxy_manager.get_current_config())
     proxy_manager.update_proxy(
@@ -181,12 +180,17 @@ def test_health_all_reports_missing_proxy_without_direct_connect(client: TestCli
         socks_proxy="",
     )
 
-    monkeypatch.setattr(settings_api.runtime_settings_service, "get_nullbr_base_url", lambda: "https://nullbr.example/api")
-    monkeypatch.setattr(settings_api.runtime_settings_service, "get_tmdb_base_url", lambda: "https://api.themoviedb.org/3")
+    monkeypatch.setattr(
+        settings_api.runtime_settings_service,
+        "get_tmdb_base_url",
+        lambda: "https://api.themoviedb.org/3",
+    )
 
     class DummyAsyncClient:
         def __init__(self, **kwargs) -> None:
-            raise AssertionError("AsyncClient should not be created when no proxy is matched")
+            raise AssertionError(
+                "AsyncClient should not be created when no proxy is matched"
+            )
 
     monkeypatch.setattr(settings_api.httpx, "AsyncClient", DummyAsyncClient)
 
@@ -201,9 +205,9 @@ def test_health_all_reports_missing_proxy_without_direct_connect(client: TestCli
         assert response.status_code == 200
         payload = response.json()
         assert payload["valid_count"] == 0
-        assert payload["total_count"] == 4
+        assert payload["total_count"] == 3
         assert payload["all_valid"] is False
-        for service_key in ("nullbr", "hdhive", "tmdb", "tg"):
+        for service_key in ("hdhive", "tmdb", "tg"):
             assert payload["services"][service_key]["status"] == "error"
             assert payload["services"][service_key]["valid"] is False
             assert payload["services"][service_key]["message"] == "未命中代理"

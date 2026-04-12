@@ -13,7 +13,6 @@ from app.core.database import async_session_maker
 from app.models.models import MediaType, Subscription
 from app.services.douban_explore_service import resolve_douban_explore_item
 from app.services.hdhive_service import hdhive_service
-from app.services.nullbr_service import nullbr_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pan115_service import pan115_service
 from app.services.pansou_service import pansou_service
@@ -72,11 +71,19 @@ class ExploreActionQueueService:
         if short_match:
             return short_match.group(1)
 
-        query_match = re.search(r"[?&](?:password|pwd|receive_code|pickcode|code)=([^&#]+)", value, re.IGNORECASE)
+        query_match = re.search(
+            r"[?&](?:password|pwd|receive_code|pickcode|code)=([^&#]+)",
+            value,
+            re.IGNORECASE,
+        )
         if query_match:
             return query_match.group(1).strip()
 
-        text_match = re.search(r"(?:提取码|提取碼|访问码|訪問碼|密码|密碼)\s*[:：=]?\s*([A-Za-z0-9]{4})", value, re.IGNORECASE)
+        text_match = re.search(
+            r"(?:提取码|提取碼|访问码|訪問碼|密码|密碼)\s*[:：=]?\s*([A-Za-z0-9]{4})",
+            value,
+            re.IGNORECASE,
+        )
         if text_match:
             return text_match.group(1).strip()
 
@@ -94,7 +101,14 @@ class ExploreActionQueueService:
     def _extract_share_link(row: Any) -> str:
         if not isinstance(row, dict):
             return ""
-        for key in ("share_link", "share_url", "pan115_share_link", "url", "link", "resource_url"):
+        for key in (
+            "share_link",
+            "share_url",
+            "pan115_share_link",
+            "url",
+            "link",
+            "resource_url",
+        ):
             value = row.get(key)
             if isinstance(value, str) and value.strip():
                 raw = value.strip()
@@ -114,10 +128,14 @@ class ExploreActionQueueService:
             for item in node:
                 if isinstance(item, dict):
                     rows.append(item)
-                rows.extend(ExploreActionQueueService._extract_pansou_rows(item, depth + 1))
+                rows.extend(
+                    ExploreActionQueueService._extract_pansou_rows(item, depth + 1)
+                )
         elif isinstance(node, dict):
             for value in node.values():
-                rows.extend(ExploreActionQueueService._extract_pansou_rows(value, depth + 1))
+                rows.extend(
+                    ExploreActionQueueService._extract_pansou_rows(value, depth + 1)
+                )
         return rows
 
     @staticmethod
@@ -131,7 +149,9 @@ class ExploreActionQueueService:
 
     @staticmethod
     def _build_item_key_from_payload(payload: dict[str, Any]) -> str:
-        media_type = ExploreActionQueueService._normalize_media_type(payload.get("media_type"))
+        media_type = ExploreActionQueueService._normalize_media_type(
+            payload.get("media_type")
+        )
         tmdb_id = payload.get("tmdb_id")
         try:
             parsed_tmdb_id = int(tmdb_id)
@@ -146,7 +166,9 @@ class ExploreActionQueueService:
         return f"unknown:{media_type}:{uuid4().hex[:8]}"
 
     @staticmethod
-    def _build_item_key(media_type: str, tmdb_id: int | None, douban_id: str = "") -> str:
+    def _build_item_key(
+        media_type: str, tmdb_id: int | None, douban_id: str = ""
+    ) -> str:
         normalized_type = ExploreActionQueueService._normalize_media_type(media_type)
         if tmdb_id and int(tmdb_id) > 0:
             return f"tmdb:{normalized_type}:{int(tmdb_id)}"
@@ -167,7 +189,9 @@ class ExploreActionQueueService:
             "message": str(task.get("message") or ""),
             "error": str(task.get("error") or ""),
             "item_title": str(payload.get("title") or payload.get("name") or ""),
-            "media_type": ExploreActionQueueService._normalize_media_type(payload.get("media_type")),
+            "media_type": ExploreActionQueueService._normalize_media_type(
+                payload.get("media_type")
+            ),
             "tmdb_id": result.get("tmdb_id") or payload.get("tmdb_id"),
             "douban_id": str(payload.get("douban_id") or payload.get("id") or ""),
             "created_at": task.get("created_at"),
@@ -177,7 +201,9 @@ class ExploreActionQueueService:
         }
 
     @staticmethod
-    def _build_task_log_extra(task: dict[str, Any], extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _build_task_log_extra(
+        task: dict[str, Any], extra: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
         result = task.get("result") if isinstance(task.get("result"), dict) else {}
         merged: dict[str, Any] = {
@@ -187,15 +213,22 @@ class ExploreActionQueueService:
             "intent": str(task.get("intent") or ""),
             "item_key": str(task.get("item_key") or ""),
             "item_title": str(payload.get("title") or payload.get("name") or ""),
-            "media_type": ExploreActionQueueService._normalize_media_type(payload.get("media_type")),
+            "media_type": ExploreActionQueueService._normalize_media_type(
+                payload.get("media_type")
+            ),
             "tmdb_id": result.get("tmdb_id") or payload.get("tmdb_id"),
             "douban_id": str(payload.get("douban_id") or payload.get("id") or ""),
             "error": str(task.get("error") or ""),
         }
-        if isinstance(result.get("selected_source"), str) and str(result.get("selected_source")).strip():
+        if (
+            isinstance(result.get("selected_source"), str)
+            and str(result.get("selected_source")).strip()
+        ):
             merged["selected_source"] = str(result.get("selected_source")).strip()
         if isinstance(result.get("source_order"), list):
-            merged["source_order"] = [str(item) for item in result.get("source_order")[:10]]
+            merged["source_order"] = [
+                str(item) for item in result.get("source_order")[:10]
+            ]
         if isinstance(result.get("attempts"), list):
             merged["attempts"] = result.get("attempts")[:20]
         save_mode = str(result.get("save_mode") or "").strip()
@@ -239,22 +272,35 @@ class ExploreActionQueueService:
 
     async def _ensure_workers(self) -> None:
         async with self._lock:
-            if self._subscribe_worker_task is None or self._subscribe_worker_task.done():
-                self._subscribe_worker_task = asyncio.create_task(self._subscribe_worker())
+            if (
+                self._subscribe_worker_task is None
+                or self._subscribe_worker_task.done()
+            ):
+                self._subscribe_worker_task = asyncio.create_task(
+                    self._subscribe_worker()
+                )
             if self._save_worker_task is None or self._save_worker_task.done():
                 self._save_worker_task = asyncio.create_task(self._save_worker())
 
     async def _prune_locked(self) -> None:
         now = time.time()
-        expired_ids = [task_id for task_id, task in self._tasks.items() if float(task.get("expires_at") or 0) <= now]
+        expired_ids = [
+            task_id
+            for task_id, task in self._tasks.items()
+            if float(task.get("expires_at") or 0) <= now
+        ]
         if not expired_ids:
             return
 
         for task_id in expired_ids:
             self._tasks.pop(task_id, None)
 
-        self._subscribe_queue = [task_id for task_id in self._subscribe_queue if task_id in self._tasks]
-        self._save_queue = [task_id for task_id in self._save_queue if task_id in self._tasks]
+        self._subscribe_queue = [
+            task_id for task_id in self._subscribe_queue if task_id in self._tasks
+        ]
+        self._save_queue = [
+            task_id for task_id in self._save_queue if task_id in self._tasks
+        ]
 
         self._subscribe_active_by_key = {
             key: task_id
@@ -267,9 +313,15 @@ class ExploreActionQueueService:
             if task_id in self._tasks
         }
 
-    async def enqueue_subscribe(self, payload: dict[str, Any], intent: str) -> dict[str, Any]:
+    async def enqueue_subscribe(
+        self, payload: dict[str, Any], intent: str
+    ) -> dict[str, Any]:
         await self._ensure_workers()
-        normalized_intent = "unsubscribe" if str(intent or "").strip().lower() == "unsubscribe" else "subscribe"
+        normalized_intent = (
+            "unsubscribe"
+            if str(intent or "").strip().lower() == "unsubscribe"
+            else "subscribe"
+        )
         item_key = self._build_item_key_from_payload(payload)
         now = self._now_iso()
         queue_size = 0
@@ -417,7 +469,10 @@ class ExploreActionQueueService:
             for task in self._tasks.values():
                 if task.get("status") not in {"queued", "running"}:
                     continue
-                if normalized_type != "all" and task.get("queue_type") != normalized_type:
+                if (
+                    normalized_type != "all"
+                    and task.get("queue_type") != normalized_type
+                ):
                     continue
                 rows.append(self._serialize_task(task))
             rows.sort(key=lambda item: str(item.get("created_at") or ""))
@@ -459,9 +514,15 @@ class ExploreActionQueueService:
             task["expires_at"] = time.time() + self._task_ttl_seconds
 
             item_key = str(task.get("item_key") or "")
-            if task.get("queue_type") == "subscribe" and self._subscribe_active_by_key.get(item_key) == task_id:
+            if (
+                task.get("queue_type") == "subscribe"
+                and self._subscribe_active_by_key.get(item_key) == task_id
+            ):
                 self._subscribe_active_by_key.pop(item_key, None)
-            if task.get("queue_type") == "save" and self._save_active_by_key.get(item_key) == task_id:
+            if (
+                task.get("queue_type") == "save"
+                and self._save_active_by_key.get(item_key) == task_id
+            ):
                 self._save_active_by_key.pop(item_key, None)
             return dict(task)
 
@@ -510,7 +571,9 @@ class ExploreActionQueueService:
                             finished_task,
                             stage="finish",
                             status="success",
-                            message=str(finished_task.get("message") or "订阅任务执行完成"),
+                            message=str(
+                                finished_task.get("message") or "订阅任务执行完成"
+                            ),
                         )
                 except Exception as exc:
                     finished_task = await self._mark_finished(
@@ -562,7 +625,9 @@ class ExploreActionQueueService:
                             finished_task,
                             stage="finish",
                             status="success",
-                            message=str(finished_task.get("message") or "转存任务执行完成"),
+                            message=str(
+                                finished_task.get("message") or "转存任务执行完成"
+                            ),
                         )
                 except Exception as exc:
                     finished_task = await self._mark_finished(
@@ -601,11 +666,17 @@ class ExploreActionQueueService:
             return {"media_type": media_type, "tmdb_id": tmdb_id, "douban_id": ""}
 
         title = str(payload.get("title") or payload.get("name") or "").strip()
-        original_title = str(payload.get("original_title") or payload.get("original_name") or "").strip()
+        original_title = str(
+            payload.get("original_title") or payload.get("original_name") or ""
+        ).strip()
         aliases_payload = payload.get("aliases")
         aliases: list[str] = []
         if isinstance(aliases_payload, list):
-            aliases = [str(item or "").strip() for item in aliases_payload if str(item or "").strip()]
+            aliases = [
+                str(item or "").strip()
+                for item in aliases_payload
+                if str(item or "").strip()
+            ]
         elif isinstance(aliases_payload, str) and aliases_payload.strip():
             aliases = [aliases_payload.strip()]
 
@@ -633,19 +704,37 @@ class ExploreActionQueueService:
                 raise ValueError("未匹配到 TMDB 条目，请稍后重试")
             raise ValueError("未能匹配到有效 TMDB 条目")
 
-        return {"media_type": self._normalize_media_type(resolve_result.get("media_type")), "tmdb_id": resolved_tmdb_id, "douban_id": douban_id}
+        return {
+            "media_type": self._normalize_media_type(resolve_result.get("media_type")),
+            "tmdb_id": resolved_tmdb_id,
+            "douban_id": douban_id,
+        }
 
     async def _execute_subscribe(self, task: dict[str, Any]) -> dict[str, Any]:
         payload = dict(task.get("payload") or {})
-        intent = "unsubscribe" if str(task.get("intent") or "").strip().lower() == "unsubscribe" else "subscribe"
+        intent = (
+            "unsubscribe"
+            if str(task.get("intent") or "").strip().lower() == "unsubscribe"
+            else "subscribe"
+        )
         route_info = await self._resolve_route(payload)
         media_type = route_info["media_type"]
         tmdb_id = int(route_info["tmdb_id"])
-        douban_id = str(route_info.get("douban_id") or payload.get("douban_id") or payload.get("id") or "").strip()
+        douban_id = str(
+            route_info.get("douban_id")
+            or payload.get("douban_id")
+            or payload.get("id")
+            or ""
+        ).strip()
 
         media_enum = MediaType.TV if media_type == "tv" else MediaType.MOVIE
         async with async_session_maker() as db:
-            conditions = [and_(Subscription.tmdb_id == tmdb_id, Subscription.media_type == media_enum)]
+            conditions = [
+                and_(
+                    Subscription.tmdb_id == tmdb_id,
+                    Subscription.media_type == media_enum,
+                )
+            ]
             if douban_id:
                 conditions.append(Subscription.douban_id == douban_id)
             query = select(Subscription).where(or_(*conditions)).limit(1)
@@ -661,11 +750,23 @@ class ExploreActionQueueService:
                         "message": "该影视已在订阅列表中",
                     }
 
-                title = str(payload.get("title") or payload.get("name") or "").strip() or f"TMDB {tmdb_id}"
-                overview = str(payload.get("overview") or payload.get("intro") or "").strip()
-                poster_path = str(payload.get("poster_path") or payload.get("poster_url") or "").strip() or None
+                title = (
+                    str(payload.get("title") or payload.get("name") or "").strip()
+                    or f"TMDB {tmdb_id}"
+                )
+                overview = str(
+                    payload.get("overview") or payload.get("intro") or ""
+                ).strip()
+                poster_path = (
+                    str(
+                        payload.get("poster_path") or payload.get("poster_url") or ""
+                    ).strip()
+                    or None
+                )
                 year = self._normalize_year(payload.get("year")) or None
-                rating = self._normalize_rating(payload.get("rating") or payload.get("vote_average"))
+                rating = self._normalize_rating(
+                    payload.get("rating") or payload.get("vote_average")
+                )
 
                 created = Subscription(
                     douban_id=douban_id or None,
@@ -724,7 +825,7 @@ class ExploreActionQueueService:
     @staticmethod
     def _resolve_save_source_order() -> list[str]:
         priority = runtime_settings_service.get_subscription_resource_priority()
-        allowed = {"nullbr", "hdhive", "pansou", "tg"}
+        allowed = {"hdhive", "pansou", "tg"}
         source_order: list[str] = []
         seen: set[str] = set()
         for item in priority:
@@ -746,12 +847,18 @@ class ExploreActionQueueService:
     @staticmethod
     def _build_keyword_candidates(payload: dict[str, Any], tmdb_id: int) -> list[str]:
         title = str(payload.get("title") or payload.get("name") or "").strip()
-        original_title = str(payload.get("original_title") or payload.get("original_name") or "").strip()
+        original_title = str(
+            payload.get("original_title") or payload.get("original_name") or ""
+        ).strip()
         year = ExploreActionQueueService._normalize_year(payload.get("year"))
         aliases_payload = payload.get("aliases")
         aliases: list[str] = []
         if isinstance(aliases_payload, list):
-            aliases = [str(item or "").strip() for item in aliases_payload if str(item or "").strip()]
+            aliases = [
+                str(item or "").strip()
+                for item in aliases_payload
+                if str(item or "").strip()
+            ]
         elif isinstance(aliases_payload, str) and aliases_payload.strip():
             aliases = [aliases_payload.strip()]
 
@@ -804,7 +911,9 @@ class ExploreActionQueueService:
             return "暂未找到可转存资源"
         return f"暂未找到可转存资源（{'; '.join(parts)}）"
 
-    async def _find_pan115_share_link(self, route_info: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    async def _find_pan115_share_link(
+        self, route_info: dict[str, Any], payload: dict[str, Any]
+    ) -> dict[str, Any]:
         media_type = route_info["media_type"]
         tmdb_id = int(route_info["tmdb_id"])
         source_order = self._resolve_save_source_order()
@@ -812,29 +921,6 @@ class ExploreActionQueueService:
         attempts: list[dict[str, Any]] = []
 
         for source in source_order:
-            if source == "nullbr":
-                try:
-                    if media_type == "tv":
-                        nullbr_payload = await asyncio.to_thread(nullbr_service.get_tv_pan115, tmdb_id, 1)
-                    else:
-                        nullbr_payload = await asyncio.to_thread(nullbr_service.get_movie_pan115, tmdb_id, 1)
-                    nullbr_list = list(nullbr_payload.get("list") or []) if isinstance(nullbr_payload, dict) else []
-                    nullbr_list = self._sort_by_pref(nullbr_list)
-                    for row in nullbr_list:
-                        link = self._extract_share_link(row)
-                        if link:
-                            attempts.append({"source": "nullbr", "status": "success", "via": "tmdb", "count": len(nullbr_list)})
-                            return {
-                                "share_link": link,
-                                "selected_source": "nullbr",
-                                "source_order": source_order,
-                                "attempts": attempts,
-                            }
-                    attempts.append({"source": "nullbr", "status": "empty", "via": "tmdb", "count": len(nullbr_list)})
-                except Exception as exc:
-                    attempts.append({"source": "nullbr", "status": "failed", "error": str(exc)[:300]})
-                continue
-
             if source == "hdhive":
                 source_has_result = False
                 if tmdb_id > 0:
@@ -850,20 +936,43 @@ class ExploreActionQueueService:
                         for row in rows:
                             link = self._extract_share_link(row)
                             if link:
-                                attempts.append({"source": "hdhive", "status": "success", "via": "tmdb", "count": len(rows)})
+                                attempts.append(
+                                    {
+                                        "source": "hdhive",
+                                        "status": "success",
+                                        "via": "tmdb",
+                                        "count": len(rows),
+                                    }
+                                )
                                 return {
                                     "share_link": link,
                                     "selected_source": "hdhive",
                                     "source_order": source_order,
                                     "attempts": attempts,
                                 }
-                        attempts.append({"source": "hdhive", "status": "empty", "via": "tmdb", "count": len(rows)})
+                        attempts.append(
+                            {
+                                "source": "hdhive",
+                                "status": "empty",
+                                "via": "tmdb",
+                                "count": len(rows),
+                            }
+                        )
                     except Exception as exc:
-                        attempts.append({"source": "hdhive", "status": "failed", "via": "tmdb", "error": str(exc)[:300]})
+                        attempts.append(
+                            {
+                                "source": "hdhive",
+                                "status": "failed",
+                                "via": "tmdb",
+                                "error": str(exc)[:300],
+                            }
+                        )
 
                 for keyword in keyword_candidates:
                     try:
-                        rows = await hdhive_service.get_pan115_by_keyword(keyword, media_type=media_type)
+                        rows = await hdhive_service.get_pan115_by_keyword(
+                            keyword, media_type=media_type
+                        )
                         rows = rows if isinstance(rows, list) else []
                         if runtime_settings_service.get_subscription_hdhive_prefer_free():
                             rows = hdhive_service.sort_free_first(rows)
@@ -872,7 +981,13 @@ class ExploreActionQueueService:
                             link = self._extract_share_link(row)
                             if link:
                                 attempts.append(
-                                    {"source": "hdhive", "status": "success", "via": "keyword", "keyword": keyword, "count": len(rows)}
+                                    {
+                                        "source": "hdhive",
+                                        "status": "success",
+                                        "via": "keyword",
+                                        "keyword": keyword,
+                                        "count": len(rows),
+                                    }
                                 )
                                 return {
                                     "share_link": link,
@@ -880,51 +995,128 @@ class ExploreActionQueueService:
                                     "source_order": source_order,
                                     "attempts": attempts,
                                 }
-                        attempts.append({"source": "hdhive", "status": "empty", "via": "keyword", "keyword": keyword, "count": len(rows)})
+                        attempts.append(
+                            {
+                                "source": "hdhive",
+                                "status": "empty",
+                                "via": "keyword",
+                                "keyword": keyword,
+                                "count": len(rows),
+                            }
+                        )
                     except Exception as exc:
-                        attempts.append({"source": "hdhive", "status": "failed", "via": "keyword", "keyword": keyword, "error": str(exc)[:300]})
+                        attempts.append(
+                            {
+                                "source": "hdhive",
+                                "status": "failed",
+                                "via": "keyword",
+                                "keyword": keyword,
+                                "error": str(exc)[:300],
+                            }
+                        )
                     source_has_result = True
                 if not source_has_result:
-                    attempts.append({"source": "hdhive", "status": "empty", "via": "keyword", "count": 0})
+                    attempts.append(
+                        {
+                            "source": "hdhive",
+                            "status": "empty",
+                            "via": "keyword",
+                            "count": 0,
+                        }
+                    )
                 continue
 
             if source == "pansou":
-                pansou_service.set_base_url(runtime_settings_service.get_pansou_base_url())
+                pansou_service.set_base_url(
+                    runtime_settings_service.get_pansou_base_url()
+                )
                 for keyword in keyword_candidates:
                     try:
-                        pansou_payload = await pansou_service.search_115(keyword, res="results")
-                        link = self._extract_share_link_from_pansou_payload(pansou_payload)
+                        pansou_payload = await pansou_service.search_115(
+                            keyword, res="results"
+                        )
+                        link = self._extract_share_link_from_pansou_payload(
+                            pansou_payload
+                        )
                         if link:
-                            attempts.append({"source": "pansou", "status": "success", "via": "keyword", "keyword": keyword})
+                            attempts.append(
+                                {
+                                    "source": "pansou",
+                                    "status": "success",
+                                    "via": "keyword",
+                                    "keyword": keyword,
+                                }
+                            )
                             return {
                                 "share_link": link,
                                 "selected_source": "pansou",
                                 "source_order": source_order,
                                 "attempts": attempts,
                             }
-                        attempts.append({"source": "pansou", "status": "empty", "via": "keyword", "keyword": keyword})
+                        attempts.append(
+                            {
+                                "source": "pansou",
+                                "status": "empty",
+                                "via": "keyword",
+                                "keyword": keyword,
+                            }
+                        )
                     except Exception as exc:
-                        attempts.append({"source": "pansou", "status": "failed", "via": "keyword", "keyword": keyword, "error": str(exc)[:300]})
+                        attempts.append(
+                            {
+                                "source": "pansou",
+                                "status": "failed",
+                                "via": "keyword",
+                                "keyword": keyword,
+                                "error": str(exc)[:300],
+                            }
+                        )
                 continue
 
             if source == "tg":
                 for keyword in keyword_candidates:
                     try:
-                        rows = await tg_service.search_115_by_keyword(keyword, media_type=media_type)
+                        rows = await tg_service.search_115_by_keyword(
+                            keyword, media_type=media_type
+                        )
                         rows = rows if isinstance(rows, list) else []
                         for row in rows:
                             link = self._extract_share_link(row)
                             if link:
-                                attempts.append({"source": "tg", "status": "success", "via": "keyword", "keyword": keyword, "count": len(rows)})
+                                attempts.append(
+                                    {
+                                        "source": "tg",
+                                        "status": "success",
+                                        "via": "keyword",
+                                        "keyword": keyword,
+                                        "count": len(rows),
+                                    }
+                                )
                                 return {
                                     "share_link": link,
                                     "selected_source": "tg",
                                     "source_order": source_order,
                                     "attempts": attempts,
                                 }
-                        attempts.append({"source": "tg", "status": "empty", "via": "keyword", "keyword": keyword, "count": len(rows)})
+                        attempts.append(
+                            {
+                                "source": "tg",
+                                "status": "empty",
+                                "via": "keyword",
+                                "keyword": keyword,
+                                "count": len(rows),
+                            }
+                        )
                     except Exception as exc:
-                        attempts.append({"source": "tg", "status": "failed", "via": "keyword", "keyword": keyword, "error": str(exc)[:300]})
+                        attempts.append(
+                            {
+                                "source": "tg",
+                                "status": "failed",
+                                "via": "keyword",
+                                "keyword": keyword,
+                                "error": str(exc)[:300],
+                            }
+                        )
                 continue
 
         return {
@@ -943,7 +1135,11 @@ class ExploreActionQueueService:
         search_result = await self._find_pan115_share_link(route_info, payload)
         share_link = str(search_result.get("share_link") or "").strip()
         if not share_link:
-            raise ValueError(self._build_attempt_error_summary(list(search_result.get("attempts") or [])))
+            raise ValueError(
+                self._build_attempt_error_summary(
+                    list(search_result.get("attempts") or [])
+                )
+            )
 
         folder = runtime_settings_service.get_pan115_default_folder()
         folder_id = str(folder.get("folder_id") or "0").strip() or "0"
@@ -982,7 +1178,9 @@ class ExploreActionQueueService:
             "attempts": list(search_result.get("attempts") or []),
             "save_mode": "direct",
             "target_parent_id": folder_id,
-            "message": str(result.get("message") or "已提交转存任务") if isinstance(result, dict) else "已提交转存任务",
+            "message": str(result.get("message") or "已提交转存任务")
+            if isinstance(result, dict)
+            else "已提交转存任务",
         }
 
 

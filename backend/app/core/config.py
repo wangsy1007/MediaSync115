@@ -15,10 +15,6 @@ class Settings(BaseSettings):
     # SOCKS_PROXY can be used for services that specifically need SOCKS proxy
     SOCKS_PROXY: Optional[str] = None
 
-    NULLBR_APP_ID: str = "ZWGOwxIrh"
-    NULLBR_API_KEY: str = "rIxTz7XHDEHBcP9lGpeVAgs0I7Evg6wc"
-    NULLBR_BASE_URL: str = "https://api.nullbr.com/"
-
     TMDB_API_KEY: Optional[str] = None
     TMDB_BASE_URL: str = "https://api.themoviedb.org/3"
     TMDB_IMAGE_BASE_URL: str = "https://image.tmdb.org/t/p/w500"

@@ -4,7 +4,6 @@
       <h2>订阅详细日志</h2>
       <div class="filters">
         <el-select v-model="filters.channel" clearable placeholder="渠道" class="filter-item filter-item-channel">
-          <el-option label="Nullbr" value="nullbr" />
           <el-option label="HDHive" value="hdhive" />
           <el-option label="Pansou" value="pansou" />
           <el-option label="Telegram" value="tg" />
@@ -73,8 +72,6 @@ const stepLabelMap = {
   subscription_failed: '订阅处理失败',
   fetch_resources: '资源抓取完成',
   fetch_skip: '跳过抓取',
-  fetch_nullbr_start: 'Nullbr 抓取开始',
-  fetch_nullbr_done: 'Nullbr 抓取结束',
   fetch_hdhive_tmdb_start: 'HDHive TMDB 抓取开始',
   fetch_hdhive_tmdb_done: 'HDHive TMDB 抓取结束',
   fetch_hdhive_tmdb_failed: 'HDHive TMDB 抓取失败',

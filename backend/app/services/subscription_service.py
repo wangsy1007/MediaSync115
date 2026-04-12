@@ -18,12 +18,14 @@ from app.models.models import (
     SubscriptionExecutionLog,
     SubscriptionStepLog,
 )
-from app.api.search import _normalize_pansou_pan115_list, _search_pansou_pan115_resources
+from app.api.search import (
+    _normalize_pansou_pan115_list,
+    _search_pansou_pan115_resources,
+)
 from app.services.butailing_service import butailing_service
 from app.services.operation_log_service import operation_log_service
 from app.services.emby_service import emby_service
 from app.services.hdhive_service import hdhive_service
-from app.services.nullbr_service import nullbr_service
 from app.services.pan115_service import Pan115Service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
@@ -46,11 +48,16 @@ class SubscriptionService:
         run_id = uuid4().hex
         started_at = datetime.utcnow()
         await operation_log_service.log_background_event(
-            source_type="background_task", module="subscriptions",
-            action="subscription.check.start", status="info",
+            source_type="background_task",
+            module="subscriptions",
+            action="subscription.check.start",
+            status="info",
             message=f"订阅检查任务启动（频道：{normalized_channel}）",
             trace_id=run_id,
-            extra={"channel": normalized_channel, "force_auto_download": force_auto_download},
+            extra={
+                "channel": normalized_channel,
+                "force_auto_download": force_auto_download,
+            },
         )
 
         result = {
@@ -198,7 +205,11 @@ class SubscriptionService:
                         status="success",
                         message=f"[{sub_title}] 订阅已自动清理（转存完成或已入库）",
                         trace_id=run_id,
-                        extra={"subscription_id": sub_id, "title": sub_title, "channel": normalized_channel},
+                        extra={
+                            "subscription_id": sub_id,
+                            "title": sub_title,
+                            "channel": normalized_channel,
+                        },
                     )
                     await db.commit()
                     continue
@@ -220,7 +231,9 @@ class SubscriptionService:
                         step=str(trace.get("step") or "fetch_trace"),
                         status=str(trace.get("status") or "info"),
                         message=str(trace.get("message") or ""),
-                        payload=trace.get("payload") if isinstance(trace.get("payload"), dict) else None,
+                        payload=trace.get("payload")
+                        if isinstance(trace.get("payload"), dict)
+                        else None,
                     )
                 await self._create_step_log(
                     db,
@@ -233,23 +246,40 @@ class SubscriptionService:
                     message=f"资源抓取完成，候选 {len(resources)} 条",
                 )
                 # 为每部影视记录资源抓取汇总
-                fetch_sources_tried = [t.get("payload", {}).get("source", t.get("step", "")) for t in fetch_trace if t.get("step") == "fetch_source_selected"]
+                fetch_sources_tried = [
+                    t.get("payload", {}).get("source", t.get("step", ""))
+                    for t in fetch_trace
+                    if t.get("step") == "fetch_source_selected"
+                ]
                 await operation_log_service.log_background_event(
-                    source_type="background_task", module="subscriptions",
-                    action="subscription.item.fetch_done", status="success" if resources else "warning",
+                    source_type="background_task",
+                    module="subscriptions",
+                    action="subscription.item.fetch_done",
+                    status="success" if resources else "warning",
                     message=(
                         f"[{sub_title}] 资源抓取完成：候选 {len(resources)} 条"
-                        + (f"（命中来源：{', '.join(fetch_sources_tried)}）" if fetch_sources_tried else "（无命中来源）")
+                        + (
+                            f"（命中来源：{', '.join(fetch_sources_tried)}）"
+                            if fetch_sources_tried
+                            else "（无命中来源）"
+                        )
                     ),
                     trace_id=run_id,
-                    extra={"subscription_id": sub_id, "title": sub_title, "resource_count": len(resources), "sources_hit": fetch_sources_tried},
+                    extra={
+                        "subscription_id": sub_id,
+                        "title": sub_title,
+                        "resource_count": len(resources),
+                        "sources_hit": fetch_sources_tried,
+                    },
                 )
                 store_stats = await self._store_new_resources(db, sub_id, resources)
                 created_records = store_stats["created_records"]
                 duplicate_urls = store_stats["duplicate_urls"]
                 result["new_resource_count"] += len(created_records)
                 result["resource_checked_count"] += int(store_stats["checked_count"])
-                result["resource_duplicate_count"] += int(store_stats["duplicate_count"])
+                result["resource_duplicate_count"] += int(
+                    store_stats["duplicate_count"]
+                )
                 await self._create_step_log(
                     db,
                     run_id=run_id,
@@ -271,7 +301,8 @@ class SubscriptionService:
                     },
                 )
                 await operation_log_service.log_background_event(
-                    source_type="background_task", module="subscriptions",
+                    source_type="background_task",
+                    module="subscriptions",
                     action="subscription.item.store_done",
                     status="success" if created_records else "info",
                     message=(
@@ -279,7 +310,12 @@ class SubscriptionService:
                         f"重复 {store_stats['duplicate_count']} 条，无效 {store_stats['invalid_count']} 条"
                     ),
                     trace_id=run_id,
-                    extra={"subscription_id": sub_id, "title": sub_title, "new": len(created_records), "dup": store_stats["duplicate_count"]},
+                    extra={
+                        "subscription_id": sub_id,
+                        "title": sub_title,
+                        "new": len(created_records),
+                        "dup": store_stats["duplicate_count"],
+                    },
                 )
 
                 should_auto_download = force_auto_download or bool(sub.auto_download)
@@ -296,8 +332,12 @@ class SubscriptionService:
                             sub_id,
                             duplicate_urls,
                         )
-                        retry_records = self._merge_records(retry_records, duplicate_retry_records)
-                    retry_records = self._exclude_new_records(retry_records, created_records)
+                        retry_records = self._merge_records(
+                            retry_records, duplicate_retry_records
+                        )
+                    retry_records = self._exclude_new_records(
+                        retry_records, created_records
+                    )
 
                     if created_records:
                         await self._create_step_log(
@@ -311,11 +351,17 @@ class SubscriptionService:
                             message=f"开始自动转存新资源 {len(created_records)} 条",
                         )
                         await operation_log_service.log_background_event(
-                            source_type="background_task", module="subscriptions",
-                            action="subscription.item.transfer_new_start", status="info",
+                            source_type="background_task",
+                            module="subscriptions",
+                            action="subscription.item.transfer_new_start",
+                            status="info",
                             message=f"[{sub_title}] 开始自动转存新资源 {len(created_records)} 条",
                             trace_id=run_id,
-                            extra={"subscription_id": sub_id, "title": sub_title, "count": len(created_records)},
+                            extra={
+                                "subscription_id": sub_id,
+                                "title": sub_title,
+                                "count": len(created_records),
+                            },
                         )
                         new_auto_stats = await self._auto_save_resources(
                             db,
@@ -327,7 +373,9 @@ class SubscriptionService:
                             tv_missing_snapshot=tv_missing_snapshot,
                         )
                         sub_saved_count += int(new_auto_stats.get("saved") or 0)
-                        sub_failed_transfer_count += int(new_auto_stats.get("failed") or 0)
+                        sub_failed_transfer_count += int(
+                            new_auto_stats.get("failed") or 0
+                        )
                         result["auto_saved_count"] += new_auto_stats["saved"]
                         result["auto_failed_count"] += new_auto_stats["failed"]
                         result["auto_new_saved_count"] += new_auto_stats["saved"]
@@ -341,19 +389,29 @@ class SubscriptionService:
                             subscription_id=sub_id,
                             subscription_title=sub_title,
                             step="auto_transfer_new_done",
-                            status="success" if new_auto_stats["failed"] == 0 else "partial",
+                            status="success"
+                            if new_auto_stats["failed"] == 0
+                            else "partial",
                             message=(
                                 f"新资源转存完成，成功 {new_auto_stats['saved']} 条，"
                                 f"失败 {new_auto_stats['failed']} 条"
                             ),
                         )
                         await operation_log_service.log_background_event(
-                            source_type="background_task", module="subscriptions",
+                            source_type="background_task",
+                            module="subscriptions",
                             action="subscription.item.transfer_new_done",
-                            status="success" if new_auto_stats["failed"] == 0 else "warning",
+                            status="success"
+                            if new_auto_stats["failed"] == 0
+                            else "warning",
                             message=f"[{sub_title}] 新资源转存完成：成功 {new_auto_stats['saved']} 条，失败 {new_auto_stats['failed']} 条",
                             trace_id=run_id,
-                            extra={"subscription_id": sub_id, "title": sub_title, "saved": new_auto_stats["saved"], "failed": new_auto_stats["failed"]},
+                            extra={
+                                "subscription_id": sub_id,
+                                "title": sub_title,
+                                "saved": new_auto_stats["saved"],
+                                "failed": new_auto_stats["failed"],
+                            },
                         )
                         if new_auto_stats.get("subscription_completed"):
                             cleanup_after_auto = new_auto_stats
@@ -370,11 +428,17 @@ class SubscriptionService:
                             message=f"开始重试历史记录 {len(retry_records)} 条",
                         )
                         await operation_log_service.log_background_event(
-                            source_type="background_task", module="subscriptions",
-                            action="subscription.item.transfer_retry_start", status="info",
+                            source_type="background_task",
+                            module="subscriptions",
+                            action="subscription.item.transfer_retry_start",
+                            status="info",
                             message=f"[{sub_title}] 开始重试历史记录 {len(retry_records)} 条",
                             trace_id=run_id,
-                            extra={"subscription_id": sub_id, "title": sub_title, "count": len(retry_records)},
+                            extra={
+                                "subscription_id": sub_id,
+                                "title": sub_title,
+                                "count": len(retry_records),
+                            },
                         )
                         retry_auto_stats = await self._auto_save_resources(
                             db,
@@ -386,7 +450,9 @@ class SubscriptionService:
                             tv_missing_snapshot=tv_missing_snapshot,
                         )
                         sub_saved_count += int(retry_auto_stats.get("saved") or 0)
-                        sub_failed_transfer_count += int(retry_auto_stats.get("failed") or 0)
+                        sub_failed_transfer_count += int(
+                            retry_auto_stats.get("failed") or 0
+                        )
                         result["auto_saved_count"] += retry_auto_stats["saved"]
                         result["auto_failed_count"] += retry_auto_stats["failed"]
                         result["auto_retry_saved_count"] += retry_auto_stats["saved"]
@@ -400,19 +466,29 @@ class SubscriptionService:
                             subscription_id=sub_id,
                             subscription_title=sub_title,
                             step="auto_transfer_retry_done",
-                            status="success" if retry_auto_stats["failed"] == 0 else "partial",
+                            status="success"
+                            if retry_auto_stats["failed"] == 0
+                            else "partial",
                             message=(
                                 f"历史重试完成，成功 {retry_auto_stats['saved']} 条，"
                                 f"失败 {retry_auto_stats['failed']} 条"
                             ),
                         )
                         await operation_log_service.log_background_event(
-                            source_type="background_task", module="subscriptions",
+                            source_type="background_task",
+                            module="subscriptions",
                             action="subscription.item.transfer_retry_done",
-                            status="success" if retry_auto_stats["failed"] == 0 else "warning",
+                            status="success"
+                            if retry_auto_stats["failed"] == 0
+                            else "warning",
                             message=f"[{sub_title}] 历史重试完成：成功 {retry_auto_stats['saved']} 条，失败 {retry_auto_stats['failed']} 条",
                             trace_id=run_id,
-                            extra={"subscription_id": sub_id, "title": sub_title, "saved": retry_auto_stats["saved"], "failed": retry_auto_stats["failed"]},
+                            extra={
+                                "subscription_id": sub_id,
+                                "title": sub_title,
+                                "saved": retry_auto_stats["saved"],
+                                "failed": retry_auto_stats["failed"],
+                            },
                         )
                         if retry_auto_stats.get("subscription_completed"):
                             cleanup_after_auto = retry_auto_stats
@@ -424,7 +500,9 @@ class SubscriptionService:
                         subscription_id=sub_id,
                         subscription_title=sub_title,
                         step="auto_transfer_summary",
-                        status="success" if sub_failed_transfer_count == 0 else "partial",
+                        status="success"
+                        if sub_failed_transfer_count == 0
+                        else "partial",
                         message=(
                             f"自动转存汇总：成功 {sub_saved_count} 条，失败 {sub_failed_transfer_count} 条，"
                             f"新资源 {len(created_records)} 条，历史重试 {len(retry_records)} 条"
@@ -433,11 +511,17 @@ class SubscriptionService:
                     if cleanup_after_auto is not None:
                         await self._delete_subscription_with_records(db, sub_id)
                         await operation_log_service.log_background_event(
-                            source_type="background_task", module="subscriptions",
-                            action="subscription.item.cleanup_after_transfer", status="success",
+                            source_type="background_task",
+                            module="subscriptions",
+                            action="subscription.item.cleanup_after_transfer",
+                            status="success",
                             message=f"[{sub_title}] 转存完成后自动清理订阅：{str(cleanup_after_auto.get('cleanup_message') or '订阅已自动清理')}",
                             trace_id=run_id,
-                            extra={"subscription_id": sub_id, "title": sub_title, "reason": cleanup_after_auto.get("cleanup_step")},
+                            extra={
+                                "subscription_id": sub_id,
+                                "title": sub_title,
+                                "reason": cleanup_after_auto.get("cleanup_step"),
+                            },
                         )
                         await self._create_step_log(
                             db,
@@ -445,11 +529,19 @@ class SubscriptionService:
                             channel=normalized_channel,
                             subscription_id=sub_id,
                             subscription_title=sub_title,
-                            step=str(cleanup_after_auto.get("cleanup_step") or "subscription_cleanup_after_transfer"),
+                            step=str(
+                                cleanup_after_auto.get("cleanup_step")
+                                or "subscription_cleanup_after_transfer"
+                            ),
                             status="success",
-                            message=str(cleanup_after_auto.get("cleanup_message") or "订阅已自动清理"),
+                            message=str(
+                                cleanup_after_auto.get("cleanup_message")
+                                or "订阅已自动清理"
+                            ),
                             payload=cleanup_after_auto.get("cleanup_payload")
-                            if isinstance(cleanup_after_auto.get("cleanup_payload"), dict)
+                            if isinstance(
+                                cleanup_after_auto.get("cleanup_payload"), dict
+                            )
                             else None,
                         )
                         self._apply_cleanup_stats(result, sub.media_type)
@@ -484,7 +576,9 @@ class SubscriptionService:
                         f"转存成功 {sub_saved_count} 条，失败 {sub_failed_transfer_count} 条"
                     )
                 else:
-                    item_parts.append(f"新资源 {len(created_records)} 条（未启用自动转存）")
+                    item_parts.append(
+                        f"新资源 {len(created_records)} 条（未启用自动转存）"
+                    )
                 await operation_log_service.log_background_event(
                     source_type="background_task",
                     module="subscriptions",
@@ -498,7 +592,9 @@ class SubscriptionService:
                         "channel": normalized_channel,
                         "new_resources": len(created_records),
                         "auto_saved": sub_saved_count if should_auto_download else None,
-                        "auto_failed": sub_failed_transfer_count if should_auto_download else None,
+                        "auto_failed": sub_failed_transfer_count
+                        if should_auto_download
+                        else None,
                     },
                 )
                 await db.commit()
@@ -552,7 +648,9 @@ class SubscriptionService:
                             "auto_new_saved_count": result["auto_new_saved_count"],
                             "auto_new_failed_count": result["auto_new_failed_count"],
                             "auto_retry_saved_count": result["auto_retry_saved_count"],
-                            "auto_retry_failed_count": result["auto_retry_failed_count"],
+                            "auto_retry_failed_count": result[
+                                "auto_retry_failed_count"
+                            ],
                             "failed_count": result["failed_count"],
                             "message": f"已处理 {result['processed_count']}/{result['checked_count']} 项订阅",
                         }
@@ -564,11 +662,15 @@ class SubscriptionService:
             result["auto_failed_count"],
         )
         unlock_stats = hdhive_unlock_context.get("stats", {})
-        result["hdhive_unlock_attempted_count"] = int(unlock_stats.get("attempted") or 0)
+        result["hdhive_unlock_attempted_count"] = int(
+            unlock_stats.get("attempted") or 0
+        )
         result["hdhive_unlock_success_count"] = int(unlock_stats.get("success") or 0)
         result["hdhive_unlock_failed_count"] = int(unlock_stats.get("failed") or 0)
         result["hdhive_unlock_skipped_count"] = int(unlock_stats.get("skipped") or 0)
-        result["hdhive_unlock_points_spent"] = int(unlock_stats.get("points_spent") or 0)
+        result["hdhive_unlock_points_spent"] = int(
+            unlock_stats.get("points_spent") or 0
+        )
         message = self._build_message(result)
         finished_at = datetime.utcnow()
         result["finished_at"] = finished_at.isoformat()
@@ -576,8 +678,10 @@ class SubscriptionService:
         result["message"] = message
 
         await operation_log_service.log_background_event(
-            source_type="background_task", module="subscriptions",
-            action="subscription.check.finish", status=status.value,
+            source_type="background_task",
+            module="subscriptions",
+            action="subscription.check.finish",
+            status=status.value,
             message=(
                 f"订阅检查任务完成（频道：{normalized_channel}）：检查 {result['checked_count']} 项，"
                 f"新增资源 {result['new_resource_count']} 条，"
@@ -594,7 +698,9 @@ class SubscriptionService:
                 "auto_failed_count": result["auto_failed_count"],
                 "cleanup_deleted_count": result["cleanup_deleted_count"],
                 "failed_count": result["failed_count"],
-                "hdhive_unlock_attempted_count": result["hdhive_unlock_attempted_count"],
+                "hdhive_unlock_attempted_count": result[
+                    "hdhive_unlock_attempted_count"
+                ],
                 "hdhive_unlock_success_count": result["hdhive_unlock_success_count"],
                 "hdhive_unlock_points_spent": result["hdhive_unlock_points_spent"],
             },
@@ -630,12 +736,20 @@ class SubscriptionService:
                     "auto_failed_count": result["auto_failed_count"],
                     "failed_count": result["failed_count"],
                     "cleanup_deleted_count": result["cleanup_deleted_count"],
-                    "cleanup_movie_deleted_count": result["cleanup_movie_deleted_count"],
+                    "cleanup_movie_deleted_count": result[
+                        "cleanup_movie_deleted_count"
+                    ],
                     "cleanup_tv_deleted_count": result["cleanup_tv_deleted_count"],
-                    "hdhive_unlock_attempted_count": result["hdhive_unlock_attempted_count"],
-                    "hdhive_unlock_success_count": result["hdhive_unlock_success_count"],
+                    "hdhive_unlock_attempted_count": result[
+                        "hdhive_unlock_attempted_count"
+                    ],
+                    "hdhive_unlock_success_count": result[
+                        "hdhive_unlock_success_count"
+                    ],
                     "hdhive_unlock_failed_count": result["hdhive_unlock_failed_count"],
-                    "hdhive_unlock_skipped_count": result["hdhive_unlock_skipped_count"],
+                    "hdhive_unlock_skipped_count": result[
+                        "hdhive_unlock_skipped_count"
+                    ],
                     "hdhive_unlock_points_spent": result["hdhive_unlock_points_spent"],
                 },
             )
@@ -695,7 +809,9 @@ class SubscriptionService:
     async def _prune_step_logs(self, db: AsyncSession) -> None:
         keep_ids_subquery = (
             select(SubscriptionStepLog.id)
-            .order_by(SubscriptionStepLog.created_at.desc(), SubscriptionStepLog.id.desc())
+            .order_by(
+                SubscriptionStepLog.created_at.desc(), SubscriptionStepLog.id.desc()
+            )
             .limit(1000)
             .subquery()
         )
@@ -728,11 +844,17 @@ class SubscriptionService:
                     payload={"reason": "successful_transfer"},
                 )
                 await operation_log_service.log_background_event(
-                    source_type="background_task", module="subscriptions",
-                    action="subscription.item.cleanup_pre_scan", status="success",
+                    source_type="background_task",
+                    module="subscriptions",
+                    action="subscription.item.cleanup_pre_scan",
+                    status="success",
                     message=f"[{sub.title}] 预扫描清理：电影已有成功转存记录，自动删除订阅",
                     trace_id=run_id,
-                    extra={"subscription_id": sub.id, "title": sub.title, "reason": "successful_transfer"},
+                    extra={
+                        "subscription_id": sub.id,
+                        "title": sub.title,
+                        "reason": "successful_transfer",
+                    },
                 )
                 return {"deleted": True}
 
@@ -768,14 +890,24 @@ class SubscriptionService:
                         step="subscription_cleanup_movie_emby_exists",
                         status="success",
                         message="电影已存在于 Emby，已自动删除订阅",
-                        payload={"tmdb_id": sub.tmdb_id, "matched_item_ids": movie_status.get("item_ids") or []},
+                        payload={
+                            "tmdb_id": sub.tmdb_id,
+                            "matched_item_ids": movie_status.get("item_ids") or [],
+                        },
                     )
                     await operation_log_service.log_background_event(
-                        source_type="background_task", module="subscriptions",
-                        action="subscription.item.cleanup_pre_scan", status="success",
+                        source_type="background_task",
+                        module="subscriptions",
+                        action="subscription.item.cleanup_pre_scan",
+                        status="success",
                         message=f"[{sub.title}] 预扫描清理：电影已存在于 Emby，自动删除订阅",
                         trace_id=run_id,
-                        extra={"subscription_id": sub.id, "title": sub.title, "reason": "emby_exists", "tmdb_id": sub.tmdb_id},
+                        extra={
+                            "subscription_id": sub.id,
+                            "title": sub.title,
+                            "reason": "emby_exists",
+                            "tmdb_id": sub.tmdb_id,
+                        },
                     )
                     return {"deleted": True}
             elif status_text:
@@ -806,10 +938,16 @@ class SubscriptionService:
             message="开始查询 Emby 缺集状态",
             payload={"tmdb_id": sub.tmdb_id},
         )
-        tv_missing_result = await tv_missing_service.get_tv_missing_status(sub.tmdb_id, include_specials=False)
+        tv_missing_result = await tv_missing_service.get_tv_missing_status(
+            sub.tmdb_id, include_specials=False
+        )
         status_text = str(tv_missing_result.get("status") or "")
         if status_text == "ok":
-            counts = tv_missing_result.get("counts") if isinstance(tv_missing_result.get("counts"), dict) else {}
+            counts = (
+                tv_missing_result.get("counts")
+                if isinstance(tv_missing_result.get("counts"), dict)
+                else {}
+            )
             missing_count = int(counts.get("missing") or 0)
             await self._create_step_log(
                 db,
@@ -840,11 +978,18 @@ class SubscriptionService:
                     payload={"tmdb_id": sub.tmdb_id, "missing_count": 0},
                 )
                 await operation_log_service.log_background_event(
-                    source_type="background_task", module="subscriptions",
-                    action="subscription.item.cleanup_pre_scan", status="success",
+                    source_type="background_task",
+                    module="subscriptions",
+                    action="subscription.item.cleanup_pre_scan",
+                    status="success",
                     message=f"[{sub.title}] 预扫描清理：剧集已不缺集，自动删除订阅",
                     trace_id=run_id,
-                    extra={"subscription_id": sub.id, "title": sub.title, "reason": "tv_no_missing", "tmdb_id": sub.tmdb_id},
+                    extra={
+                        "subscription_id": sub.id,
+                        "title": sub.title,
+                        "reason": "tv_no_missing",
+                        "tmdb_id": sub.tmdb_id,
+                    },
                 )
                 return {"deleted": True, "tv_missing_snapshot": tv_missing_result}
             return {"deleted": False, "tv_missing_snapshot": tv_missing_result}
@@ -862,17 +1007,29 @@ class SubscriptionService:
         )
         return {"deleted": False, "tv_missing_snapshot": None}
 
-    async def _delete_subscription_with_records(self, db: AsyncSession, subscription_id: int) -> None:
-        await db.execute(delete(DownloadRecord).where(DownloadRecord.subscription_id == subscription_id))
+    async def _delete_subscription_with_records(
+        self, db: AsyncSession, subscription_id: int
+    ) -> None:
+        await db.execute(
+            delete(DownloadRecord).where(
+                DownloadRecord.subscription_id == subscription_id
+            )
+        )
         await db.execute(delete(Subscription).where(Subscription.id == subscription_id))
 
     @staticmethod
     def _apply_cleanup_stats(result: dict[str, Any], media_type: MediaType) -> None:
-        result["cleanup_deleted_count"] = int(result.get("cleanup_deleted_count") or 0) + 1
+        result["cleanup_deleted_count"] = (
+            int(result.get("cleanup_deleted_count") or 0) + 1
+        )
         if media_type == MediaType.TV:
-            result["cleanup_tv_deleted_count"] = int(result.get("cleanup_tv_deleted_count") or 0) + 1
+            result["cleanup_tv_deleted_count"] = (
+                int(result.get("cleanup_tv_deleted_count") or 0) + 1
+            )
         else:
-            result["cleanup_movie_deleted_count"] = int(result.get("cleanup_movie_deleted_count") or 0) + 1
+            result["cleanup_movie_deleted_count"] = (
+                int(result.get("cleanup_movie_deleted_count") or 0) + 1
+            )
 
     async def _fetch_resources(
         self,
@@ -906,9 +1063,7 @@ class SubscriptionService:
             source_resources: list[dict[str, Any]] = []
             source_traces: list[dict[str, Any]] = []
             try:
-                if source == "nullbr":
-                    source_resources, source_traces = await self._fetch_from_nullbr(sub)
-                elif source == "hdhive":
+                if source == "hdhive":
                     source_resources, source_traces = await self._fetch_from_hdhive(sub)
                 elif source == "tg":
                     source_resources, source_traces = await self._fetch_from_tg(sub)
@@ -927,11 +1082,17 @@ class SubscriptionService:
 
             traces.extend(source_traces)
             await operation_log_service.log_background_event(
-                source_type="background_task", module="subscriptions",
+                source_type="background_task",
+                module="subscriptions",
                 action="subscription.item.fetch_source",
                 status="success" if source_resources else "info",
                 message=f"[{sub.title}] 来源 {source} 返回 {len(source_resources)} 条资源",
-                extra={"subscription_id": sub.id, "title": sub.title, "source": source, "count": len(source_resources)},
+                extra={
+                    "subscription_id": sub.id,
+                    "title": sub.title,
+                    "source": source,
+                    "count": len(source_resources),
+                },
             )
             if source_resources:
                 traces.append(
@@ -952,7 +1113,9 @@ class SubscriptionService:
                 pref_res = runtime_settings_service.get_resource_preferred_resolutions()
                 pref_fmt = runtime_settings_service.get_resource_preferred_formats()
                 if pref_res or pref_fmt:
-                    source_resources = sort_by_preference(source_resources, pref_res, pref_fmt)
+                    source_resources = sort_by_preference(
+                        source_resources, pref_res, pref_fmt
+                    )
                 primary_resources = source_resources
                 break
 
@@ -965,14 +1128,16 @@ class SubscriptionService:
                 }
             )
 
-        # 离线转存：追加磁力/ED2K 资源（Nullbr + SeedHub + 不太灵）
+        # 离线转存：追加磁力资源（SeedHub + 不太灵）
         offline_resources, offline_traces = await self._fetch_offline_magnets(sub)
         traces.extend(offline_traces)
         if offline_resources:
             pref_res = runtime_settings_service.get_resource_preferred_resolutions()
             pref_fmt = runtime_settings_service.get_resource_preferred_formats()
             if pref_res or pref_fmt:
-                offline_resources = sort_by_preference(offline_resources, pref_res, pref_fmt)
+                offline_resources = sort_by_preference(
+                    offline_resources, pref_res, pref_fmt
+                )
             primary_resources.extend(offline_resources)
 
         return primary_resources, traces
@@ -980,7 +1145,7 @@ class SubscriptionService:
     def _resolve_source_order(self, channel: str) -> list[str]:
         _ = channel
         priority = runtime_settings_service.get_subscription_resource_priority()
-        source_order = [item for item in priority if item in {"nullbr", "hdhive", "pansou", "tg"}]
+        source_order = [item for item in priority if item in {"hdhive", "pansou", "tg"}]
         tg_ready = bool(
             runtime_settings_service.get_tg_api_id().strip()
             and runtime_settings_service.get_tg_api_hash().strip()
@@ -991,39 +1156,9 @@ class SubscriptionService:
             source_order = [item for item in source_order if item != "tg"]
         return source_order
 
-    async def _fetch_from_nullbr(self, sub: "SubscriptionSnapshot") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        traces: list[dict[str, Any]] = []
-        if sub.tmdb_id is None:
-            traces.append(
-                {
-                    "step": "fetch_nullbr_skip",
-                    "status": "warning",
-                    "message": "Nullbr 依赖 tmdb_id，当前订阅缺少 tmdb_id，已跳过",
-                }
-            )
-            return [], traces
-
-        traces.append(
-            {
-                "step": "fetch_nullbr_start",
-                "status": "info",
-                "message": "开始从 Nullbr 获取资源",
-                "payload": {"tmdb_id": sub.tmdb_id, "media_type": sub.media_type.value},
-            }
-        )
-        payload = await self._fetch_nullbr(sub.tmdb_id, sub.media_type)
-        resources = self._extract_list(payload)
-        traces.append(
-            {
-                "step": "fetch_nullbr_done",
-                "status": "success" if resources else "warning",
-                "message": f"Nullbr 返回 {len(resources)} 条候选资源",
-                "payload": {"count": len(resources)},
-            }
-        )
-        return resources, traces
-
-    async def _fetch_from_pansou(self, sub: "SubscriptionSnapshot") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    async def _fetch_from_pansou(
+        self, sub: "SubscriptionSnapshot"
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         traces: list[dict[str, Any]] = []
         media_type = "tv" if sub.media_type == MediaType.TV else "movie"
 
@@ -1037,7 +1172,9 @@ class SubscriptionService:
                         "payload": {"tmdb_id": sub.tmdb_id, "media_type": media_type},
                     }
                 )
-                pansou_result = await _search_pansou_pan115_resources(sub.tmdb_id, media_type)
+                pansou_result = await _search_pansou_pan115_resources(
+                    sub.tmdb_id, media_type
+                )
                 pansou_list = list(pansou_result.get("list") or [])
                 if pansou_list:
                     traces.append(
@@ -1096,7 +1233,9 @@ class SubscriptionService:
         )
         return resources, traces
 
-    async def _fetch_from_hdhive(self, sub: "SubscriptionSnapshot") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    async def _fetch_from_hdhive(
+        self, sub: "SubscriptionSnapshot"
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         traces: list[dict[str, Any]] = []
         resources: list[dict[str, Any]] = []
         if sub.tmdb_id is not None:
@@ -1106,7 +1245,10 @@ class SubscriptionService:
                         "step": "fetch_hdhive_tmdb_start",
                         "status": "info",
                         "message": "开始通过 tmdb_id 调用 HDHive",
-                        "payload": {"tmdb_id": sub.tmdb_id, "media_type": sub.media_type.value},
+                        "payload": {
+                            "tmdb_id": sub.tmdb_id,
+                            "media_type": sub.media_type.value,
+                        },
                     }
                 )
                 if sub.media_type == MediaType.TV:
@@ -1156,7 +1298,9 @@ class SubscriptionService:
             }
         )
         media_type = "tv" if sub.media_type == MediaType.TV else "movie"
-        keyword_resources = await hdhive_service.get_pan115_by_keyword(keyword, media_type=media_type)
+        keyword_resources = await hdhive_service.get_pan115_by_keyword(
+            keyword, media_type=media_type
+        )
         keyword_resources = self._normalize_hdhive_subscription_items(keyword_resources)
         if runtime_settings_service.get_subscription_hdhive_prefer_free():
             keyword_resources = hdhive_service.sort_free_first(keyword_resources)
@@ -1170,7 +1314,9 @@ class SubscriptionService:
         )
         return keyword_resources, traces
 
-    async def _fetch_from_tg(self, sub: "SubscriptionSnapshot") -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    async def _fetch_from_tg(
+        self, sub: "SubscriptionSnapshot"
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         traces: list[dict[str, Any]] = []
         keyword = self._build_tg_keyword(sub)
         if not keyword:
@@ -1192,7 +1338,9 @@ class SubscriptionService:
             }
         )
         media_type = "tv" if sub.media_type == MediaType.TV else "movie"
-        resources = await tg_service.search_115_by_keyword(keyword, media_type=media_type)
+        resources = await tg_service.search_115_by_keyword(
+            keyword, media_type=media_type
+        )
         traces.append(
             {
                 "step": "fetch_tg_keyword_done",
@@ -1203,48 +1351,17 @@ class SubscriptionService:
         )
         return resources, traces
 
-    async def _fetch_nullbr(self, tmdb_id: int, media_type: MediaType) -> dict[str, Any]:
-        if media_type == MediaType.TV:
-            return await asyncio.to_thread(nullbr_service.get_tv_pan115, tmdb_id, 1)
-        return await asyncio.to_thread(nullbr_service.get_movie_pan115, tmdb_id, 1)
-
-    async def _fetch_nullbr_offline(self, tmdb_id: int, media_type: MediaType) -> list[dict[str, Any]]:
-        """从 Nullbr 额外抓取磁力和 ED2K 资源。"""
-        results: list[dict[str, Any]] = []
-        try:
-            if media_type == MediaType.TV:
-                magnet_payload = await asyncio.to_thread(nullbr_service.get_tv_magnet, tmdb_id)
-            else:
-                magnet_payload = await asyncio.to_thread(nullbr_service.get_movie_magnet, tmdb_id)
-            results.extend(self._extract_list(magnet_payload))
-        except Exception:
-            pass
-        try:
-            if media_type == MediaType.TV:
-                ed2k_payload = await asyncio.to_thread(nullbr_service.get_tv_ed2k, tmdb_id)
-            else:
-                ed2k_payload = await asyncio.to_thread(nullbr_service.get_movie_ed2k, tmdb_id)
-            results.extend(self._extract_list(ed2k_payload))
-        except Exception:
-            pass
-        return results
-
     async def _fetch_offline_magnets(
         self,
         sub: "SubscriptionSnapshot",
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """离线转存启用时，从 Nullbr / SeedHub / 不太灵并发抓取磁力和 ED2K 资源。"""
+        """离线转存启用时，从 SeedHub / 不太灵并发抓取磁力资源。"""
         if not runtime_settings_service.get_subscription_offline_transfer_enabled():
             return [], []
 
         traces: list[dict[str, Any]] = []
         keyword = self._build_pansou_keyword(sub)
         media_type = "tv" if sub.media_type == MediaType.TV else "movie"
-
-        async def _nullbr() -> list[dict[str, Any]]:
-            if sub.tmdb_id is None:
-                return []
-            return await self._fetch_nullbr_offline(sub.tmdb_id, sub.media_type)
 
         async def _seedhub() -> list[dict[str, Any]]:
             if not keyword:
@@ -1254,51 +1371,75 @@ class SubscriptionService:
         async def _butailing() -> list[dict[str, Any]]:
             if not keyword:
                 return []
-            return await butailing_service.search_magnets(keyword, media_type=media_type)
+            return await butailing_service.search_magnets(
+                keyword, media_type=media_type
+            )
 
-        nullbr_result, seedhub_result, butailing_result = await asyncio.gather(
-            _nullbr(),
+        seedhub_result, butailing_result = await asyncio.gather(
             _seedhub(),
             _butailing(),
             return_exceptions=True,
         )
 
         merged: list[dict[str, Any]] = []
-        for label, result in [("Nullbr", nullbr_result), ("SeedHub", seedhub_result), ("不太灵", butailing_result)]:
+        for label, result in [
+            ("SeedHub", seedhub_result),
+            ("不太灵", butailing_result),
+        ]:
             if isinstance(result, BaseException):
-                traces.append({
-                    "step": "fetch_offline_magnet_error",
-                    "status": "warning",
-                    "message": f"{label} 磁力抓取失败: {str(result)[:200]}",
-                })
+                traces.append(
+                    {
+                        "step": "fetch_offline_magnet_error",
+                        "status": "warning",
+                        "message": f"{label} 磁力抓取失败: {str(result)[:200]}",
+                    }
+                )
                 await operation_log_service.log_background_event(
-                    source_type="background_task", module="subscriptions",
-                    action="subscription.item.fetch_offline_source", status="warning",
+                    source_type="background_task",
+                    module="subscriptions",
+                    action="subscription.item.fetch_offline_source",
+                    status="warning",
                     message=f"[{sub.title}] 离线来源 {label} 抓取失败：{str(result)[:200]}",
-                    extra={"subscription_id": sub.id, "title": sub.title, "source": label, "error": str(result)[:300]},
+                    extra={
+                        "subscription_id": sub.id,
+                        "title": sub.title,
+                        "source": label,
+                        "error": str(result)[:300],
+                    },
                 )
             elif result:
                 merged.extend(result)
-                traces.append({
-                    "step": "fetch_offline_magnet_done",
-                    "status": "info",
-                    "message": f"{label} 磁力资源 {len(result)} 条",
-                    "payload": {"source": label, "count": len(result)},
-                })
+                traces.append(
+                    {
+                        "step": "fetch_offline_magnet_done",
+                        "status": "info",
+                        "message": f"{label} 磁力资源 {len(result)} 条",
+                        "payload": {"source": label, "count": len(result)},
+                    }
+                )
                 await operation_log_service.log_background_event(
-                    source_type="background_task", module="subscriptions",
-                    action="subscription.item.fetch_offline_source", status="success",
+                    source_type="background_task",
+                    module="subscriptions",
+                    action="subscription.item.fetch_offline_source",
+                    status="success",
                     message=f"[{sub.title}] 离线来源 {label} 返回 {len(result)} 条磁力资源",
-                    extra={"subscription_id": sub.id, "title": sub.title, "source": label, "count": len(result)},
+                    extra={
+                        "subscription_id": sub.id,
+                        "title": sub.title,
+                        "source": label,
+                        "count": len(result),
+                    },
                 )
 
         if merged:
-            traces.append({
-                "step": "fetch_offline_magnet_summary",
-                "status": "success",
-                "message": f"离线磁力/ED2K 资源合计 {len(merged)} 条",
-                "payload": {"total": len(merged)},
-            })
+            traces.append(
+                {
+                    "step": "fetch_offline_magnet_summary",
+                    "status": "success",
+                    "message": f"离线磁力资源合计 {len(merged)} 条",
+                    "payload": {"total": len(merged)},
+                }
+            )
 
         return merged, traces
 
@@ -1360,7 +1501,13 @@ class SubscriptionService:
 
         stats = context.setdefault(
             "stats",
-            {"attempted": 0, "success": 0, "failed": 0, "skipped": 0, "points_spent": 0},
+            {
+                "attempted": 0,
+                "success": 0,
+                "failed": 0,
+                "skipped": 0,
+                "points_spent": 0,
+            },
         )
         local_attempted = 0
         local_success = 0
@@ -1378,7 +1525,9 @@ class SubscriptionService:
 
             slug = str(item.get("slug") or "").strip()
             unlock_points = self._safe_int(item.get("unlock_points"), default=0)
-            locked = bool(item.get("hdhive_locked")) or (unlock_points > 0 and not self._extract_resource_url(item))
+            locked = bool(item.get("hdhive_locked")) or (
+                unlock_points > 0 and not self._extract_resource_url(item)
+            )
             if not locked:
                 continue
 
@@ -1389,7 +1538,9 @@ class SubscriptionService:
                 skip_reason = "missing_slug"
             elif unlock_points <= 0:
                 skip_reason = "invalid_unlock_points"
-            elif not self._allow_unlock_by_threshold(unlock_points, max_points, threshold_inclusive):
+            elif not self._allow_unlock_by_threshold(
+                unlock_points, max_points, threshold_inclusive
+            ):
                 skip_reason = "over_threshold"
             elif context.get("stopped_by_circuit"):
                 skip_reason = "circuit_open"
@@ -1422,7 +1573,9 @@ class SubscriptionService:
                     "payload": {
                         "slug": slug,
                         "unlock_points": unlock_points,
-                        "budget_remaining_before": int(context.get("budget_left", 0) or 0),
+                        "budget_remaining_before": int(
+                            context.get("budget_left", 0) or 0
+                        ),
                     },
                 }
             )
@@ -1432,15 +1585,21 @@ class SubscriptionService:
             try:
                 unlock_result = await hdhive_service.unlock_resource(slug)
                 unlock_message = str(unlock_result.get("message") or "").strip()
-                share_link = self._normalize_share_url(str(unlock_result.get("share_link") or "").strip())
+                share_link = self._normalize_share_url(
+                    str(unlock_result.get("share_link") or "").strip()
+                )
                 if share_link:
                     item["pan115_share_link"] = share_link
                     item["share_link"] = share_link
                     item["pan115_savable"] = True
-                    context["budget_left"] = max(0, int(context.get("budget_left", 0) or 0) - unlock_points)
+                    context["budget_left"] = max(
+                        0, int(context.get("budget_left", 0) or 0) - unlock_points
+                    )
                     context["consecutive_failed_count"] = 0
                     stats["success"] = int(stats.get("success") or 0) + 1
-                    stats["points_spent"] = int(stats.get("points_spent") or 0) + unlock_points
+                    stats["points_spent"] = (
+                        int(stats.get("points_spent") or 0) + unlock_points
+                    )
                     local_success += 1
                     local_points_spent += unlock_points
                     traces.append(
@@ -1451,12 +1610,16 @@ class SubscriptionService:
                             "payload": {
                                 "slug": slug,
                                 "unlock_points": unlock_points,
-                                "budget_remaining_after": int(context.get("budget_left", 0) or 0),
+                                "budget_remaining_after": int(
+                                    context.get("budget_left", 0) or 0
+                                ),
                             },
                         }
                     )
                 else:
-                    context["consecutive_failed_count"] = int(context.get("consecutive_failed_count", 0) or 0) + 1
+                    context["consecutive_failed_count"] = (
+                        int(context.get("consecutive_failed_count", 0) or 0) + 1
+                    )
                     stats["failed"] = int(stats.get("failed") or 0) + 1
                     local_failed += 1
                     traces.append(
@@ -1475,7 +1638,9 @@ class SubscriptionService:
                         context["stopped_by_circuit"] = True
                         context["stopped_reason"] = unlock_message or "unlock_error"
             except Exception as exc:
-                context["consecutive_failed_count"] = int(context.get("consecutive_failed_count", 0) or 0) + 1
+                context["consecutive_failed_count"] = (
+                    int(context.get("consecutive_failed_count", 0) or 0) + 1
+                )
                 stats["failed"] = int(stats.get("failed") or 0) + 1
                 local_failed += 1
                 message = str(exc)[:300]
@@ -1509,14 +1674,18 @@ class SubscriptionService:
                         "message": "触发 HDHive 解锁熔断，本订阅剩余锁定资源停止自动解锁",
                         "payload": {
                             "reason": str(context.get("stopped_reason") or "unknown"),
-                            "consecutive_failed_count": int(context.get("consecutive_failed_count", 0) or 0),
+                            "consecutive_failed_count": int(
+                                context.get("consecutive_failed_count", 0) or 0
+                            ),
                             "budget_left": int(context.get("budget_left", 0) or 0),
                         },
                     }
                 )
                 break
 
-            await asyncio.sleep(float(context.get("request_interval_seconds", 0.35) or 0.35))
+            await asyncio.sleep(
+                float(context.get("request_interval_seconds", 0.35) or 0.35)
+            )
 
         traces.append(
             {
@@ -1547,7 +1716,9 @@ class SubscriptionService:
         return normalized_items
 
     @staticmethod
-    def _allow_unlock_by_threshold(unlock_points: int, threshold: int, inclusive: bool) -> bool:
+    def _allow_unlock_by_threshold(
+        unlock_points: int, threshold: int, inclusive: bool
+    ) -> bool:
         if inclusive:
             return unlock_points <= threshold
         return unlock_points < threshold
@@ -1583,6 +1754,7 @@ class SubscriptionService:
         resources: list[dict[str, Any]],
     ) -> dict[str, Any]:
         from app.models.models import MediaStatus
+
         if not resources:
             return {
                 "created_records": [],
@@ -1594,11 +1766,15 @@ class SubscriptionService:
 
         with db.no_autoflush:
             existing_result = await db.execute(
-                select(DownloadRecord.resource_url).where(DownloadRecord.subscription_id == subscription_id)
+                select(DownloadRecord.resource_url).where(
+                    DownloadRecord.subscription_id == subscription_id
+                )
             )
         existing_urls = {str(row[0]) for row in existing_result.all() if row and row[0]}
 
-        offline_enabled = runtime_settings_service.get_subscription_offline_transfer_enabled()
+        offline_enabled = (
+            runtime_settings_service.get_subscription_offline_transfer_enabled()
+        )
         created_records: list[DownloadRecord] = []
         duplicate_urls: set[str] = set()
         duplicate_count = 0
@@ -1637,20 +1813,29 @@ class SubscriptionService:
             "invalid_count": invalid_count,
         }
 
-    async def _load_retryable_records(self, db: AsyncSession, subscription_id: int) -> list[DownloadRecord]:
+    async def _load_retryable_records(
+        self, db: AsyncSession, subscription_id: int
+    ) -> list[DownloadRecord]:
         from app.models.models import MediaStatus
+
         with db.no_autoflush:
             failed_result = await db.execute(
-                select(DownloadRecord).where(
+                select(DownloadRecord)
+                .where(
                     DownloadRecord.subscription_id == subscription_id,
                     DownloadRecord.status == MediaStatus.FAILED,
-                ).order_by(DownloadRecord.created_at.desc()).limit(8)
+                )
+                .order_by(DownloadRecord.created_at.desc())
+                .limit(8)
             )
             pending_result = await db.execute(
-                select(DownloadRecord).where(
+                select(DownloadRecord)
+                .where(
                     DownloadRecord.subscription_id == subscription_id,
                     DownloadRecord.status == MediaStatus.PENDING,
-                ).order_by(DownloadRecord.created_at.desc()).limit(5)
+                )
+                .order_by(DownloadRecord.created_at.desc())
+                .limit(5)
             )
 
         failed_rows = list(failed_result.scalars().all())
@@ -1659,7 +1844,9 @@ class SubscriptionService:
         retryable: list[DownloadRecord] = []
         for row in failed_rows:
             is_offline = str(row.resource_type or "") in ("magnet", "ed2k")
-            if not is_offline and not self._is_likely_115_share_identifier(row.resource_url):
+            if not is_offline and not self._is_likely_115_share_identifier(
+                row.resource_url
+            ):
                 continue
             if not self._is_retryable_transfer_error(row.error_message or ""):
                 continue
@@ -1667,7 +1854,9 @@ class SubscriptionService:
 
         for row in pending_rows:
             is_offline = str(row.resource_type or "") in ("magnet", "ed2k")
-            if not is_offline and not self._is_likely_115_share_identifier(row.resource_url):
+            if not is_offline and not self._is_likely_115_share_identifier(
+                row.resource_url
+            ):
                 continue
             retryable.append(row)
 
@@ -1681,17 +1870,25 @@ class SubscriptionService:
     ) -> list[DownloadRecord]:
         from app.models.models import MediaStatus
 
-        url_values = [str(item or "").strip() for item in duplicate_urls if str(item or "").strip()]
+        url_values = [
+            str(item or "").strip()
+            for item in duplicate_urls
+            if str(item or "").strip()
+        ]
         if not url_values:
             return []
 
         with db.no_autoflush:
             rows_result = await db.execute(
-                select(DownloadRecord).where(
+                select(DownloadRecord)
+                .where(
                     DownloadRecord.subscription_id == subscription_id,
                     DownloadRecord.resource_url.in_(url_values),
-                    DownloadRecord.status.in_((MediaStatus.FAILED, MediaStatus.PENDING)),
-                ).order_by(DownloadRecord.created_at.desc())
+                    DownloadRecord.status.in_(
+                        (MediaStatus.FAILED, MediaStatus.PENDING)
+                    ),
+                )
+                .order_by(DownloadRecord.created_at.desc())
             )
 
         selected: list[DownloadRecord] = []
@@ -1705,7 +1902,9 @@ class SubscriptionService:
         return selected
 
     @staticmethod
-    def _exclude_new_records(retry_records: list[DownloadRecord], new_records: list[DownloadRecord]) -> list[DownloadRecord]:
+    def _exclude_new_records(
+        retry_records: list[DownloadRecord], new_records: list[DownloadRecord]
+    ) -> list[DownloadRecord]:
         new_keys: set[str] = set()
         for item in new_records:
             if not item:
@@ -1713,16 +1912,26 @@ class SubscriptionService:
             new_keys.add(str(item.resource_url or "").strip())
         if not new_keys:
             return retry_records
-        return [item for item in retry_records if str(item.resource_url or "").strip() not in new_keys]
+        return [
+            item
+            for item in retry_records
+            if str(item.resource_url or "").strip() not in new_keys
+        ]
 
     @staticmethod
-    def _merge_records(primary: list[DownloadRecord], secondary: list[DownloadRecord]) -> list[DownloadRecord]:
+    def _merge_records(
+        primary: list[DownloadRecord], secondary: list[DownloadRecord]
+    ) -> list[DownloadRecord]:
         merged: list[DownloadRecord] = []
         seen_keys: set[str] = set()
         for record in primary + secondary:
             if not record:
                 continue
-            key = f"id:{record.id}" if record.id is not None else f"url:{record.resource_url}"
+            key = (
+                f"id:{record.id}"
+                if record.id is not None
+                else f"url:{record.resource_url}"
+            )
             if key in seen_keys:
                 continue
             seen_keys.add(key)
@@ -1740,10 +1949,13 @@ class SubscriptionService:
         tv_missing_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         from app.models.models import MediaStatus
+
         runtime_cookie = runtime_settings_service.get_pan115_cookie()
         pan_service = Pan115Service(runtime_cookie)
         # 订阅自动转存应使用“默认转存文件夹”，而不是离线下载目录。
-        default_folder_id = runtime_settings_service.get_pan115_default_folder().get("folder_id", "0")
+        default_folder_id = runtime_settings_service.get_pan115_default_folder().get(
+            "folder_id", "0"
+        )
         parent_folder_id = str(default_folder_id or "0")
 
         saved = 0
@@ -1771,7 +1983,9 @@ class SubscriptionService:
                     message="开始查询 Emby 缺集状态",
                     payload={"tmdb_id": sub.tmdb_id},
                 )
-                tv_missing_result = await tv_missing_service.get_tv_missing_status(sub.tmdb_id, include_specials=False)
+                tv_missing_result = await tv_missing_service.get_tv_missing_status(
+                    sub.tmdb_id, include_specials=False
+                )
             if str(tv_missing_result.get("status") or "") == "ok":
                 tv_missing_enabled = True
                 missing_episodes = {
@@ -1790,8 +2004,14 @@ class SubscriptionService:
                         status="success",
                         message="缺集状态查询完成",
                         payload={
-                            "aired_count": int((tv_missing_result.get("counts") or {}).get("aired") or 0),
-                            "existing_count": int((tv_missing_result.get("counts") or {}).get("existing") or 0),
+                            "aired_count": int(
+                                (tv_missing_result.get("counts") or {}).get("aired")
+                                or 0
+                            ),
+                            "existing_count": int(
+                                (tv_missing_result.get("counts") or {}).get("existing")
+                                or 0
+                            ),
                             "missing_count": len(missing_episodes),
                         },
                     )
@@ -1805,7 +2025,10 @@ class SubscriptionService:
                     step="tv_missing_fetch_failed",
                     status="warning",
                     message=f"缺集状态查询失败，回退全量转存: {tv_missing_result.get('message') or 'unknown'}",
-                    payload={"status": tv_missing_result.get("status"), "message": tv_missing_result.get("message")},
+                    payload={
+                        "status": tv_missing_result.get("status"),
+                        "message": tv_missing_result.get("message"),
+                    },
                 )
 
         for record in records:
@@ -1828,7 +2051,10 @@ class SubscriptionService:
                 # 磁力/ED2K 离线下载路径
                 if str(record.resource_type or "") in ("magnet", "ed2k"):
                     offline_folder_id = str(
-                        runtime_settings_service.get_pan115_offline_folder().get("folder_id", "0") or "0"
+                        runtime_settings_service.get_pan115_offline_folder().get(
+                            "folder_id", "0"
+                        )
+                        or "0"
                     )
                     await pan_service.offline_task_add(
                         url=record.resource_url,
@@ -1839,13 +2065,20 @@ class SubscriptionService:
                     record.error_message = None
                     record.file_id = offline_folder_id
                     saved += 1
-                    await self._notify_transfer_success(sub.title, record.resource_name, source, "离线下载")
+                    await self._notify_transfer_success(
+                        sub.title, record.resource_name, source, "离线下载"
+                    )
                     await operation_log_service.log_background_event(
-                        source_type="background_task", module="subscriptions",
+                        source_type="background_task",
+                        module="subscriptions",
                         action="subscription.offline_transfer",
                         status="success",
                         message=f"[{sub.title}] 离线下载已提交：{record.resource_name}（{record.resource_type}）",
-                        extra={"subscription_id": sub.id, "resource_type": record.resource_type, "source": source},
+                        extra={
+                            "subscription_id": sub.id,
+                            "resource_type": record.resource_type,
+                            "source": source,
+                        },
                     )
                     await self._create_step_log(
                         db,
@@ -1876,13 +2109,17 @@ class SubscriptionService:
                         break
                     continue
 
-                share_link, receive_code = self._split_share_link_and_receive_code(record.resource_url)
+                share_link, receive_code = self._split_share_link_and_receive_code(
+                    record.resource_url
+                )
                 if tv_missing_enabled and is_tv_subscription:
                     share_code = pan_service._extract_share_code(share_link)
                     if not share_code:
                         raise ValueError("无效的分享链接，无法提取分享码")
 
-                    all_files = await pan_service.get_share_all_files_recursive(share_code, receive_code)
+                    all_files = await pan_service.get_share_all_files_recursive(
+                        share_code, receive_code
+                    )
                     matched_fids: list[str] = []
                     matched_pairs: set[tuple[int, int]] = set()
                     parsed_count = 0
@@ -1963,7 +2200,9 @@ class SubscriptionService:
                     record.error_message = None
                     record.file_id = parent_folder_id
                     saved += 1
-                    await self._notify_transfer_success(sub.title, record.resource_name, source, "精准转存")
+                    await self._notify_transfer_success(
+                        sub.title, record.resource_name, source, "精准转存"
+                    )
                     await self._create_step_log(
                         db,
                         run_id=run_id,
@@ -1984,15 +2223,25 @@ class SubscriptionService:
                         },
                     )
                     await operation_log_service.log_background_event(
-                        source_type="background_task", module="subscriptions",
-                        action="subscription.record.transfer_ok", status="success",
+                        source_type="background_task",
+                        module="subscriptions",
+                        action="subscription.record.transfer_ok",
+                        status="success",
                         message=f"[{sub.title}] [{source}] 精准转存成功：{record.resource_name}（选中 {len(selected_file_ids)} 个文件，剩余缺集 {len(missing_episodes)} 集）",
                         trace_id=run_id,
-                        extra={"subscription_id": sub.id, "record_id": record.id, "source": source, "selected_count": len(selected_file_ids), "remaining_missing": len(missing_episodes)},
+                        extra={
+                            "subscription_id": sub.id,
+                            "record_id": record.id,
+                            "source": source,
+                            "selected_count": len(selected_file_ids),
+                            "remaining_missing": len(missing_episodes),
+                        },
                     )
                     if not missing_episodes:
                         subscription_completed = True
-                        cleanup_step = "subscription_cleanup_tv_completed_after_transfer"
+                        cleanup_step = (
+                            "subscription_cleanup_tv_completed_after_transfer"
+                        )
                         cleanup_message = "剧集缺集已补齐，已自动删除订阅"
                         cleanup_payload = {
                             "source": source,
@@ -2013,7 +2262,9 @@ class SubscriptionService:
                     record.error_message = None
                     record.file_id = parent_folder_id
                     saved += 1
-                    await self._notify_transfer_success(sub.title, record.resource_name, source, "分享转存")
+                    await self._notify_transfer_success(
+                        sub.title, record.resource_name, source, "分享转存"
+                    )
                     await self._create_step_log(
                         db,
                         run_id=run_id,
@@ -2031,11 +2282,18 @@ class SubscriptionService:
                         },
                     )
                     await operation_log_service.log_background_event(
-                        source_type="background_task", module="subscriptions",
-                        action="subscription.record.transfer_ok", status="success",
+                        source_type="background_task",
+                        module="subscriptions",
+                        action="subscription.record.transfer_ok",
+                        status="success",
                         message=f"[{sub.title}] [{source}] 分享转存成功：{record.resource_name}",
                         trace_id=run_id,
-                        extra={"subscription_id": sub.id, "record_id": record.id, "source": source, "save_mode": "direct"},
+                        extra={
+                            "subscription_id": sub.id,
+                            "record_id": record.id,
+                            "source": source,
+                            "save_mode": "direct",
+                        },
                     )
                     subscription_completed = True
                     cleanup_step = "subscription_cleanup_transferred"
@@ -2074,11 +2332,18 @@ class SubscriptionService:
                         },
                     )
                     await operation_log_service.log_background_event(
-                        source_type="background_task", module="subscriptions",
-                        action="subscription.record.transfer_ok", status="success",
+                        source_type="background_task",
+                        module="subscriptions",
+                        action="subscription.record.transfer_ok",
+                        status="success",
                         message=f"[{sub.title}] [{source}] 资源已在网盘中：{record.resource_name}",
                         trace_id=run_id,
-                        extra={"subscription_id": sub.id, "record_id": record.id, "source": source, "reason": "already_received"},
+                        extra={
+                            "subscription_id": sub.id,
+                            "record_id": record.id,
+                            "source": source,
+                            "reason": "already_received",
+                        },
                     )
                     if not is_tv_subscription:
                         subscription_completed = True
@@ -2112,11 +2377,18 @@ class SubscriptionService:
                     },
                 )
                 await operation_log_service.log_background_event(
-                    source_type="background_task", module="subscriptions",
-                    action="subscription.record.transfer_fail", status="failed",
+                    source_type="background_task",
+                    module="subscriptions",
+                    action="subscription.record.transfer_fail",
+                    status="failed",
                     message=f"[{sub.title}] [{source}] 转存失败：{record.resource_name}（{str(exc)[:200]}）",
                     trace_id=run_id,
-                    extra={"subscription_id": sub.id, "record_id": record.id, "source": source, "error": str(exc)[:300]},
+                    extra={
+                        "subscription_id": sub.id,
+                        "record_id": record.id,
+                        "source": source,
+                        "error": str(exc)[:300],
+                    },
                 )
                 errors.append(
                     {
@@ -2136,7 +2408,9 @@ class SubscriptionService:
             "cleanup_step": cleanup_step,
             "cleanup_message": cleanup_message,
             "cleanup_payload": cleanup_payload,
-            "remaining_missing_count": len(missing_episodes) if tv_missing_enabled else None,
+            "remaining_missing_count": len(missing_episodes)
+            if tv_missing_enabled
+            else None,
         }
 
     async def _create_execution_log(
@@ -2168,13 +2442,18 @@ class SubscriptionService:
 
         keep_ids_result = await db.execute(
             select(SubscriptionExecutionLog.id)
-            .order_by(SubscriptionExecutionLog.started_at.desc(), SubscriptionExecutionLog.id.desc())
+            .order_by(
+                SubscriptionExecutionLog.started_at.desc(),
+                SubscriptionExecutionLog.id.desc(),
+            )
             .limit(5)
         )
         keep_ids = [row[0] for row in keep_ids_result.all() if row and row[0]]
         if keep_ids:
             await db.execute(
-                delete(SubscriptionExecutionLog).where(SubscriptionExecutionLog.id.notin_(keep_ids))
+                delete(SubscriptionExecutionLog).where(
+                    SubscriptionExecutionLog.id.notin_(keep_ids)
+                )
             )
 
     @staticmethod
@@ -2232,7 +2511,9 @@ class SubscriptionService:
 
     @staticmethod
     def _extract_resource_name(item: dict[str, Any]) -> str:
-        name = str(item.get("resource_name") or item.get("title") or item.get("name") or "").strip()
+        name = str(
+            item.get("resource_name") or item.get("title") or item.get("name") or ""
+        ).strip()
         return name or "未命名资源"
 
     @staticmethod
@@ -2252,7 +2533,9 @@ class SubscriptionService:
         return SubscriptionService._build_pansou_keyword(sub)
 
     @staticmethod
-    def _normalize_hdhive_subscription_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _normalize_hdhive_subscription_items(
+        items: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []
         for item in items:
             if not isinstance(item, dict):
@@ -2321,7 +2604,9 @@ class SubscriptionService:
         value = str(filename or "").strip().lower()
         if not value:
             return False
-        return value.endswith((".mp4", ".mkv", ".avi", ".ts", ".rmvb", ".flv", ".mov", ".wmv", ".m4v"))
+        return value.endswith(
+            (".mp4", ".mkv", ".avi", ".ts", ".rmvb", ".flv", ".mov", ".wmv", ".m4v")
+        )
 
     @staticmethod
     def _is_pan115_save_success(result: Any) -> bool:
@@ -2346,7 +2631,9 @@ class SubscriptionService:
             return False
         lowered = value.lower()
         if lowered.startswith(("http://", "https://", "//")):
-            return bool(re.search(r"(?:115(?:cdn)?\.com|share\.115\.com|anxia\.com)", lowered))
+            return bool(
+                re.search(r"(?:115(?:cdn)?\.com|share\.115\.com|anxia\.com)", lowered)
+            )
         return bool(re.fullmatch(r"[a-zA-Z0-9]+(?:-[a-zA-Z0-9]{4})?", value))
 
     @staticmethod
@@ -2383,12 +2670,14 @@ class SubscriptionService:
     @staticmethod
     def _normalize_channel(channel: str) -> str:
         normalized = str(channel or "").strip().lower()
-        if normalized not in {"nullbr", "pansou", "hdhive", "tg", "priority"}:
+        if normalized not in {"pansou", "hdhive", "tg", "priority"}:
             raise ValueError("unsupported channel")
         return normalized
 
     @staticmethod
-    def _resolve_status(failed_count: int, checked_count: int, auto_failed_count: int) -> ExecutionStatus:
+    def _resolve_status(
+        failed_count: int, checked_count: int, auto_failed_count: int
+    ) -> ExecutionStatus:
         total_failed = failed_count + auto_failed_count
         if total_failed <= 0:
             return ExecutionStatus.SUCCESS

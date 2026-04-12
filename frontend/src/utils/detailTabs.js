@@ -4,15 +4,12 @@ import { settingsApi } from '@/api'
 // All available tab definitions with display info
 export const ALL_TABS = [
   { key: 'pan115', label: '115网盘', group: 'main' },
-  { key: 'pan115_nullbr', label: 'Nullbr', group: 'pan115', parent: 'pan115' },
   { key: 'pan115_pansou', label: 'Pansou', group: 'pan115', parent: 'pan115' },
   { key: 'pan115_hdhive', label: 'HDHive', group: 'pan115', parent: 'pan115' },
   { key: 'pan115_tg', label: 'Telegram', group: 'pan115', parent: 'pan115' },
   { key: 'magnet', label: '磁力链接', group: 'main' },
-  { key: 'magnet_nullbr', label: 'Nullbr', group: 'magnet', parent: 'magnet' },
   { key: 'magnet_seedhub', label: 'SeedHub', group: 'magnet', parent: 'magnet' },
   { key: 'magnet_butailing', label: '不太灵', group: 'magnet', parent: 'magnet' },
-  { key: 'ed2k', label: 'ED2K', group: 'main' },
 ]
 
 const ALL_KEYS = ALL_TABS.map(t => t.key)

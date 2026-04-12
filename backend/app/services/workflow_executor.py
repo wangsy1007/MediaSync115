@@ -23,7 +23,9 @@ class WorkflowExecutor:
         context: dict[str, Any] | None = None,
     ) -> tuple[bool, str, dict[str, Any]]:
         context_data = dict(context or {})
-        actions_map = {str(item.get("id")): item for item in actions if item.get("id") is not None}
+        actions_map = {
+            str(item.get("id")): item for item in actions if item.get("id") is not None
+        }
         if not actions_map:
             return False, "工作流没有可执行动作", context_data
 
@@ -41,8 +43,10 @@ class WorkflowExecutor:
             queue = deque(actions_map.keys())
 
         await operation_log_service.log_background_event(
-            source_type="background_task", module="workflow",
-            action="workflow.execute.start", status="info",
+            source_type="background_task",
+            module="workflow",
+            action="workflow.execute.start",
+            status="info",
             message=f"工作流开始执行（ID: {workflow_id}，共 {len(actions_map)} 个动作）",
             extra={"workflow_id": workflow_id, "action_count": len(actions_map)},
         )
@@ -57,10 +61,16 @@ class WorkflowExecutor:
             ok, message = await self._execute_action(workflow_id, action, context_data)
             if not ok:
                 await operation_log_service.log_background_event(
-                    source_type="background_task", module="workflow",
-                    action="workflow.execute.action_failed", status="failed",
+                    source_type="background_task",
+                    module="workflow",
+                    action="workflow.execute.action_failed",
+                    status="failed",
                     message=f"工作流动作执行失败（ID: {workflow_id}）：{message[:200]}",
-                    extra={"workflow_id": workflow_id, "action_id": node, "error": message[:300]},
+                    extra={
+                        "workflow_id": workflow_id,
+                        "action_id": node,
+                        "error": message[:300],
+                    },
                 )
                 return False, message, context_data
 
@@ -72,22 +82,28 @@ class WorkflowExecutor:
 
         if visited == 0:
             await operation_log_service.log_background_event(
-                source_type="background_task", module="workflow",
-                action="workflow.execute.empty", status="warning",
+                source_type="background_task",
+                module="workflow",
+                action="workflow.execute.empty",
+                status="warning",
                 message=f"工作流未执行任何动作（ID: {workflow_id}）",
                 extra={"workflow_id": workflow_id},
             )
             return False, "工作流未执行任何动作", context_data
 
         await operation_log_service.log_background_event(
-            source_type="background_task", module="workflow",
-            action="workflow.execute.success", status="success",
+            source_type="background_task",
+            module="workflow",
+            action="workflow.execute.success",
+            status="success",
             message=f"工作流执行成功（ID: {workflow_id}，执行 {visited} 个动作）",
             extra={"workflow_id": workflow_id, "executed_actions": visited},
         )
         return True, "工作流执行成功", context_data
 
-    async def _execute_action(self, workflow_id: int, action: dict[str, Any], context: dict[str, Any]) -> tuple[bool, str]:
+    async def _execute_action(
+        self, workflow_id: int, action: dict[str, Any], context: dict[str, Any]
+    ) -> tuple[bool, str]:
         action_type = str(action.get("type") or "").strip()
         action_name = str(action.get("name") or action.get("id") or action_type)
         if not action_type:
@@ -102,7 +118,9 @@ class WorkflowExecutor:
             return False, f"动作 {action_name} 的 params 必须是对象"
 
         try:
-            return await handler(workflow_id=workflow_id, action=action, params=params, context=context)
+            return await handler(
+                workflow_id=workflow_id, action=action, params=params, context=context
+            )
         except Exception as exc:
             return False, f"动作 {action_name} 执行失败: {str(exc)}"
 
@@ -117,7 +135,7 @@ class WorkflowExecutor:
         return True, "日志动作执行完成"
 
     async def _action_search_media(self, **kwargs) -> tuple[bool, str]:
-        from app.services.nullbr_service import nullbr_service
+        from app.services.tmdb_service import tmdb_service
 
         params = kwargs.get("params") or {}
         context = kwargs.get("context") or {}
@@ -126,7 +144,7 @@ class WorkflowExecutor:
         if not query:
             return False, "search_media 缺少 query"
 
-        payload = await asyncio.to_thread(nullbr_service.search, query, page)
+        payload = await tmdb_service.search_multi(query, page)
         context["search_result"] = payload
         context["query"] = query
         return True, "媒体搜索完成"
@@ -138,10 +156,22 @@ class WorkflowExecutor:
         params = kwargs.get("params") or {}
         context = kwargs.get("context") or {}
 
-        share_url = str(params.get("share_url") or context.get("share_url") or "").strip()
-        folder_name = str(params.get("folder_name") or context.get("folder_name") or "").strip()
-        parent_id = str(runtime_settings_service.get_pan115_default_folder().get("folder_id") or "0").strip() or "0"
-        receive_code = str(params.get("receive_code") or context.get("receive_code") or "").strip()
+        share_url = str(
+            params.get("share_url") or context.get("share_url") or ""
+        ).strip()
+        folder_name = str(
+            params.get("folder_name") or context.get("folder_name") or ""
+        ).strip()
+        parent_id = (
+            str(
+                runtime_settings_service.get_pan115_default_folder().get("folder_id")
+                or "0"
+            ).strip()
+            or "0"
+        )
+        receive_code = str(
+            params.get("receive_code") or context.get("receive_code") or ""
+        ).strip()
         tmdb_id_raw = params.get("tmdb_id") or context.get("tmdb_id")
 
         if not share_url or not folder_name:
@@ -153,7 +183,9 @@ class WorkflowExecutor:
             result = await sync_service.sync_tv_show(
                 tmdb_id=int(tmdb_id_raw),
                 share_url=share_url,
-                target_folder_id=await pan115_service.get_or_create_folder(parent_id, folder_name),
+                target_folder_id=await pan115_service.get_or_create_folder(
+                    parent_id, folder_name
+                ),
                 receive_code=receive_code,
             )
         else:
@@ -165,7 +197,11 @@ class WorkflowExecutor:
             )
 
         context["save_result"] = result
-        success = bool(result.get("success", result.get("state", True))) if isinstance(result, dict) else True
+        success = (
+            bool(result.get("success", result.get("state", True)))
+            if isinstance(result, dict)
+            else True
+        )
         if not success:
             return False, f"转存失败: {result}"
         return True, "115 转存完成"
@@ -176,10 +212,22 @@ class WorkflowExecutor:
 
         params = kwargs.get("params") or {}
         context = kwargs.get("context") or {}
-        subscription_id = params.get("subscription_id") or context.get("subscription_id")
-        resource_name = params.get("resource_name") or context.get("resource_name") or "workflow-resource"
-        resource_url = params.get("resource_url") or context.get("resource_url") or "workflow://generated"
-        resource_type = params.get("resource_type") or context.get("resource_type") or "115"
+        subscription_id = params.get("subscription_id") or context.get(
+            "subscription_id"
+        )
+        resource_name = (
+            params.get("resource_name")
+            or context.get("resource_name")
+            or "workflow-resource"
+        )
+        resource_url = (
+            params.get("resource_url")
+            or context.get("resource_url")
+            or "workflow://generated"
+        )
+        resource_type = (
+            params.get("resource_type") or context.get("resource_type") or "115"
+        )
         file_id = params.get("file_id") or context.get("file_id")
 
         if not subscription_id:

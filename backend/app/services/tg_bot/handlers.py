@@ -25,10 +25,14 @@ def _auth_check(allowed_users: list) -> callable:
             if allowed_users:
                 user_id = update.effective_user.id
                 if user_id not in allowed_users:
-                    await update.effective_message.reply_text("你没有权限使用此机器人。")
+                    await update.effective_message.reply_text(
+                        "你没有权限使用此机器人。"
+                    )
                     return
             return await func(update, context)
+
         return wrapper
+
     return decorator
 
 
@@ -51,6 +55,7 @@ def register_handlers(app: Application, allowed_users: list) -> None:
 
 
 # ── Commands ──────────────────────────────────────────────
+
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
@@ -76,7 +81,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/s &lt;关键词&gt; - 搜索影视（TMDB）\n"
         "/subs - 查看所有订阅\n"
         "/run - 手动执行订阅检查\n"
-        "/run &lt;频道&gt; - 执行指定频道（nullbr/pansou/hdhive/tg）\n"
+        "/run &lt;频道&gt; - 执行指定频道（pansou/hdhive/tg）\n"
         "/status - 查看系统状态\n"
         "/offline - 查看离线下载任务\n"
         "/recent - 最近下载记录\n"
@@ -117,7 +122,7 @@ async def cmd_subs(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_run(update: Update, context: ContextTypes.DEFAULT_TYPE):
     channel = context.args[0] if context.args else "all"
-    valid_channels = {"all", "nullbr", "pansou", "hdhive", "tg"}
+    valid_channels = {"all", "pansou", "hdhive", "tg"}
     if channel not in valid_channels:
         await update.message.reply_text(
             f"无效的频道，可选：{', '.join(sorted(valid_channels))}"
@@ -127,7 +132,10 @@ async def cmd_run(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("正在启动订阅检查...")
 
     try:
-        from app.services.subscription_run_task_service import subscription_run_task_service
+        from app.services.subscription_run_task_service import (
+            subscription_run_task_service,
+        )
+
         result = await subscription_run_task_service.start(channel)
 
         if result.get("already_running"):
@@ -151,6 +159,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         from app.services.pan115_service import pan115_service
+
         cookie_result = await pan115_service.check_cookie_valid()
         if cookie_result.get("valid"):
             user_info = cookie_result.get("user_info") or {}
@@ -163,6 +172,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         from app.services.pan115_service import pan115_service
+
         quota = await pan115_service.get_offline_quota_info()
         total = quota.get("total_quota")
         used = quota.get("used_quota")
@@ -176,9 +186,12 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from app.core.database import async_session_maker
         from sqlalchemy import select, func
         from app.models.models import Subscription
+
         async with async_session_maker() as db:
             count_result = await db.execute(
-                select(func.count()).select_from(Subscription).where(Subscription.is_active == True)
+                select(func.count())
+                .select_from(Subscription)
+                .where(Subscription.is_active == True)
             )
             active_count = count_result.scalar() or 0
         lines.append(f"活跃订阅: {active_count} 部")
@@ -186,6 +199,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     from .service import tg_bot_service
+
     bot_status = tg_bot_service.status()
     lines.append(f"TG Bot: {'运行中' if bot_status['running'] else '已停止'}")
 
@@ -195,6 +209,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_offline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         from app.services.pan115_service import pan115_service
+
         result = await pan115_service.offline_task_list(page=1)
         tasks = result.get("tasks") or []
 
@@ -239,8 +254,17 @@ async def cmd_recent(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         lines = ["<b>最近下载记录</b>\n"]
         for record, title in rows:
-            status_map = {"completed": "done", "failed": "fail", "pending": "wait", "downloading": "..."}
-            status = status_map.get(record.status.value, record.status.value) if record.status else "?"
+            status_map = {
+                "completed": "done",
+                "failed": "fail",
+                "pending": "wait",
+                "downloading": "...",
+            }
+            status = (
+                status_map.get(record.status.value, record.status.value)
+                if record.status
+                else "?"
+            )
             name = escape(str(record.resource_name or title)[:45])
             lines.append(f"[{status}] {name}")
 
@@ -251,6 +275,7 @@ async def cmd_recent(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ── Callback Query Router ────────────────────────────────
+
 
 async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -321,6 +346,7 @@ async def cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── Search ────────────────────────────────────────────────
 
+
 async def _do_search(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -338,6 +364,7 @@ async def _do_search(
 
     try:
         from app.services.tmdb_service import tmdb_service
+
         result = await tmdb_service.search_multi(keyword, page=page)
     except Exception as e:
         text = f"搜索失败: {escape(str(e))}"
@@ -352,7 +379,7 @@ async def _do_search(
     total_results = result.get("total_results", 0)
 
     if not items:
-        text = f"未找到 \"{escape(keyword)}\" 的相关结果。"
+        text = f'未找到 "{escape(keyword)}" 的相关结果。'
         if placeholder:
             await placeholder.edit_text(text)
         elif edit:
@@ -372,15 +399,17 @@ async def _do_search(
         if date_str:
             year = date_str[:4]
         rating = item.get("vote_average", 0)
-        search_items.append({
-            "tmdb_id": tmdb_id,
-            "media_type": media_type,
-            "title": title,
-            "year": year,
-            "rating": rating,
-            "poster_path": item.get("poster_path"),
-            "overview": item.get("overview", ""),
-        })
+        search_items.append(
+            {
+                "tmdb_id": tmdb_id,
+                "media_type": media_type,
+                "title": title,
+                "year": year,
+                "rating": rating,
+                "poster_path": item.get("poster_path"),
+                "overview": item.get("overview", ""),
+            }
+        )
 
     context.user_data["search_results"] = search_items
 
@@ -390,18 +419,24 @@ async def _do_search(
         type_label = "movie" if item["media_type"] == "movie" else "tv"
         year_str = f" ({item['year']})" if item["year"] else ""
         rating_str = f" {item['rating']:.1f}" if item["rating"] else ""
-        lines.append(f"{i+1}. [{type_label}] {escape(item['title'])}{year_str}{rating_str}")
-        buttons.append([InlineKeyboardButton(
-            f"{i+1}. {item['title'][:30]}{year_str}",
-            callback_data=f"det:{item['tmdb_id']}:{item['media_type']}",
-        )])
+        lines.append(
+            f"{i + 1}. [{type_label}] {escape(item['title'])}{year_str}{rating_str}"
+        )
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"{i + 1}. {item['title'][:30]}{year_str}",
+                    callback_data=f"det:{item['tmdb_id']}:{item['media_type']}",
+                )
+            ]
+        )
 
     # Pagination
     nav = []
     if page > 1:
-        nav.append(InlineKeyboardButton("< 上一页", callback_data=f"sp:{page-1}"))
+        nav.append(InlineKeyboardButton("< 上一页", callback_data=f"sp:{page - 1}"))
     if page < total_pages:
-        nav.append(InlineKeyboardButton("下一页 >", callback_data=f"sp:{page+1}"))
+        nav.append(InlineKeyboardButton("下一页 >", callback_data=f"sp:{page + 1}"))
     if nav:
         buttons.append(nav)
 
@@ -409,12 +444,17 @@ async def _do_search(
     text = "\n".join(lines)
 
     if placeholder:
-        await placeholder.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        await placeholder.edit_text(
+            text, parse_mode=ParseMode.HTML, reply_markup=markup
+        )
     elif edit:
-        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        await update.callback_query.edit_message_text(
+            text, parse_mode=ParseMode.HTML, reply_markup=markup
+        )
 
 
 # ── Detail ────────────────────────────────────────────────
+
 
 async def _show_detail(
     update: Update,
@@ -426,10 +466,18 @@ async def _show_detail(
 
     # Find item from cached search results
     cached = context.user_data.get("search_results") or []
-    item = next((r for r in cached if r["tmdb_id"] == tmdb_id and r["media_type"] == media_type), None)
+    item = next(
+        (
+            r
+            for r in cached
+            if r["tmdb_id"] == tmdb_id and r["media_type"] == media_type
+        ),
+        None,
+    )
 
     try:
         from app.services.tmdb_service import tmdb_service
+
         if media_type == "movie":
             detail = await tmdb_service.get_movie_detail(tmdb_id)
         else:
@@ -444,7 +492,11 @@ async def _show_detail(
         date_str = detail.get("release_date") or detail.get("first_air_date") or ""
         year = date_str[:4] if date_str else ""
         genres = ", ".join(g.get("name", "") for g in (detail.get("genres") or [])[:5])
-        runtime = detail.get("runtime") or detail.get("episode_run_time", [None])[0] if detail.get("episode_run_time") else None
+        runtime = (
+            detail.get("runtime") or detail.get("episode_run_time", [None])[0]
+            if detail.get("episode_run_time")
+            else None
+        )
         seasons = detail.get("number_of_seasons")
         episodes = detail.get("number_of_episodes")
     elif item:
@@ -490,8 +542,12 @@ async def _show_detail(
 
     buttons = [
         [
-            InlineKeyboardButton("搜索资源", callback_data=f"res:{tmdb_id}:{media_type}"),
-            InlineKeyboardButton("添加订阅", callback_data=f"sub:{tmdb_id}:{media_type}"),
+            InlineKeyboardButton(
+                "搜索资源", callback_data=f"res:{tmdb_id}:{media_type}"
+            ),
+            InlineKeyboardButton(
+                "添加订阅", callback_data=f"sub:{tmdb_id}:{media_type}"
+            ),
         ],
         [InlineKeyboardButton("< 返回搜索", callback_data="back:search")],
     ]
@@ -505,6 +561,7 @@ async def _show_detail(
 
 # ── Resource Menu ─────────────────────────────────────────
 
+
 async def _show_resource_menu(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -517,15 +574,25 @@ async def _show_resource_menu(
 
     buttons = [
         [
-            InlineKeyboardButton("115 网盘资源", callback_data=f"r115:{tmdb_id}:{media_type}"),
+            InlineKeyboardButton(
+                "115 网盘资源", callback_data=f"r115:{tmdb_id}:{media_type}"
+            ),
         ],
         [
-            InlineKeyboardButton("磁力链接", callback_data=f"rmag:{tmdb_id}:{media_type}"),
+            InlineKeyboardButton(
+                "磁力链接", callback_data=f"rmag:{tmdb_id}:{media_type}"
+            ),
         ],
         [
-            InlineKeyboardButton("添加订阅", callback_data=f"sub:{tmdb_id}:{media_type}"),
+            InlineKeyboardButton(
+                "添加订阅", callback_data=f"sub:{tmdb_id}:{media_type}"
+            ),
         ],
-        [InlineKeyboardButton("< 返回详情", callback_data=f"det:{tmdb_id}:{media_type}")],
+        [
+            InlineKeyboardButton(
+                "< 返回详情", callback_data=f"det:{tmdb_id}:{media_type}"
+            )
+        ],
     ]
 
     await query.edit_message_text(
@@ -536,6 +603,7 @@ async def _show_resource_menu(
 
 
 # ── 115 Resources ─────────────────────────────────────────
+
 
 async def _search_115_resources(
     update: Update,
@@ -551,28 +619,10 @@ async def _search_115_resources(
 
     resources = []
 
-    # Search via nullbr
-    try:
-        from app.services.nullbr_service import nullbr_service
-        if media_type == "movie":
-            nullbr_result = nullbr_service.get_movie_pan115(tmdb_id)
-        else:
-            nullbr_result = nullbr_service.get_tv_pan115(tmdb_id)
-        nullbr_list = nullbr_result.get("list") or []
-        for item in nullbr_list:
-            resources.append({
-                "title": item.get("title") or item.get("resource_name") or "未知",
-                "share_link": item.get("share_link") or item.get("share_url") or "",
-                "size": item.get("size") or "",
-                "quality": item.get("quality") or item.get("resolution") or "",
-                "source": "nullbr",
-            })
-    except Exception:
-        logger.debug("Nullbr 115 search failed for tmdb_id=%s", tmdb_id)
-
     # Search via pansou
     try:
         from app.services.tmdb_service import tmdb_service
+
         if media_type == "movie":
             tmdb_detail = await tmdb_service.get_movie_detail(tmdb_id)
         else:
@@ -580,20 +630,36 @@ async def _search_115_resources(
 
         keywords = _build_search_keywords(tmdb_detail, media_type)
         from app.services.pansou_service import pansou_service
+
         for kw in keywords[:3]:
             try:
                 pansou_result = await pansou_service.search(kw, resource_type="115")
-                items = pansou_result if isinstance(pansou_result, list) else (pansou_result.get("list") or [])
+                items = (
+                    pansou_result
+                    if isinstance(pansou_result, list)
+                    else (pansou_result.get("list") or [])
+                )
                 for item in items[:10]:
-                    share_link = item.get("share_link") or item.get("url") or item.get("link") or ""
-                    if share_link and not any(r["share_link"] == share_link for r in resources):
-                        resources.append({
-                            "title": item.get("title") or item.get("name") or kw,
-                            "share_link": share_link,
-                            "size": item.get("size") or "",
-                            "quality": item.get("quality") or item.get("resolution") or "",
-                            "source": "pansou",
-                        })
+                    share_link = (
+                        item.get("share_link")
+                        or item.get("url")
+                        or item.get("link")
+                        or ""
+                    )
+                    if share_link and not any(
+                        r["share_link"] == share_link for r in resources
+                    ):
+                        resources.append(
+                            {
+                                "title": item.get("title") or item.get("name") or kw,
+                                "share_link": share_link,
+                                "size": item.get("size") or "",
+                                "quality": item.get("quality")
+                                or item.get("resolution")
+                                or "",
+                                "source": "pansou",
+                            }
+                        )
                 if resources:
                     break
             except Exception:
@@ -622,7 +688,13 @@ async def _show_115_resource_page(
     query = update.callback_query
 
     if not resources:
-        buttons = [[InlineKeyboardButton("< 返回", callback_data=f"res:{tmdb_id}:{media_type}")]]
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    "< 返回", callback_data=f"res:{tmdb_id}:{media_type}"
+                )
+            ]
+        ]
         await query.edit_message_text(
             f"<b>{escape(title)}</b> - 未找到 115 资源",
             parse_mode=ParseMode.HTML,
@@ -633,7 +705,7 @@ async def _show_115_resource_page(
     total_pages = (len(resources) + RESOURCE_PAGE_SIZE - 1) // RESOURCE_PAGE_SIZE
     page = max(1, min(page, total_pages))
     start = (page - 1) * RESOURCE_PAGE_SIZE
-    page_items = resources[start:start + RESOURCE_PAGE_SIZE]
+    page_items = resources[start : start + RESOURCE_PAGE_SIZE]
 
     lines = [f"<b>{escape(title)}</b> - 115 资源 ({len(resources)}个)\n"]
     buttons = []
@@ -642,20 +714,26 @@ async def _show_115_resource_page(
         res_title = escape(str(res["title"])[:40])
         size = f" [{res['size']}]" if res.get("size") else ""
         quality = f" {res['quality']}" if res.get("quality") else ""
-        lines.append(f"{global_idx+1}. {res_title}{quality}{size}")
-        buttons.append([InlineKeyboardButton(
-            f"转存 {global_idx+1}: {str(res['title'])[:25]}",
-            callback_data=f"sv:{global_idx}",
-        )])
+        lines.append(f"{global_idx + 1}. {res_title}{quality}{size}")
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"转存 {global_idx + 1}: {str(res['title'])[:25]}",
+                    callback_data=f"sv:{global_idx}",
+                )
+            ]
+        )
 
     nav = []
     if page > 1:
-        nav.append(InlineKeyboardButton("< 上页", callback_data=f"r115p:{page-1}"))
+        nav.append(InlineKeyboardButton("< 上页", callback_data=f"r115p:{page - 1}"))
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
     if page < total_pages:
-        nav.append(InlineKeyboardButton("下页 >", callback_data=f"r115p:{page+1}"))
+        nav.append(InlineKeyboardButton("下页 >", callback_data=f"r115p:{page + 1}"))
     buttons.append(nav)
-    buttons.append([InlineKeyboardButton("< 返回", callback_data=f"res:{tmdb_id}:{media_type}")])
+    buttons.append(
+        [InlineKeyboardButton("< 返回", callback_data=f"res:{tmdb_id}:{media_type}")]
+    )
 
     await query.edit_message_text(
         "\n".join(lines),
@@ -665,6 +743,7 @@ async def _show_115_resource_page(
 
 
 # ── Magnet Resources ──────────────────────────────────────
+
 
 async def _search_magnet_resources(
     update: Update,
@@ -680,38 +759,23 @@ async def _search_magnet_resources(
 
     resources = []
 
-    # Search via nullbr
-    try:
-        from app.services.nullbr_service import nullbr_service
-        if media_type == "movie":
-            result = nullbr_service.get_movie_magnet(tmdb_id)
-        else:
-            result = nullbr_service.get_tv_magnet(tmdb_id)
-        for item in (result.get("list") or []):
-            resources.append({
-                "name": item.get("name") or item.get("title") or "未知",
-                "magnet": item.get("magnet") or item.get("magnet_link") or "",
-                "size": item.get("size") or "",
-                "quality": item.get("quality") or "",
-                "source": "nullbr",
-            })
-    except Exception:
-        logger.debug("Nullbr magnet search failed for tmdb_id=%s", tmdb_id)
-
     # Search via butailing
     try:
         from app.services.butailing_service import butailing_service
+
         bt_results = await butailing_service.search_magnets(title, media_type)
         for item in bt_results:
             magnet = item.get("magnet", "")
             if magnet and not any(r["magnet"] == magnet for r in resources):
-                resources.append({
-                    "name": item.get("name") or "未知",
-                    "magnet": magnet,
-                    "size": item.get("size") or "",
-                    "quality": item.get("quality") or "",
-                    "source": "butailing",
-                })
+                resources.append(
+                    {
+                        "name": item.get("name") or "未知",
+                        "magnet": magnet,
+                        "size": item.get("size") or "",
+                        "quality": item.get("quality") or "",
+                        "source": "butailing",
+                    }
+                )
     except Exception:
         logger.debug("Butailing magnet search failed for title=%s", title)
 
@@ -736,7 +800,13 @@ async def _show_magnet_resource_page(
     query = update.callback_query
 
     if not resources:
-        buttons = [[InlineKeyboardButton("< 返回", callback_data=f"res:{tmdb_id}:{media_type}")]]
+        buttons = [
+            [
+                InlineKeyboardButton(
+                    "< 返回", callback_data=f"res:{tmdb_id}:{media_type}"
+                )
+            ]
+        ]
         await query.edit_message_text(
             f"<b>{escape(title)}</b> - 未找到磁力资源",
             parse_mode=ParseMode.HTML,
@@ -747,7 +817,7 @@ async def _show_magnet_resource_page(
     total_pages = (len(resources) + RESOURCE_PAGE_SIZE - 1) // RESOURCE_PAGE_SIZE
     page = max(1, min(page, total_pages))
     start = (page - 1) * RESOURCE_PAGE_SIZE
-    page_items = resources[start:start + RESOURCE_PAGE_SIZE]
+    page_items = resources[start : start + RESOURCE_PAGE_SIZE]
 
     lines = [f"<b>{escape(title)}</b> - 磁力资源 ({len(resources)}个)\n"]
     buttons = []
@@ -756,20 +826,26 @@ async def _show_magnet_resource_page(
         res_name = escape(str(res["name"])[:40])
         size = f" [{res['size']}]" if res.get("size") else ""
         quality = f" {res['quality']}" if res.get("quality") else ""
-        lines.append(f"{global_idx+1}. {res_name}{quality}{size}")
-        buttons.append([InlineKeyboardButton(
-            f"离线 {global_idx+1}: {str(res['name'])[:25]}",
-            callback_data=f"ol:{global_idx}",
-        )])
+        lines.append(f"{global_idx + 1}. {res_name}{quality}{size}")
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"离线 {global_idx + 1}: {str(res['name'])[:25]}",
+                    callback_data=f"ol:{global_idx}",
+                )
+            ]
+        )
 
     nav = []
     if page > 1:
-        nav.append(InlineKeyboardButton("< 上页", callback_data=f"rmagp:{page-1}"))
+        nav.append(InlineKeyboardButton("< 上页", callback_data=f"rmagp:{page - 1}"))
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
     if page < total_pages:
-        nav.append(InlineKeyboardButton("下页 >", callback_data=f"rmagp:{page+1}"))
+        nav.append(InlineKeyboardButton("下页 >", callback_data=f"rmagp:{page + 1}"))
     buttons.append(nav)
-    buttons.append([InlineKeyboardButton("< 返回", callback_data=f"res:{tmdb_id}:{media_type}")])
+    buttons.append(
+        [InlineKeyboardButton("< 返回", callback_data=f"res:{tmdb_id}:{media_type}")]
+    )
 
     await query.edit_message_text(
         "\n".join(lines),
@@ -779,6 +855,7 @@ async def _show_magnet_resource_page(
 
 
 # ── Save / Offline Actions ────────────────────────────────
+
 
 async def _save_115_resource(
     update: Update,
@@ -825,14 +902,24 @@ async def _save_115_resource(
         if state or (isinstance(result, dict) and not result.get("error")):
             text = f"转存成功: <b>{escape(title[:50])}</b>"
         else:
-            error = result.get("error", "未知错误") if isinstance(result, dict) else str(result)
+            error = (
+                result.get("error", "未知错误")
+                if isinstance(result, dict)
+                else str(result)
+            )
             text = f"转存失败: {escape(str(error)[:200])}"
     except Exception as e:
         text = f"转存出错: {escape(str(e)[:200])}"
 
     tmdb_id = context.user_data.get("cached_115_tmdb_id", 0)
     media_type = context.user_data.get("cached_115_media_type", "movie")
-    buttons = [[InlineKeyboardButton("< 返回资源列表", callback_data=f"r115:{tmdb_id}:{media_type}")]]
+    buttons = [
+        [
+            InlineKeyboardButton(
+                "< 返回资源列表", callback_data=f"r115:{tmdb_id}:{media_type}"
+            )
+        ]
+    ]
 
     await query.edit_message_text(
         text,
@@ -870,19 +957,31 @@ async def _add_offline_task(
         offline_folder = runtime_settings_service.get_pan115_offline_folder()
         wp_path_id = offline_folder["folder_id"]
 
-        result = await pan115_service.offline_task_add(url=magnet, wp_path_id=wp_path_id)
+        result = await pan115_service.offline_task_add(
+            url=magnet, wp_path_id=wp_path_id
+        )
 
         if isinstance(result, dict) and result.get("state", False):
             text = f"离线任务已添加: <b>{escape(name[:50])}</b>"
         else:
-            error = result.get("error_msg") or result.get("error") or "未知错误" if isinstance(result, dict) else str(result)
+            error = (
+                result.get("error_msg") or result.get("error") or "未知错误"
+                if isinstance(result, dict)
+                else str(result)
+            )
             text = f"添加失败: {escape(str(error)[:200])}"
     except Exception as e:
         text = f"添加出错: {escape(str(e)[:200])}"
 
     tmdb_id = context.user_data.get("cached_magnet_tmdb_id", 0)
     media_type = context.user_data.get("cached_magnet_media_type", "movie")
-    buttons = [[InlineKeyboardButton("< 返回资源列表", callback_data=f"rmag:{tmdb_id}:{media_type}")]]
+    buttons = [
+        [
+            InlineKeyboardButton(
+                "< 返回资源列表", callback_data=f"rmag:{tmdb_id}:{media_type}"
+            )
+        ]
+    ]
 
     await query.edit_message_text(
         text,
@@ -892,6 +991,7 @@ async def _add_offline_task(
 
 
 # ── Subscriptions ─────────────────────────────────────────
+
 
 async def _add_subscription(
     update: Update,
@@ -940,6 +1040,7 @@ async def _add_subscription(
 
         # Send notification
         from .notifications import tg_bot_notify
+
         await tg_bot_notify(
             f"<b>新增订阅</b>\n"
             f"{'电影' if media_type == 'movie' else '电视剧'}: {escape(title)}"
@@ -962,14 +1063,18 @@ async def _delete_subscription(
         from app.models.models import Subscription, DownloadRecord
 
         async with async_session_maker() as db:
-            result = await db.execute(select(Subscription).where(Subscription.id == sub_id))
+            result = await db.execute(
+                select(Subscription).where(Subscription.id == sub_id)
+            )
             sub = result.scalar_one_or_none()
             if not sub:
                 await query.answer("订阅不存在", show_alert=True)
                 return
 
             title = sub.title
-            await db.execute(delete(DownloadRecord).where(DownloadRecord.subscription_id == sub_id))
+            await db.execute(
+                delete(DownloadRecord).where(DownloadRecord.subscription_id == sub_id)
+            )
             await db.execute(delete(Subscription).where(Subscription.id == sub_id))
             await db.commit()
 
@@ -1017,25 +1122,29 @@ async def _show_subscriptions(
     total_pages = (len(subs) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
     page = max(1, min(page, total_pages))
     start = (page - 1) * ITEMS_PER_PAGE
-    page_items = subs[start:start + ITEMS_PER_PAGE]
+    page_items = subs[start : start + ITEMS_PER_PAGE]
 
     lines = [f"<b>订阅列表</b> ({len(subs)} 部)\n"]
     buttons = []
     for i, sub in enumerate(page_items):
         type_label = "movie" if sub.media_type.value == "movie" else "tv"
         year_str = f" ({sub.year})" if sub.year else ""
-        lines.append(f"{start+i+1}. [{type_label}] {escape(sub.title)}{year_str}")
-        buttons.append([InlineKeyboardButton(
-            f"取消订阅: {sub.title[:25]}",
-            callback_data=f"unsub:{sub.id}",
-        )])
+        lines.append(f"{start + i + 1}. [{type_label}] {escape(sub.title)}{year_str}")
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"取消订阅: {sub.title[:25]}",
+                    callback_data=f"unsub:{sub.id}",
+                )
+            ]
+        )
 
     nav = []
     if page > 1:
-        nav.append(InlineKeyboardButton("< 上一页", callback_data=f"subp:{page-1}"))
+        nav.append(InlineKeyboardButton("< 上一页", callback_data=f"subp:{page - 1}"))
     nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
     if page < total_pages:
-        nav.append(InlineKeyboardButton("下一页 >", callback_data=f"subp:{page+1}"))
+        nav.append(InlineKeyboardButton("下一页 >", callback_data=f"subp:{page + 1}"))
     if nav:
         buttons.append(nav)
 
@@ -1043,12 +1152,17 @@ async def _show_subscriptions(
     text = "\n".join(lines)
 
     if edit:
-        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        await update.callback_query.edit_message_text(
+            text, parse_mode=ParseMode.HTML, reply_markup=markup
+        )
     else:
-        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+        await update.message.reply_text(
+            text, parse_mode=ParseMode.HTML, reply_markup=markup
+        )
 
 
 # ── Helpers ───────────────────────────────────────────────
+
 
 def _build_search_keywords(detail: dict, media_type: str) -> list[str]:
     title = detail.get("title") or detail.get("name") or ""

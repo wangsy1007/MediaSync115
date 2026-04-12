@@ -7,7 +7,7 @@ from app.core.database import async_session_maker
 from app.services.operation_log_service import operation_log_service
 from app.services.subscription_service import subscription_service
 
-ALL_CHANNELS = ["nullbr", "hdhive", "pansou", "tg"]
+ALL_CHANNELS = ["hdhive", "pansou", "tg"]
 
 
 class SubscriptionRunTaskService:
@@ -16,14 +16,18 @@ class SubscriptionRunTaskService:
         self._running_by_channel: dict[str, str] = {}
         self._lock = asyncio.Lock()
 
-    async def start(self, channel: str, force_auto_download: bool = False) -> dict[str, Any]:
+    async def start(
+        self, channel: str, force_auto_download: bool = False
+    ) -> dict[str, Any]:
         normalized_channel = self._normalize_channel(channel)
         async with self._lock:
             # 当执行全部渠道时，检查是否有任何渠道正在运行
             if normalized_channel == "all":
                 running_channels = [
-                    ch for ch in ALL_CHANNELS
-                    if self._running_by_channel.get(ch) and self._running_by_channel[ch] in self._tasks
+                    ch
+                    for ch in ALL_CHANNELS
+                    if self._running_by_channel.get(ch)
+                    and self._running_by_channel[ch] in self._tasks
                 ]
                 if running_channels:
                     existing = {
@@ -67,10 +71,15 @@ class SubscriptionRunTaskService:
             status="info",
             message=f"订阅后台任务已入队: {normalized_channel}",
             trace_id=task_id,
-            extra={"channel": normalized_channel, "force_auto_download": bool(force_auto_download)},
+            extra={
+                "channel": normalized_channel,
+                "force_auto_download": bool(force_auto_download),
+            },
         )
 
-        asyncio.create_task(self._run_task(task_id, normalized_channel, bool(force_auto_download)))
+        asyncio.create_task(
+            self._run_task(task_id, normalized_channel, bool(force_auto_download))
+        )
         return dict(task)
 
     async def get(self, task_id: str) -> dict[str, Any] | None:
@@ -80,7 +89,9 @@ class SubscriptionRunTaskService:
                 return None
             return dict(task)
 
-    async def _run_task(self, task_id: str, channel: str, force_auto_download: bool) -> None:
+    async def _run_task(
+        self, task_id: str, channel: str, force_auto_download: bool
+    ) -> None:
         if channel == "all":
             await self._run_all_channels(task_id, force_auto_download)
             return
@@ -193,7 +204,11 @@ class SubscriptionRunTaskService:
                 {
                     "status": "running",
                     "message": channel_message,
-                    "progress": {"current_channel": ch, "current_index": idx + 1, "total_channels": len(ALL_CHANNELS)},
+                    "progress": {
+                        "current_channel": ch,
+                        "current_index": idx + 1,
+                        "total_channels": len(ALL_CHANNELS),
+                    },
                 },
             )
 
@@ -219,7 +234,11 @@ class SubscriptionRunTaskService:
                 }
                 failed_count += 1
 
-        final_status = "success" if failed_count == 0 else ("partial" if success_count > 0 else "failed")
+        final_status = (
+            "success"
+            if failed_count == 0
+            else ("partial" if success_count > 0 else "failed")
+        )
         final_message = f"全部渠道执行完成: {success_count} 成功, {failed_count} 失败"
 
         await self._update_task(
@@ -275,6 +294,7 @@ class SubscriptionRunTaskService:
         try:
             from app.services.tg_bot.notifications import tg_bot_notify
             from html import escape
+
             checked = result.get("checked_count", 0)
             new_res = result.get("new_resource_count", 0)
             auto_saved = result.get("auto_saved_count", 0)
@@ -294,6 +314,7 @@ class SubscriptionRunTaskService:
         try:
             from app.services.tg_bot.notifications import tg_bot_notify
             from html import escape
+
             await tg_bot_notify(
                 f"<b>订阅检查失败</b> [{escape(channel)}]\n{escape(error[:200])}"
             )
@@ -302,12 +323,17 @@ class SubscriptionRunTaskService:
 
     @staticmethod
     async def _notify_all_channels_result(
-        results: dict, success_count: int, failed_count: int,
+        results: dict,
+        success_count: int,
+        failed_count: int,
     ) -> None:
         try:
             from app.services.tg_bot.notifications import tg_bot_notify
             from html import escape
-            lines = [f"<b>全渠道订阅检查完成</b>  成功: {success_count}  失败: {failed_count}"]
+
+            lines = [
+                f"<b>全渠道订阅检查完成</b>  成功: {success_count}  失败: {failed_count}"
+            ]
             for ch, info in results.items():
                 status = info.get("status", "?")
                 checked = info.get("checked_count", "")
@@ -321,7 +347,7 @@ class SubscriptionRunTaskService:
     @staticmethod
     def _normalize_channel(channel: str) -> str:
         normalized = str(channel or "").strip().lower()
-        if normalized not in {"nullbr", "pansou", "hdhive", "tg", "priority", "all"}:
+        if normalized not in {"pansou", "hdhive", "tg", "priority", "all"}:
             raise ValueError("unsupported channel")
         return normalized
 

@@ -25,7 +25,6 @@ class JobRegistry:
             "system.noop": self._noop,
             "system.archive_scan": self._archive_scan,
             "hdhive.checkin": self._hdhive_checkin,
-            "subscription.check_nullbr": self._check_subscription_nullbr,
             "subscription.check_hdhive": self._check_subscription_hdhive,
             "subscription.check_pansou": self._check_subscription_pansou,
             "subscription.check_tg": self._check_subscription_tg,
@@ -126,10 +125,6 @@ class JobRegistry:
             extra={"method": method, "gamble": gamble, "result": result},
         )
         return result
-
-    async def _check_subscription_nullbr(self, **kwargs) -> dict[str, Any]:
-        async with async_session_maker() as db:
-            return await subscription_service.run_channel_check(db, "nullbr")
 
     async def _check_subscription_pansou(self, **kwargs) -> dict[str, Any]:
         async with async_session_maker() as db:

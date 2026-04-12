@@ -12,7 +12,6 @@ class SubscriptionSchedulerService:
     async def ensure_subscription_tasks(self) -> None:
         settings_data = runtime_settings_service.get_all()
         channels = (
-            ("nullbr", "Nullbr 订阅检查"),
             ("hdhive", "HDHive 订阅检查"),
             ("pansou", "Pansou 订阅检查"),
             ("tg", "Telegram 订阅检查"),
@@ -20,14 +19,24 @@ class SubscriptionSchedulerService:
 
         async with async_session_maker() as db:
             for channel, display_name in channels:
-                enabled = bool(settings_data.get(f"subscription_{channel}_enabled", False))
-                interval_hours = int(settings_data.get(f"subscription_{channel}_interval_hours", 24) or 24)
-                run_time = str(settings_data.get(f"subscription_{channel}_run_time", "03:00") or "03:00")
+                enabled = bool(
+                    settings_data.get(f"subscription_{channel}_enabled", False)
+                )
+                interval_hours = int(
+                    settings_data.get(f"subscription_{channel}_interval_hours", 24)
+                    or 24
+                )
+                run_time = str(
+                    settings_data.get(f"subscription_{channel}_run_time", "03:00")
+                    or "03:00"
+                )
                 cron_expr = self._build_cron_expr(interval_hours, run_time)
                 job_key = f"subscription.check_{channel}"
 
                 result = await db.execute(
-                    select(SchedulerTask).where(SchedulerTask.job_key == job_key).limit(1)
+                    select(SchedulerTask)
+                    .where(SchedulerTask.job_key == job_key)
+                    .limit(1)
                 )
                 task = result.scalar_one_or_none()
                 if not task:
@@ -62,8 +71,12 @@ class SubscriptionSchedulerService:
         """确保榜单订阅定时任务存在。"""
         settings_data = runtime_settings_service.get_all()
         enabled = bool(settings_data.get("chart_subscription_enabled", False))
-        interval_hours = int(settings_data.get("chart_subscription_interval_hours", 24) or 24)
-        run_time = str(settings_data.get("chart_subscription_run_time", "02:00") or "02:00")
+        interval_hours = int(
+            settings_data.get("chart_subscription_interval_hours", 24) or 24
+        )
+        run_time = str(
+            settings_data.get("chart_subscription_run_time", "02:00") or "02:00"
+        )
         cron_expr = self._build_cron_expr(interval_hours, run_time)
         job_key = "chart_subscription.sync"
 

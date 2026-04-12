@@ -7,7 +7,6 @@ from typing import Any
 
 from app.core.config import settings
 from app.services.hdhive_service import hdhive_service
-from app.services.nullbr_client import nullbr_client
 from app.services.pansou_service import pansou_service
 from app.services.tg_service import tg_service
 from app.services.emby_service import emby_service
@@ -25,9 +24,6 @@ class RuntimeSettingsService:
         "hdhive_api_key": "HDHIVE_API_KEY",
         "hdhive_base_url": "HDHIVE_BASE_URL",
         "pansou_base_url": "PANSOU_BASE_URL",
-        "nullbr_app_id": "NULLBR_APP_ID",
-        "nullbr_api_key": "NULLBR_API_KEY",
-        "nullbr_base_url": "NULLBR_BASE_URL",
         "tg_api_id": "TG_API_ID",
         "tg_api_hash": "TG_API_HASH",
         "tg_phone": "TG_PHONE",
@@ -83,9 +79,6 @@ class RuntimeSettingsService:
             "hdhive_auto_checkin_method": "api",
             "hdhive_auto_checkin_run_time": "09:00",
             "pansou_base_url": settings.PANSOU_BASE_URL,
-            "nullbr_app_id": settings.NULLBR_APP_ID,
-            "nullbr_api_key": settings.NULLBR_API_KEY,
-            "nullbr_base_url": settings.NULLBR_BASE_URL,
             "tg_api_id": settings.TG_API_ID or "",
             "tg_api_hash": settings.TG_API_HASH or "",
             "tg_phone": settings.TG_PHONE or "",
@@ -120,19 +113,16 @@ class RuntimeSettingsService:
             "auth_username": "admin",
             "auth_password_hash": "",
             "auth_secret": "",
-            "subscription_nullbr_enabled": False,
-            "subscription_nullbr_interval_hours": 24,
-            "subscription_nullbr_run_time": "03:00",
             "subscription_hdhive_enabled": False,
             "subscription_hdhive_interval_hours": 24,
-            "subscription_hdhive_run_time": "03:15",
+            "subscription_hdhive_run_time": "03:00",
             "subscription_pansou_enabled": False,
             "subscription_pansou_interval_hours": 24,
-            "subscription_pansou_run_time": "03:30",
+            "subscription_pansou_run_time": "03:15",
             "subscription_tg_enabled": False,
             "subscription_tg_interval_hours": 24,
-            "subscription_tg_run_time": "04:00",
-            "subscription_resource_priority": ["nullbr", "hdhive", "pansou", "tg"],
+            "subscription_tg_run_time": "03:30",
+            "subscription_resource_priority": ["hdhive", "pansou", "tg"],
             "subscription_hdhive_auto_unlock_enabled": False,
             "subscription_hdhive_unlock_max_points_per_item": 10,
             "subscription_hdhive_unlock_budget_points_per_run": 30,
@@ -148,15 +138,12 @@ class RuntimeSettingsService:
             "tg_bot_notify_chat_ids": [],
             "detail_visible_tabs": [
                 "pan115",
-                "pan115_nullbr",
                 "pan115_pansou",
                 "pan115_hdhive",
                 "pan115_tg",
                 "magnet",
-                "magnet_nullbr",
                 "magnet_seedhub",
                 "magnet_butailing",
-                "ed2k",
             ],
             "license_key": "",
             "subscription_offline_transfer_enabled": False,
@@ -236,9 +223,6 @@ class RuntimeSettingsService:
             "hdhive_api_key": settings.HDHIVE_API_KEY or "",
             "hdhive_base_url": settings.HDHIVE_BASE_URL or "",
             "pansou_base_url": settings.PANSOU_BASE_URL or "",
-            "nullbr_app_id": settings.NULLBR_APP_ID or "",
-            "nullbr_api_key": settings.NULLBR_API_KEY or "",
-            "nullbr_base_url": settings.NULLBR_BASE_URL or "",
             "tg_api_id": settings.TG_API_ID or "",
             "tg_api_hash": settings.TG_API_HASH or "",
             "tg_phone": settings.TG_PHONE or "",
@@ -462,15 +446,6 @@ class RuntimeSettingsService:
             "folder_name": normalized_name,
         }
 
-    def get_nullbr_app_id(self) -> str:
-        return self._data["nullbr_app_id"]
-
-    def get_nullbr_api_key(self) -> str:
-        return self._data["nullbr_api_key"]
-
-    def get_nullbr_base_url(self) -> str:
-        return self._data["nullbr_base_url"]
-
     def get_tg_api_id(self) -> str:
         return str(self._data.get("tg_api_id") or "")
 
@@ -623,7 +598,7 @@ class RuntimeSettingsService:
         if not isinstance(value, list):
             return list(self._defaults["subscription_resource_priority"])
 
-        allowed = {"nullbr", "hdhive", "pansou", "tg"}
+        allowed = {"hdhive", "pansou", "tg"}
         normalized: list[str] = []
         seen: set[str] = set()
         for item in value:
@@ -724,7 +699,10 @@ class RuntimeSettingsService:
             self._data["archive_watch_cid"] = str(
                 payload["archive_watch_cid"] or ""
             ).strip()
-        if "archive_watch_name" in payload and payload["archive_watch_name"] is not None:
+        if (
+            "archive_watch_name" in payload
+            and payload["archive_watch_name"] is not None
+        ):
             self._data["archive_watch_name"] = str(
                 payload["archive_watch_name"] or ""
             ).strip()
@@ -836,7 +814,7 @@ class RuntimeSettingsService:
                     continue
 
                 if key == "subscription_resource_priority":
-                    allowed = {"nullbr", "hdhive", "pansou", "tg"}
+                    allowed = {"hdhive", "pansou", "tg"}
                 else:
                     normalized[key] = tg_service._parse_channels(source_items)
                     continue
@@ -869,9 +847,6 @@ class RuntimeSettingsService:
         settings.HDHIVE_API_KEY = self.get_hdhive_api_key() or None
         settings.HDHIVE_BASE_URL = self.get_hdhive_base_url()
         settings.PANSOU_BASE_URL = self.get_pansou_base_url()
-        settings.NULLBR_APP_ID = self.get_nullbr_app_id()
-        settings.NULLBR_API_KEY = self.get_nullbr_api_key()
-        settings.NULLBR_BASE_URL = self.get_nullbr_base_url()
         settings.TG_API_ID = self.get_tg_api_id() or None
         settings.TG_API_HASH = self.get_tg_api_hash() or None
         settings.TG_PHONE = self.get_tg_phone() or None
@@ -906,11 +881,6 @@ class RuntimeSettingsService:
         hdhive_service.set_api_key(self.get_hdhive_api_key())
         hdhive_service.set_base_url(self.get_hdhive_base_url())
         pansou_service.set_base_url(self.get_pansou_base_url())
-        nullbr_client.update_config(
-            app_id=self.get_nullbr_app_id(),
-            api_key=self.get_nullbr_api_key(),
-            base_url=self.get_nullbr_base_url(),
-        )
         tg_service.set_config(
             api_id=self.get_tg_api_id(),
             api_hash=self.get_tg_api_hash(),
@@ -960,9 +930,6 @@ class RuntimeSettingsService:
             "hdhive_auto_checkin_method": self.get_hdhive_auto_checkin_method(),
             "hdhive_auto_checkin_run_time": self.get_hdhive_auto_checkin_run_time(),
             "pansou_base_url": self.get_pansou_base_url(),
-            "nullbr_app_id": self.get_nullbr_app_id(),
-            "nullbr_api_key": self.get_nullbr_api_key(),
-            "nullbr_base_url": self.get_nullbr_base_url(),
             "tg_api_id": self.get_tg_api_id(),
             "tg_api_hash": self.get_tg_api_hash(),
             "tg_phone": self.get_tg_phone(),
@@ -991,15 +958,6 @@ class RuntimeSettingsService:
             "feiniu_sync_enabled": self.get_feiniu_sync_enabled(),
             "feiniu_sync_interval_hours": self.get_feiniu_sync_interval_hours(),
             "auth_username": self.get_auth_username(),
-            "subscription_nullbr_enabled": bool(
-                self._data.get("subscription_nullbr_enabled", False)
-            ),
-            "subscription_nullbr_interval_hours": int(
-                self._data.get("subscription_nullbr_interval_hours", 24) or 24
-            ),
-            "subscription_nullbr_run_time": str(
-                self._data.get("subscription_nullbr_run_time", "03:00") or "03:00"
-            ),
             "subscription_hdhive_enabled": bool(
                 self._data.get("subscription_hdhive_enabled", False)
             ),

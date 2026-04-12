@@ -29,7 +29,6 @@ from app.services.explore_home_warmup_service import (
 )
 from app.services.butailing_service import butailing_service
 from app.services.hdhive_service import hdhive_service
-from app.services.nullbr_service import nullbr_service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.seedhub_service import seedhub_service
@@ -909,17 +908,6 @@ def _normalize_pansou_pan115_list(payload: Any) -> list[dict]:
         )
 
     return items
-
-
-def _mark_nullbr_pan115_source(items: list[dict]) -> list[dict]:
-    marked: list[dict] = []
-    for row in items:
-        if not isinstance(row, dict):
-            continue
-        item = dict(row)
-        item["source_service"] = item.get("source_service") or "nullbr"
-        marked.append(item)
-    return marked
 
 
 def _mark_hdhive_pan115_source(items: list[dict]) -> list[dict]:
@@ -1940,15 +1928,6 @@ async def proxy_explore_poster(
     )
 
 
-@router.get("/list/{list_id}")
-def get_list(
-    list_id: int,
-    page: int = Query(1, ge=1, description="Page number"),
-):
-    result = nullbr_service.get_list(list_id, page)
-    return result
-
-
 @router.get("/movie/{tmdb_id}")
 async def get_movie(tmdb_id: int):
     cache_key = f"movie:{tmdb_id}"
@@ -2000,237 +1979,11 @@ def _build_pan115_response(
     }
 
 
-def _resource_fallback_payload(
-    *,
-    tmdb_id: int,
-    media_type: str,
-    error: str,
-    season_number: int | None = None,
-    episode_number: int | None = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "id": tmdb_id,
-        "media_type": media_type,
-        "list": [],
-        "error": error,
-    }
-    if season_number is not None:
-        payload["season_number"] = season_number
-    if episode_number is not None:
-        payload["episode_number"] = episode_number
-    if media_type == "tv" and episode_number is not None:
-        payload["tv_show_id"] = tmdb_id
-    return payload
-
-
-def _call_nullbr_resource(fetcher, fallback_payload: dict[str, Any]) -> dict[str, Any]:
-    try:
-        result = fetcher()
-        if isinstance(result, dict):
-            result.setdefault("list", [])
-            return result
-        fallback_payload["error"] = "上游资源返回格式异常"
-        return fallback_payload
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code if exc.response else None
-        message = f"Nullbr资源接口异常({status})" if status else "Nullbr资源接口异常"
-        logger.warning("Nullbr resource request failed: %s", str(exc))
-        fallback_payload["error"] = message
-        return fallback_payload
-    except Exception as exc:
-        logger.warning("Nullbr resource request failed: %s", str(exc))
-        fallback_payload["error"] = f"资源获取失败: {str(exc)}"
-        return fallback_payload
-
-
 def _normalize_keyword_fingerprint(value: Any) -> str:
     text = str(value or "").strip().lower()
     if not text:
         return ""
     return re.sub(r"[\s\-_:：·•.,，。!！?？'\"“”‘’()（）\[\]【】/\\]+", "", text)
-
-
-def _pick_nullbr_tmdb_candidates(
-    keyword: str, media_type: str, max_candidates: int = 8
-) -> list[int]:
-    normalized_media_type = "tv" if media_type == "tv" else "movie"
-    normalized_keyword = str(keyword or "").strip()
-    if not normalized_keyword:
-        return []
-
-    try:
-        payload = nullbr_service.search(normalized_keyword, 1)
-    except Exception:
-        return []
-
-    rows = payload.get("items") or payload.get("results") or []
-    if not isinstance(rows, list):
-        return []
-
-    keyword_fp = _normalize_keyword_fingerprint(normalized_keyword)
-    scored: list[tuple[int, float]] = []
-    seen: set[int] = set()
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        row_media_type = str(row.get("media_type") or "").strip().lower()
-        if row_media_type != normalized_media_type:
-            continue
-        raw_tmdb_id = row.get("tmdbid") or row.get("tmdb_id") or row.get("id")
-        try:
-            tmdb_id = int(raw_tmdb_id)
-        except Exception:
-            continue
-        if tmdb_id <= 0 or tmdb_id in seen:
-            continue
-        seen.add(tmdb_id)
-
-        title = str(row.get("title") or row.get("name") or "").strip()
-        title_fp = _normalize_keyword_fingerprint(title)
-        score = 0.0
-        if keyword_fp and title_fp:
-            if keyword_fp == title_fp:
-                score = 1.0
-            elif keyword_fp in title_fp or title_fp in keyword_fp:
-                score = 0.9
-            else:
-                overlap = len(set(keyword_fp) & set(title_fp))
-                score = overlap / max(len(set(keyword_fp)), 1)
-        scored.append((tmdb_id, score))
-
-    scored.sort(key=lambda item: item[1], reverse=True)
-    return [tmdb_id for tmdb_id, _ in scored[:max_candidates]]
-
-
-def _build_keyword_resource_payload(
-    *,
-    keyword: str,
-    media_type: str,
-    resource_list: list[dict],
-    search_service: str,
-    attempts: list[dict[str, Any]],
-    matched_tmdb_id: Optional[int] = None,
-) -> dict[str, Any]:
-    return {
-        "keyword": str(keyword or "").strip(),
-        "media_type": "tv" if media_type == "tv" else "movie",
-        "matched_tmdb_id": matched_tmdb_id,
-        "list": resource_list,
-        "search_service": search_service,
-        "attempts": attempts,
-    }
-
-
-async def _search_nullbr_resource_by_keyword(
-    *,
-    keyword: str,
-    media_type: str,
-    resource_kind: str,
-    page: int = 1,
-    season: Optional[int] = None,
-    episode: Optional[int] = None,
-) -> dict[str, Any]:
-    normalized_keyword = str(keyword or "").strip()
-    normalized_media_type = "tv" if media_type == "tv" else "movie"
-    attempts: list[dict[str, Any]] = []
-    if not normalized_keyword:
-        return _build_keyword_resource_payload(
-            keyword=normalized_keyword,
-            media_type=normalized_media_type,
-            resource_list=[],
-            search_service="nullbr",
-            attempts=attempts,
-        )
-
-    candidate_tmdb_ids = await asyncio.to_thread(
-        _pick_nullbr_tmdb_candidates,
-        normalized_keyword,
-        normalized_media_type,
-    )
-    if not candidate_tmdb_ids:
-        attempts.append(
-            {
-                "service": "nullbr-search",
-                "status": "empty",
-                "keyword": normalized_keyword,
-            }
-        )
-        return _build_keyword_resource_payload(
-            keyword=normalized_keyword,
-            media_type=normalized_media_type,
-            resource_list=[],
-            search_service="nullbr",
-            attempts=attempts,
-        )
-
-    for candidate_tmdb_id in candidate_tmdb_ids:
-        attempts.append(
-            {
-                "service": "nullbr-search",
-                "status": "candidate",
-                "tmdb_id": candidate_tmdb_id,
-            }
-        )
-        fallback = _resource_fallback_payload(
-            tmdb_id=candidate_tmdb_id,
-            media_type=normalized_media_type,
-            season_number=season,
-            episode_number=episode,
-            error="",
-        )
-
-        def fetcher():
-            if resource_kind == "pan115":
-                if normalized_media_type == "tv":
-                    return nullbr_service.get_tv_pan115(candidate_tmdb_id, page)
-                return nullbr_service.get_movie_pan115(candidate_tmdb_id, page)
-            if resource_kind == "magnet":
-                if normalized_media_type == "tv":
-                    return nullbr_service.get_tv_magnet(
-                        candidate_tmdb_id, season, episode
-                    )
-                return nullbr_service.get_movie_magnet(candidate_tmdb_id)
-            if resource_kind == "ed2k":
-                if normalized_media_type == "tv":
-                    return nullbr_service.get_tv_ed2k(
-                        candidate_tmdb_id, season, episode
-                    )
-                return nullbr_service.get_movie_ed2k(candidate_tmdb_id)
-            raise ValueError(f"unsupported resource kind: {resource_kind}")
-
-        result = await asyncio.to_thread(_call_nullbr_resource, fetcher, fallback)
-        resource_list = (
-            list(result.get("list") or []) if isinstance(result, dict) else []
-        )
-        if resource_list:
-            attempts.append(
-                {
-                    "service": "nullbr",
-                    "status": "ok",
-                    "tmdb_id": candidate_tmdb_id,
-                    "count": len(resource_list),
-                }
-            )
-            return _build_keyword_resource_payload(
-                keyword=normalized_keyword,
-                media_type=normalized_media_type,
-                resource_list=resource_list,
-                search_service="nullbr",
-                attempts=attempts,
-                matched_tmdb_id=candidate_tmdb_id,
-            )
-
-        attempts.append(
-            {"service": "nullbr", "status": "empty", "tmdb_id": candidate_tmdb_id}
-        )
-
-    return _build_keyword_resource_payload(
-        keyword=normalized_keyword,
-        media_type=normalized_media_type,
-        resource_list=[],
-        search_service="nullbr",
-        attempts=attempts,
-    )
 
 
 async def _load_media_payload(tmdb_id: int, media_type: str) -> dict:
@@ -2472,43 +2225,32 @@ async def get_movie_pan115(
     page: int = Query(1, ge=1),
     refresh: bool = Query(False, description="是否绕过缓存"),
 ):
-    cache_key = f"{tmdb_id}:{page}:nullbr"
+    cache_key = f"{tmdb_id}:{page}:pansou"
     if not refresh:
         cached_payload, is_fresh = _get_cached_payload(_movie_pan115_cache, cache_key)
         if is_fresh:
             return cached_payload
 
-    attempts: list[dict[str, Any]] = []
-    source_counts: dict[str, int] = {}
-    nullbr_list: list[dict] = []
+    search_result = await _search_pansou_pan115_resources(tmdb_id, "movie")
+    pansou_list: list[dict] = list(search_result.get("list") or [])
+    pansou_keyword = str(search_result.get("keyword") or "")
+    attempts = list(search_result.get("attempts") or [])
+    attempted_keywords = list(search_result.get("attempted_keywords") or [])
+    keyword_hit_index = search_result.get("keyword_hit_index")
 
-    try:
-        nullbr_payload = await asyncio.to_thread(
-            nullbr_service.get_movie_pan115, tmdb_id, page
-        )
-        nullbr_list = _mark_nullbr_pan115_source(
-            list(nullbr_payload.get("list", []))
-            if isinstance(nullbr_payload, dict)
-            else []
-        )
-        attempts.append(
-            {"service": "nullbr", "status": "ok", "count": len(nullbr_list)}
-        )
-        if nullbr_list:
-            source_counts["nullbr"] = len(nullbr_list)
-    except Exception as exc:
-        attempts.append({"service": "nullbr", "status": "error", "error": str(exc)})
-
+    source_counts = {"pansou": len(pansou_list)} if pansou_list else {}
     result = _build_pan115_response(
         tmdb_id=tmdb_id,
         media_type="movie",
         page=page,
-        resource_list=nullbr_list,
-        search_service="nullbr",
+        resource_list=pansou_list,
+        search_service="pansou",
         source_counts=source_counts,
         attempts=attempts,
+        keyword=pansou_keyword,
+        attempted_keywords=attempted_keywords,
+        keyword_hit_index=keyword_hit_index,
     )
-    result["can_try_pansou"] = True
 
     _set_pan115_cached_payload(_movie_pan115_cache, cache_key, result)
     return result
@@ -2640,35 +2382,26 @@ async def get_movie_pan115_with_tg(
 @router.get("/movie/{tmdb_id}/magnet")
 async def get_movie_magnet(
     tmdb_id: int,
-    source: str = Query(
-        "nullbr", pattern="^(nullbr|seedhub)$", description="Magnet source"
-    ),
     limit: int = Query(40, ge=1, le=80, description="SeedHub 结果上限"),
 ):
-    if source == "seedhub":
-        keyword, items = await _search_seedhub_magnet_resources(
-            tmdb_id, "movie", limit=limit
-        )
-        return {
-            "id": tmdb_id,
-            "media_type": "movie",
-            "list": items,
-            "attempts": [
-                {
-                    "service": "seedhub",
-                    "status": "ok",
-                    "count": len(items),
-                    "keyword": keyword,
-                }
-            ],
-            "keyword": keyword,
-            "search_service": "seedhub",
-        }
-
-    fallback = _resource_fallback_payload(tmdb_id=tmdb_id, media_type="movie", error="")
-    return _call_nullbr_resource(
-        lambda: nullbr_service.get_movie_magnet(tmdb_id), fallback
+    keyword, items = await _search_seedhub_magnet_resources(
+        tmdb_id, "movie", limit=limit
     )
+    return {
+        "id": tmdb_id,
+        "media_type": "movie",
+        "list": items,
+        "attempts": [
+            {
+                "service": "seedhub",
+                "status": "ok",
+                "count": len(items),
+                "keyword": keyword,
+            }
+        ],
+        "keyword": keyword,
+        "search_service": "seedhub",
+    }
 
 
 @router.get("/movie/{tmdb_id}/magnet/seedhub")
@@ -2734,22 +2467,6 @@ async def get_movie_magnet_butailing(tmdb_id: int):
     }
 
 
-@router.get("/movie/{tmdb_id}/ed2k")
-def get_movie_ed2k(tmdb_id: int):
-    fallback = _resource_fallback_payload(tmdb_id=tmdb_id, media_type="movie", error="")
-    return _call_nullbr_resource(
-        lambda: nullbr_service.get_movie_ed2k(tmdb_id), fallback
-    )
-
-
-@router.get("/movie/{tmdb_id}/video")
-def get_movie_video(tmdb_id: int):
-    fallback = _resource_fallback_payload(tmdb_id=tmdb_id, media_type="movie", error="")
-    return _call_nullbr_resource(
-        lambda: nullbr_service.get_movie_video(tmdb_id), fallback
-    )
-
-
 @router.get("/tv/{tmdb_id}")
 async def get_tv(tmdb_id: int):
     cache_key = f"tv:{tmdb_id}"
@@ -2779,43 +2496,32 @@ async def get_tv_pan115(
     page: int = Query(1, ge=1),
     refresh: bool = Query(False, description="是否绕过缓存"),
 ):
-    cache_key = f"{tmdb_id}:{page}:nullbr"
+    cache_key = f"{tmdb_id}:{page}:pansou"
     if not refresh:
         cached_payload, is_fresh = _get_cached_payload(_tv_pan115_cache, cache_key)
         if is_fresh:
             return cached_payload
 
-    attempts: list[dict[str, Any]] = []
-    source_counts: dict[str, int] = {}
-    nullbr_list: list[dict] = []
+    search_result = await _search_pansou_pan115_resources(tmdb_id, "tv")
+    pansou_list: list[dict] = list(search_result.get("list") or [])
+    pansou_keyword = str(search_result.get("keyword") or "")
+    attempts = list(search_result.get("attempts") or [])
+    attempted_keywords = list(search_result.get("attempted_keywords") or [])
+    keyword_hit_index = search_result.get("keyword_hit_index")
 
-    try:
-        nullbr_payload = await asyncio.to_thread(
-            nullbr_service.get_tv_pan115, tmdb_id, page
-        )
-        nullbr_list = _mark_nullbr_pan115_source(
-            list(nullbr_payload.get("list", []))
-            if isinstance(nullbr_payload, dict)
-            else []
-        )
-        attempts.append(
-            {"service": "nullbr", "status": "ok", "count": len(nullbr_list)}
-        )
-        if nullbr_list:
-            source_counts["nullbr"] = len(nullbr_list)
-    except Exception as exc:
-        attempts.append({"service": "nullbr", "status": "error", "error": str(exc)})
-
+    source_counts = {"pansou": len(pansou_list)} if pansou_list else {}
     result = _build_pan115_response(
         tmdb_id=tmdb_id,
         media_type="tv",
         page=page,
-        resource_list=nullbr_list,
-        search_service="nullbr",
+        resource_list=pansou_list,
+        search_service="pansou",
         source_counts=source_counts,
         attempts=attempts,
+        keyword=pansou_keyword,
+        attempted_keywords=attempted_keywords,
+        keyword_hit_index=keyword_hit_index,
     )
-    result["can_try_pansou"] = True
 
     _set_pan115_cached_payload(_tv_pan115_cache, cache_key, result)
     return result
@@ -3006,61 +2712,6 @@ async def get_tg_pan115_by_keyword(
     }
 
 
-@router.get("/nullbr/{media_type}/115/by-keyword")
-async def get_nullbr_pan115_by_keyword(
-    media_type: str,
-    keyword: str = Query(..., min_length=1, description="影视名称关键词"),
-    page: int = Query(1, ge=1),
-):
-    normalized_media_type = str(media_type or "").strip().lower()
-    if normalized_media_type not in {"movie", "tv"}:
-        raise HTTPException(status_code=400, detail="media_type must be movie or tv")
-    return await _search_nullbr_resource_by_keyword(
-        keyword=keyword,
-        media_type=normalized_media_type,
-        resource_kind="pan115",
-        page=page,
-    )
-
-
-@router.get("/nullbr/{media_type}/magnet/by-keyword")
-async def get_nullbr_magnet_by_keyword(
-    media_type: str,
-    keyword: str = Query(..., min_length=1, description="影视名称关键词"),
-    season: Optional[int] = Query(None, description="Season"),
-    episode: Optional[int] = Query(None, description="Episode"),
-):
-    normalized_media_type = str(media_type or "").strip().lower()
-    if normalized_media_type not in {"movie", "tv"}:
-        raise HTTPException(status_code=400, detail="media_type must be movie or tv")
-    return await _search_nullbr_resource_by_keyword(
-        keyword=keyword,
-        media_type=normalized_media_type,
-        resource_kind="magnet",
-        season=season,
-        episode=episode,
-    )
-
-
-@router.get("/nullbr/{media_type}/ed2k/by-keyword")
-async def get_nullbr_ed2k_by_keyword(
-    media_type: str,
-    keyword: str = Query(..., min_length=1, description="影视名称关键词"),
-    season: Optional[int] = Query(None, description="Season"),
-    episode: Optional[int] = Query(None, description="Episode"),
-):
-    normalized_media_type = str(media_type or "").strip().lower()
-    if normalized_media_type not in {"movie", "tv"}:
-        raise HTTPException(status_code=400, detail="media_type must be movie or tv")
-    return await _search_nullbr_resource_by_keyword(
-        keyword=keyword,
-        media_type=normalized_media_type,
-        resource_kind="ed2k",
-        season=season,
-        episode=episode,
-    )
-
-
 @router.get("/seedhub/{media_type}/magnet/by-keyword")
 async def get_seedhub_magnet_by_keyword(
     media_type: str,
@@ -3144,19 +2795,6 @@ async def get_tv_season(tmdb_id: int, season_number: int):
         raise HTTPException(status_code=502, detail=f"TMDB 季信息获取失败: {str(exc)}")
 
 
-@router.get("/tv/{tmdb_id}/season/{season_number}/magnet")
-def get_tv_season_magnet(tmdb_id: int, season_number: int):
-    fallback = _resource_fallback_payload(
-        tmdb_id=tmdb_id,
-        media_type="tv",
-        season_number=season_number,
-        error="",
-    )
-    return _call_nullbr_resource(
-        lambda: nullbr_service.get_tv_season_magnet(tmdb_id, season_number), fallback
-    )
-
-
 @router.get("/tv/{tmdb_id}/season/{season_number}/episode/{episode_number}")
 async def get_tv_episode(tmdb_id: int, season_number: int, episode_number: int):
     try:
@@ -3176,97 +2814,29 @@ async def get_tv_episode(tmdb_id: int, season_number: int, episode_number: int):
         raise HTTPException(status_code=502, detail=f"TMDB 集信息获取失败: {str(exc)}")
 
 
-@router.get("/tv/{tmdb_id}/season/{season_number}/episode/{episode_number}/magnet")
-def get_tv_episode_magnet(tmdb_id: int, season_number: int, episode_number: int):
-    fallback = _resource_fallback_payload(
-        tmdb_id=tmdb_id,
-        media_type="tv",
-        season_number=season_number,
-        episode_number=episode_number,
-        error="",
-    )
-    return _call_nullbr_resource(
-        lambda: nullbr_service.get_tv_episode_magnet(
-            tmdb_id, season_number, episode_number
-        ),
-        fallback,
-    )
-
-
-@router.get("/tv/{tmdb_id}/season/{season_number}/episode/{episode_number}/ed2k")
-def get_tv_episode_ed2k(tmdb_id: int, season_number: int, episode_number: int):
-    fallback = _resource_fallback_payload(
-        tmdb_id=tmdb_id,
-        media_type="tv",
-        season_number=season_number,
-        episode_number=episode_number,
-        error="",
-    )
-    return _call_nullbr_resource(
-        lambda: nullbr_service.get_tv_episode_ed2k(
-            tmdb_id, season_number, episode_number
-        ),
-        fallback,
-    )
-
-
-@router.get("/tv/{tmdb_id}/season/{season_number}/episode/{episode_number}/video")
-def get_tv_episode_video(tmdb_id: int, season_number: int, episode_number: int):
-    fallback = _resource_fallback_payload(
-        tmdb_id=tmdb_id,
-        media_type="tv",
-        season_number=season_number,
-        episode_number=episode_number,
-        error="",
-    )
-    return _call_nullbr_resource(
-        lambda: nullbr_service.get_tv_episode_video(
-            tmdb_id, season_number, episode_number
-        ),
-        fallback,
-    )
-
-
 @router.get("/tv/{tmdb_id}/magnet")
 async def get_tv_magnet(
     tmdb_id: int,
     season: Optional[int] = Query(None, description="Season"),
     episode: Optional[int] = Query(None, description="Episode"),
-    source: str = Query(
-        "nullbr", pattern="^(nullbr|seedhub)$", description="Magnet source"
-    ),
     limit: int = Query(40, ge=1, le=80, description="SeedHub 结果上限"),
 ):
-    if source == "seedhub":
-        keyword, items = await _search_seedhub_magnet_resources(
-            tmdb_id, "tv", limit=limit
-        )
-        return {
-            "id": tmdb_id,
-            "media_type": "tv",
-            "list": items,
-            "attempts": [
-                {
-                    "service": "seedhub",
-                    "status": "ok",
-                    "count": len(items),
-                    "keyword": keyword,
-                }
-            ],
-            "keyword": keyword,
-            "search_service": "seedhub",
-        }
-
-    fallback = _resource_fallback_payload(
-        tmdb_id=tmdb_id,
-        media_type="tv",
-        season_number=season,
-        episode_number=episode,
-        error="",
-    )
-    return _call_nullbr_resource(
-        lambda: nullbr_service.get_tv_magnet(tmdb_id, season, episode), fallback
-    )
+    keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "tv", limit=limit)
+    return {
+        "id": tmdb_id,
+        "media_type": "tv",
+        "list": items,
+        "attempts": [
+            {
+                "service": "seedhub",
+                "status": "ok",
+                "count": len(items),
+                "keyword": keyword,
+            }
+        ],
+        "keyword": keyword,
+        "search_service": "seedhub",
+    }
 
 
 @router.get("/tv/{tmdb_id}/magnet/seedhub")
@@ -3330,54 +2900,6 @@ async def get_tv_magnet_butailing(tmdb_id: int):
         "keyword": keyword,
         "search_service": "butailing",
     }
-
-
-@router.get("/tv/{tmdb_id}/ed2k")
-def get_tv_ed2k(
-    tmdb_id: int,
-    season: Optional[int] = Query(None, description="Season"),
-    episode: Optional[int] = Query(None, description="Episode"),
-):
-    fallback = _resource_fallback_payload(
-        tmdb_id=tmdb_id,
-        media_type="tv",
-        season_number=season,
-        episode_number=episode,
-        error="",
-    )
-    return _call_nullbr_resource(
-        lambda: nullbr_service.get_tv_ed2k(tmdb_id, season, episode), fallback
-    )
-
-
-@router.get("/tv/{tmdb_id}/video")
-def get_tv_video(
-    tmdb_id: int,
-    season: Optional[int] = Query(None, description="Season"),
-    episode: Optional[int] = Query(None, description="Episode"),
-):
-    fallback = _resource_fallback_payload(
-        tmdb_id=tmdb_id,
-        media_type="tv",
-        season_number=season,
-        episode_number=episode,
-        error="",
-    )
-    return _call_nullbr_resource(
-        lambda: nullbr_service.get_tv_video(tmdb_id, season, episode), fallback
-    )
-
-
-@router.get("/collection/{collection_id}")
-def get_collection(collection_id: int):
-    result = nullbr_service.get_collection(collection_id)
-    return result
-
-
-@router.get("/collection/{collection_id}/115")
-def get_collection_pan115(collection_id: int, page: int = Query(1, ge=1)):
-    result = nullbr_service.get_collection_pan115(collection_id, page)
-    return result
 
 
 @router.get("/bridge/imdb/{imdb_id}")

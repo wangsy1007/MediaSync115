@@ -268,7 +268,6 @@ const endpointLabels = {
   check_emby_credentials: '检查 Emby 连接',
   check_feiniu_credentials: '检查飞牛连接',
   check_hdhive_credentials: '检查 HDHive 连接',
-  check_nullbr_credentials: '检查 Nullbr 连接',
   check_tg_credentials: '检查 Telegram 连接',
   check_tg_qr_login_status: '检查 Telegram 二维码登录状态',
   enqueue_explore_subscribe_task: '加入探索订阅队列',

@@ -46,7 +46,7 @@
               <span v-if="detail.imdb_id" class="imdb-tag">IMDB: {{ detail.imdb_id }}</span>
             </span>
             <span v-else>
-              未匹配 TMDB，当前页面会自动使用豆瓣名称关键词检索 115/磁链/ED2K 资源。
+              未匹配 TMDB，当前页面会自动使用豆瓣名称关键词检索 115 与磁链资源。
               <span v-if="detail.imdb_id" class="imdb-tag">IMDB: {{ detail.imdb_id }}</span>
             </span>
           </p>
@@ -56,82 +56,6 @@
       <el-tabs v-model="activeTab" class="resource-tabs">
         <el-tab-pane v-if="tabVisible('pan115')" label="115网盘" name="pan115">
           <el-tabs v-model="pan115SourceTab" class="source-tabs">
-            <el-tab-pane v-if="tabVisible('pan115_nullbr')" label="Nullbr" name="nullbr">
-              <div class="resource-tools">
-                <el-button size="small" type="primary" plain :loading="pan115Loading" @click="fetchPan115Nullbr">
-                  {{ nullbrTried ? '刷新 Nullbr' : '用 Nullbr 获取资源' }}
-                </el-button>
-              </div>
-              <div v-loading="pan115Loading">
-                <el-table v-if="nullbrPan115Resources.length" :data="pagedNullbrPan115Resources" stripe class="resource-table">
-                  <el-table-column label="资源名称" min-width="360" show-overflow-tooltip>
-                    <template #default="{ row }">
-                      <span class="resource-name">{{ row.title || row.name || '未命名资源' }}</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="来源" width="100" align="center">
-                    <template #default="{ row }">
-                      <el-tag size="small" type="info">{{ row.source_service || 'nullbr' }}</el-tag>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="画质" width="160" align="center">
-                    <template #default="{ row }">
-                      <template v-if="row.quality && (Array.isArray(row.quality) ? row.quality.length : row.quality)">
-                        <el-tag size="small">{{ Array.isArray(row.quality) ? row.quality.join(', ') : row.quality }}</el-tag>
-                      </template>
-                      <template v-else-if="getRowTags(row).formats.length">
-                        <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
-                      </template>
-                      <span v-else class="text-muted">-</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="分辨率" width="100" align="center">
-                    <template #default="{ row }">
-                      <el-tag size="small" type="info" v-if="row.resolution">{{ Array.isArray(row.resolution) ? row.resolution.join(', ') : row.resolution }}</el-tag>
-                      <el-tag size="small" type="info" v-else-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
-                      <span v-else class="text-muted">-</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="大小" width="110" align="center">
-                    <template #default="{ row }">{{ row.size || '-' }}</template>
-                  </el-table-column>
-                  <el-table-column label="操作" width="180" align="center" fixed="right">
-                    <template #default="{ row }">
-                      <el-button
-                        type="primary"
-                        size="small"
-                        :disabled="isPan115ActionDisabled(row)"
-                        :loading="Boolean(row.saving) || isHdhiveUnlocking(row)"
-                        @click="savePan115Resource(row)"
-                      >
-                        转存
-                      </el-button>
-                      <el-button
-                        v-if="mediaType === 'tv'"
-                        size="small"
-                        :disabled="isPan115ActionDisabled(row)"
-                        :loading="Boolean(row.extracting)"
-                        @click="openSelectSaveDialog(row)"
-                      >
-                        选集
-                      </el-button>
-                    </template>
-                  </el-table-column>
-                </el-table>
-                <div v-if="nullbrPan115Resources.length > pan115PageSize" class="table-pagination">
-                  <el-pagination
-                    background
-                    layout="prev, pager, next"
-                    :total="nullbrPan115Resources.length"
-                    :page-size="pan115PageSize"
-                    :current-page="pan115Pager.nullbr"
-                    @current-change="(page) => (pan115Pager.nullbr = page)"
-                  />
-                </div>
-                <el-empty v-else :description="nullbrTried ? 'Nullbr 暂无115网盘资源' : '尚未获取 Nullbr 资源'" />
-              </div>
-            </el-tab-pane>
-
             <el-tab-pane v-if="tabVisible('pan115_pansou')" label="Pansou" name="pansou">
               <div class="resource-tools">
                 <el-button size="small" type="primary" plain :loading="pansouLoading" @click="fetchPansouPan115">
@@ -387,55 +311,6 @@
 
         <el-tab-pane v-if="tabVisible('magnet')" label="磁力链接" name="magnet">
           <el-tabs v-model="magnetSourceTab" class="source-tabs">
-            <el-tab-pane v-if="tabVisible('magnet_nullbr')" label="Nullbr" name="nullbr">
-              <div class="resource-tools">
-                <el-button size="small" type="primary" plain :loading="magnetLoading" @click="fetchMagnetNullbr">
-                  {{ nullbrMagnetTried ? '刷新 Nullbr' : '用 Nullbr 获取磁链' }}
-                </el-button>
-              </div>
-              <div v-loading="magnetLoading">
-                <el-table v-if="nullbrMagnetResources.length" :data="pagedNullbrMagnetResources" stripe class="resource-table">
-                  <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
-                    <template #default="{ row }">{{ row.name || '-' }}</template>
-                  </el-table-column>
-                  <el-table-column label="画质" width="160" align="center">
-                    <template #default="{ row }">
-                      <template v-if="getRowTags(row).formats.length">
-                        <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
-                      </template>
-                      <span v-else class="text-muted">-</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="分辨率" width="100" align="center">
-                    <template #default="{ row }">
-                      <el-tag size="small" type="info" v-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
-                      <span v-else class="text-muted">-</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="大小" width="120" align="center">
-                    <template #default="{ row }">{{ formatSize(row.size) || '-' }}</template>
-                  </el-table-column>
-                  <el-table-column label="操作" width="180" align="center" fixed="right">
-                    <template #default="{ row }">
-                      <el-button type="primary" size="small" @click="saveMagnet(row)">离线</el-button>
-                      <el-button size="small" @click="copyMagnet(row.magnet)">复制</el-button>
-                    </template>
-                  </el-table-column>
-                </el-table>
-                <div v-if="nullbrMagnetResources.length > pan115PageSize" class="table-pagination">
-                  <el-pagination
-                    background
-                    layout="prev, pager, next"
-                    :total="nullbrMagnetResources.length"
-                    :page-size="pan115PageSize"
-                    :current-page="magnetPager.nullbr"
-                    @current-change="(page) => (magnetPager.nullbr = page)"
-                  />
-                </div>
-                <el-empty v-else :description="nullbrMagnetTried ? 'Nullbr 暂无磁力资源' : '尚未获取 Nullbr 磁力资源'" />
-              </div>
-            </el-tab-pane>
-
             <el-tab-pane v-if="tabVisible('magnet_seedhub')" label="SeedHub" name="seedhub">
               <div class="resource-tools">
                 <el-button size="small" type="primary" plain :loading="seedhubMagnetLoading" @click="fetchSeedhubMagnet">
@@ -539,51 +414,6 @@
           </el-tabs>
         </el-tab-pane>
 
-        <el-tab-pane v-if="tabVisible('ed2k')" label="ED2K" name="ed2k">
-          <div class="resource-tools">
-            <el-button size="small" type="primary" plain :loading="ed2kLoading" @click="fetchEd2kResources">
-              {{ ed2kTried ? '刷新 Nullbr' : '用 Nullbr 获取 ED2K' }}
-            </el-button>
-          </div>
-          <div v-loading="ed2kLoading">
-            <el-table v-if="ed2kResources.length" :data="pagedEd2kResources" stripe class="resource-table">
-              <el-table-column label="资源名称" min-width="380" show-overflow-tooltip>
-                <template #default="{ row }">{{ row.title || row.name || '-' }}</template>
-              </el-table-column>
-              <el-table-column label="画质" width="160" align="center">
-                <template #default="{ row }">
-                  <template v-if="getRowTags(row).formats.length">
-                    <el-tag size="small" v-for="f in getRowTags(row).formats.slice(0, 3)" :key="f">{{ f }}</el-tag>
-                  </template>
-                  <span v-else class="text-muted">-</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="分辨率" width="100" align="center">
-                <template #default="{ row }">
-                  <el-tag size="small" type="info" v-if="getRowTags(row).resolution">{{ getRowTags(row).resolution }}</el-tag>
-                  <span v-else class="text-muted">-</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="180" align="center" fixed="right">
-                <template #default="{ row }">
-                  <el-button type="primary" size="small" @click="saveEd2k(row)">离线</el-button>
-                  <el-button size="small" @click="copyMagnet(row.ed2k || row.url)">复制</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-            <div v-if="ed2kResources.length > pan115PageSize" class="table-pagination">
-              <el-pagination
-                background
-                layout="prev, pager, next"
-                :total="ed2kResources.length"
-                :page-size="pan115PageSize"
-                :current-page="ed2kPager"
-                @current-change="(page) => (ed2kPager = page)"
-              />
-            </div>
-            <el-empty v-else :description="ed2kTried ? '暂无 ED2K 资源' : '尚未获取 ED2K 资源'" />
-          </div>
-        </el-tab-pane>
       </el-tabs>
     </template>
 
@@ -667,12 +497,11 @@ const subscribing = ref(false)
 const detail = ref(null)
 
 const activeTab = ref('pan115')
-const pan115SourceTab = ref('nullbr')
-const magnetSourceTab = ref('nullbr')
+const pan115SourceTab = ref('pansou')
+const magnetSourceTab = ref('seedhub')
 
 const pan115Resources = ref([])
 const magnetResources = ref([])
-const ed2kResources = ref([])
 const isSubscribed = ref(false)
 const isInEmby = ref(false)
 const isInFeiniu = ref(false)
@@ -686,15 +515,11 @@ const hdhiveLoading = ref(false)
 const hdhiveTried = ref(false)
 const tgLoading = ref(false)
 const tgTried = ref(false)
-const nullbrTried = ref(false)
 const magnetLoading = ref(false)
-const nullbrMagnetTried = ref(false)
 const seedhubMagnetLoading = ref(false)
 const seedhubMagnetTried = ref(false)
 const butailingMagnetLoading = ref(false)
 const butailingMagnetTried = ref(false)
-const ed2kLoading = ref(false)
-const ed2kTried = ref(false)
 const selectSaveDialogVisible = ref(false)
 const extractingFiles = ref(false)
 const selectSaving = ref(false)
@@ -716,9 +541,6 @@ const mappedTmdbId = computed(() => {
   return Number.isFinite(value) && value > 0 ? Math.trunc(value) : null
 })
 
-const nullbrPan115Resources = computed(() =>
-  pan115Resources.value.filter((item) => (item?.source_service || 'nullbr') === 'nullbr')
-)
 const pansouPan115Resources = computed(() =>
   pan115Resources.value.filter((item) => item?.source_service === 'pansou')
 )
@@ -731,39 +553,30 @@ const tgPan115Resources = computed(() =>
 const pan115PageSize = 10
 const seedhubFetchLimit = 80
 const pan115Pager = ref({
-  nullbr: 1,
   pansou: 1,
   hdhive: 1,
   tg: 1
 })
 const magnetPager = ref({
-  nullbr: 1,
   seedhub: 1,
   butailing: 1
 })
-const ed2kPager = ref(1)
 const slicePan115Page = (list, page) => {
   const currentPage = Math.max(1, Number(page || 1))
   const start = (currentPage - 1) * pan115PageSize
   return list.slice(start, start + pan115PageSize)
 }
-const pagedNullbrPan115Resources = computed(() => slicePan115Page(nullbrPan115Resources.value, pan115Pager.value.nullbr))
 const pagedPansouPan115Resources = computed(() => slicePan115Page(pansouPan115Resources.value, pan115Pager.value.pansou))
 const pagedHdhivePan115Resources = computed(() => slicePan115Page(hdhivePan115Resources.value, pan115Pager.value.hdhive))
 const pagedTgPan115Resources = computed(() => slicePan115Page(tgPan115Resources.value, pan115Pager.value.tg))
-const nullbrMagnetResources = computed(() =>
-  magnetResources.value.filter((item) => (item?.source_service || 'nullbr') === 'nullbr')
-)
 const seedhubMagnetResources = computed(() =>
   magnetResources.value.filter((item) => item?.source_service === 'seedhub')
 )
 const butailingMagnetResources = computed(() =>
   magnetResources.value.filter((item) => item?.source_service === 'butailing')
 )
-const pagedNullbrMagnetResources = computed(() => slicePan115Page(nullbrMagnetResources.value, magnetPager.value.nullbr))
 const pagedSeedhubMagnetResources = computed(() => slicePan115Page(seedhubMagnetResources.value, magnetPager.value.seedhub))
 const pagedButailingMagnetResources = computed(() => slicePan115Page(butailingMagnetResources.value, magnetPager.value.butailing))
-const pagedEd2kResources = computed(() => slicePan115Page(ed2kResources.value, ed2kPager.value))
 
 const rewriteTmdbPosterSize = (url) => String(url).replace(/\/t\/p\/[^/]+\//, '/t/p/w500/')
 
@@ -788,7 +601,7 @@ const handlePosterError = (event) => {
 }
 
 const buildPan115MergeKey = (item = {}) => {
-  const sourceService = String(item?.source_service || 'nullbr').trim() || 'nullbr'
+  const sourceService = String(item?.source_service || 'pansou').trim() || 'pansou'
   const slug = String(item?.slug || '').trim()
   if (slug) return `${sourceService}|slug:${slug}`
   const shareLink = String(item?.share_link || item?.share_url || item?.pan115_share_link || '').trim()
@@ -1049,50 +862,6 @@ const buildTgKeywords = () => {
   return candidates
 }
 
-const fetchPan115Nullbr = async () => {
-  if (!detail.value) return
-  nullbrTried.value = true
-  pan115Loading.value = true
-  try {
-    let nullbrList = []
-    if (mappedTmdbId.value) {
-      const response = mediaType.value === 'tv'
-        ? await searchApi.getTvPan115(mappedTmdbId.value)
-        : await searchApi.getMoviePan115(mappedTmdbId.value)
-      nullbrList = Array.isArray(response.data?.list) ? response.data.list : []
-    } else {
-      const keywords = buildPansouKeywords()
-      const dedup = new Map()
-      for (const keyword of keywords) {
-        const { data } = await searchApi.getNullbrPan115ByKeyword(keyword, mediaType.value)
-        const rows = Array.isArray(data?.list) ? data.list : []
-        for (const row of rows) {
-          const link = resolvePan115ShareLink(row)
-          const key = `${String(row?.id || '')}|${String(link || row?.title || row?.name || '').toLowerCase()}`
-          if (!dedup.has(key)) {
-            dedup.set(key, row)
-          }
-        }
-        if (dedup.size >= 30) break
-      }
-      nullbrList = Array.from(dedup.values()).slice(0, 30)
-    }
-
-    const normalized = nullbrList.map((item) => ({ ...item, source_service: item.source_service || 'nullbr' }))
-    pan115Resources.value = mergePan115Resources(
-      normalized,
-      mergePan115Resources(tgPan115Resources.value, mergePan115Resources(pansouPan115Resources.value, hdhivePan115Resources.value))
-    )
-    if (!normalized.length) {
-      ElMessage.info('Nullbr 暂未找到可用115资源')
-    }
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || error.message || '115资源获取失败')
-  } finally {
-    pan115Loading.value = false
-  }
-}
-
 const fetchPansouPan115 = async () => {
   if (!detail.value || pansouLoading.value) return
   pansouLoading.value = true
@@ -1126,8 +895,8 @@ const fetchPansouPan115 = async () => {
     }
     const normalized = pansouList.map((item) => ({ ...item, source_service: item.source_service || 'pansou' }))
     pan115Resources.value = mergePan115Resources(
-      mergePan115Resources(nullbrPan115Resources.value, hdhivePan115Resources.value),
-      mergePan115Resources(tgPan115Resources.value, normalized)
+      mergePan115Resources(hdhivePan115Resources.value, tgPan115Resources.value),
+      normalized
     )
     if (!normalized.length) {
       ElMessage.info('Pansou 暂未找到可用资源')
@@ -1170,8 +939,8 @@ const fetchHdhivePan115 = async () => {
     const normalizedHdhiveList = hdhiveList
       .map((item) => ({ ...item, source_service: item.source_service || 'hdhive' }))
     pan115Resources.value = mergePan115Resources(
-      mergePan115Resources(nullbrPan115Resources.value, pansouPan115Resources.value),
-      mergePan115Resources(tgPan115Resources.value, normalizedHdhiveList)
+      mergePan115Resources(pansouPan115Resources.value, tgPan115Resources.value),
+      normalizedHdhiveList
     )
     if (!normalizedHdhiveList.length) {
       ElMessage.info('HDHive 暂未找到可用资源')
@@ -1212,8 +981,8 @@ const fetchTgPan115 = async () => {
     }
     const normalizedTgList = tgList.map((item) => ({ ...item, source_service: item.source_service || 'tg' }))
     pan115Resources.value = mergePan115Resources(
-      mergePan115Resources(nullbrPan115Resources.value, pansouPan115Resources.value),
-      mergePan115Resources(hdhivePan115Resources.value, normalizedTgList)
+      mergePan115Resources(pansouPan115Resources.value, hdhivePan115Resources.value),
+      normalizedTgList
     )
     if (!normalizedTgList.length) {
       ElMessage.info('Telegram 暂未找到可用资源')
@@ -1222,42 +991,6 @@ const fetchTgPan115 = async () => {
     ElMessage.error(error.response?.data?.detail || error.message || 'Telegram 资源获取失败')
   } finally {
     tgLoading.value = false
-  }
-}
-
-const fetchMagnetNullbr = async () => {
-  if (!detail.value) return
-  nullbrMagnetTried.value = true
-  magnetLoading.value = true
-  magnetPager.value.nullbr = 1
-  try {
-    let nullbrList = []
-    if (mappedTmdbId.value) {
-      const magnetResp = mediaType.value === 'tv'
-        ? await searchApi.getTvMagnet(mappedTmdbId.value)
-        : await searchApi.getMovieMagnet(mappedTmdbId.value)
-      nullbrList = Array.isArray(magnetResp.data?.list) ? magnetResp.data.list : []
-    } else {
-      const keywords = buildPansouKeywords()
-      const dedup = new Map()
-      for (const keyword of keywords) {
-        const { data } = await searchApi.getNullbrMagnetByKeyword(keyword, mediaType.value)
-        const rows = Array.isArray(data?.list) ? data.list : []
-        for (const row of rows) {
-          const magnet = String(row?.magnet || '').trim().toLowerCase()
-          if (!magnet || dedup.has(magnet)) continue
-          dedup.set(magnet, row)
-        }
-        if (dedup.size >= 40) break
-      }
-      nullbrList = Array.from(dedup.values())
-    }
-    nullbrList = nullbrList.map((item) => ({ ...item, source_service: item?.source_service || 'nullbr' }))
-    magnetResources.value = mergeMagnetResources(nullbrList, seedhubMagnetResources.value)
-  } catch {
-    magnetResources.value = seedhubMagnetResources.value.slice()
-  } finally {
-    magnetLoading.value = false
   }
 }
 
@@ -1328,40 +1061,6 @@ const fetchButailingMagnet = async () => {
   }
 }
 
-const fetchEd2kResources = async () => {
-  if (!detail.value) return
-  ed2kTried.value = true
-  ed2kLoading.value = true
-  ed2kPager.value = 1
-  try {
-    if (mappedTmdbId.value) {
-      const ed2kResp = mediaType.value === 'tv'
-        ? await searchApi.getTvEd2k(mappedTmdbId.value)
-        : await searchApi.getMovieEd2k(mappedTmdbId.value)
-      ed2kResources.value = Array.isArray(ed2kResp.data?.list) ? ed2kResp.data.list : []
-      return
-    }
-
-    const keywords = buildPansouKeywords()
-    const dedup = new Map()
-    for (const keyword of keywords) {
-      const { data } = await searchApi.getNullbrEd2kByKeyword(keyword, mediaType.value)
-      const rows = Array.isArray(data?.list) ? data.list : []
-      for (const row of rows) {
-        const link = String(row?.ed2k || row?.url || '').trim().toLowerCase()
-        if (!link || dedup.has(link)) continue
-        dedup.set(link, row)
-      }
-      if (dedup.size >= 40) break
-    }
-    ed2kResources.value = Array.from(dedup.values())
-  } catch {
-    ed2kResources.value = []
-  } finally {
-    ed2kLoading.value = false
-  }
-}
-
 const ensureActiveTabLoaded = async () => {
   if (!detail.value) return
   if (activeTab.value === 'pan115') {
@@ -1407,7 +1106,7 @@ const loadDetail = async () => {
       genres: Array.isArray(data?.genres) ? data.genres : [],
       casts: Array.isArray(data?.casts) ? data.casts : []
     }
-    pan115SourceTab.value = mappedTmdbId.value ? 'nullbr' : 'pansou'
+    pan115SourceTab.value = 'pansou'
     await refreshSubscribeState()
     await refreshEmbyStatus()
     await refreshFeiniuStatus()
@@ -1644,21 +1343,6 @@ const saveMagnet = async (row) => {
   }
 }
 
-const saveEd2k = async (row) => {
-  const url = String(row?.ed2k || row?.url || '').trim()
-  if (!url) {
-    ElMessage.warning('ED2K 链接为空')
-    return
-  }
-  try {
-    const folderId = await getDefaultTransferFolderId()
-    await pan115Api.addOfflineTask(url, folderId)
-    ElMessage.success('已提交离线任务')
-  } catch (error) {
-    ElMessage.error(error.response?.data?.detail || error.message || '离线失败')
-  }
-}
-
 const refreshSubscribeState = async () => {
   if (!mappedTmdbId.value) {
     isSubscribed.value = false
@@ -1761,13 +1445,10 @@ const handleSubscribe = async () => {
 
 const resetResources = () => {
   pan115Resources.value = []
-  pan115Pager.value = { nullbr: 1, pansou: 1, hdhive: 1, tg: 1 }
-  magnetPager.value = { nullbr: 1, seedhub: 1, butailing: 1 }
-  ed2kPager.value = 1
+  pan115Pager.value = { pansou: 1, hdhive: 1, tg: 1 }
+  magnetPager.value = { seedhub: 1, butailing: 1 }
   magnetResources.value = []
-  ed2kResources.value = []
   pan115Loading.value = false
-  nullbrTried.value = false
   pansouLoading.value = false
   pansouTried.value = false
   hdhiveLoading.value = false
@@ -1775,13 +1456,10 @@ const resetResources = () => {
   tgLoading.value = false
   tgTried.value = false
   magnetLoading.value = false
-  nullbrMagnetTried.value = false
   seedhubMagnetLoading.value = false
   seedhubMagnetTried.value = false
   butailingMagnetLoading.value = false
   butailingMagnetTried.value = false
-  ed2kLoading.value = false
-  ed2kTried.value = false
   selectSaveDialogVisible.value = false
   extractingFiles.value = false
   selectSaving.value = false
@@ -1818,7 +1496,7 @@ const handleRematchTmdb = async () => {
       await ensureActiveTabLoaded()
       return
     }
-    ElMessage.warning('仍未匹配到 TMDB，可继续使用豆瓣关键词 115 方案')
+    ElMessage.warning('仍未匹配到 TMDB，可继续使用豆瓣关键词资源搜索')
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || error.message || '重试匹配失败')
   } finally {
@@ -1842,7 +1520,6 @@ watch(mappedTmdbId, async () => {
 })
 
 watch(pan115SourceTab, async (tab) => {
-  if (tab === 'nullbr') pan115Pager.value.nullbr = 1
   if (tab === 'pansou') pan115Pager.value.pansou = 1
   if (tab === 'hdhive') pan115Pager.value.hdhive = 1
   if (tab === 'tg') pan115Pager.value.tg = 1
@@ -1861,7 +1538,6 @@ watch(pan115SourceTab, async (tab) => {
 })
 
 watch(magnetSourceTab, async (tab) => {
-  if (tab === 'nullbr') magnetPager.value.nullbr = 1
   if (tab === 'seedhub') magnetPager.value.seedhub = 1
   if (tab === 'butailing') magnetPager.value.butailing = 1
   if (tab === 'seedhub' && seedhubMagnetResources.value.length === 0 && !seedhubMagnetLoading.value && !seedhubMagnetTried.value) {
@@ -1875,8 +1551,8 @@ watch(() => `${route.params.mediaType || ''}:${route.params.id || ''}`, async ()
   isInEmby.value = false
   isInFeiniu.value = false
   activeTab.value = 'pan115'
-  pan115SourceTab.value = 'nullbr'
-  magnetSourceTab.value = 'nullbr'
+  pan115SourceTab.value = 'pansou'
+  magnetSourceTab.value = 'seedhub'
   resetResources()
   await loadDetail()
 })

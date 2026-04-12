@@ -96,12 +96,6 @@ export const searchApi = {
     api.get('/search/hdhive/115/by-keyword', { params: { keyword, media_type: mediaType } }),
   getTgPan115ByKeyword: (keyword, mediaType = 'movie') =>
     api.get('/search/tg/115/by-keyword', { params: { keyword, media_type: mediaType } }),
-  getNullbrPan115ByKeyword: (keyword, mediaType = 'movie', page = 1) =>
-    api.get(`/search/nullbr/${mediaType}/115/by-keyword`, { params: { keyword, page } }),
-  getNullbrMagnetByKeyword: (keyword, mediaType = 'movie', season, episode) =>
-    api.get(`/search/nullbr/${mediaType}/magnet/by-keyword`, { params: { keyword, season, episode } }),
-  getNullbrEd2kByKeyword: (keyword, mediaType = 'movie', season, episode) =>
-    api.get(`/search/nullbr/${mediaType}/ed2k/by-keyword`, { params: { keyword, season, episode } }),
   getSeedhubMagnetByKeyword: (keyword, mediaType = 'movie', limit = 80) =>
     api.get(`/search/seedhub/${mediaType}/magnet/by-keyword`, { params: { keyword, limit } }),
   unlockHdhiveResource: (slug) => api.post('/search/hdhive/resource/unlock', { slug }),
@@ -112,8 +106,6 @@ export const searchApi = {
     api.get(`/search/movie/${tmdbId}/magnet/butailing`),
   createMovieSeedhubMagnetTask: (tmdbId, limit = 40, forceRefresh = false) =>
     api.post(`/search/movie/${tmdbId}/magnet/seedhub/tasks`, null, { params: { limit, force_refresh: forceRefresh } }),
-  getMovieEd2k: (tmdbId) => api.get(`/search/movie/${tmdbId}/ed2k`),
-  getMovieVideo: (tmdbId) => api.get(`/search/movie/${tmdbId}/video`),
 
   getTv: (tmdbId) => api.get(`/search/tv/${tmdbId}`),
   getTvPan115: (tmdbId, page = 1, refresh = false) =>
@@ -126,12 +118,8 @@ export const searchApi = {
     api.get(`/search/tv/${tmdbId}/115/tg`, { params: { page, refresh } }),
 
   getTvSeason: (tmdbId, seasonNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}`),
-  getTvSeasonMagnet: (tmdbId, seasonNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}/magnet`),
 
   getTvEpisode: (tmdbId, seasonNumber, episodeNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}/episode/${episodeNumber}`),
-  getTvEpisodeMagnet: (tmdbId, seasonNumber, episodeNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}/episode/${episodeNumber}/magnet`),
-  getTvEpisodeEd2k: (tmdbId, seasonNumber, episodeNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}/episode/${episodeNumber}/ed2k`),
-  getTvEpisodeVideo: (tmdbId, seasonNumber, episodeNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}/episode/${episodeNumber}/video`),
 
   getTvMagnet: (tmdbId, season, episode) => api.get(`/search/tv/${tmdbId}/magnet`, { params: { season, episode } }),
   getTvMagnetSeedhub: (tmdbId, limit = 80) =>
@@ -142,11 +130,6 @@ export const searchApi = {
     api.post(`/search/tv/${tmdbId}/magnet/seedhub/tasks`, null, { params: { limit, force_refresh: forceRefresh } }),
   getSeedhubMagnetTask: (taskId) => api.get(`/search/magnet/seedhub/tasks/${taskId}`),
   cancelSeedhubMagnetTask: (taskId) => api.delete(`/search/magnet/seedhub/tasks/${taskId}`),
-  getTvEd2k: (tmdbId, season, episode) => api.get(`/search/tv/${tmdbId}/ed2k`, { params: { season, episode } }),
-  getTvVideo: (tmdbId, season, episode) => api.get(`/search/tv/${tmdbId}/video`, { params: { season, episode } }),
-
-  getCollection: (collectionId) => api.get(`/search/collection/${collectionId}`),
-  getCollectionPan115: (collectionId, page = 1) => api.get(`/search/collection/${collectionId}/115`, { params: { page } }),
   getBridgeByImdbId: (imdbId, mediaType = 'movie') => api.get(`/search/bridge/imdb/${imdbId}`, { params: { media_type: mediaType } })
 }
 
@@ -170,7 +153,6 @@ export const settingsApi = {
   getAppInfo: () => api.get('/settings/app-info'),
   updateRuntime: (payload) => api.put('/settings/runtime', payload),
   checkUpdates: () => api.get('/settings/update-check'),
-  checkNullbr: () => api.get('/settings/nullbr/check'),
   checkHdhive: () => api.get('/settings/hdhive/check'),
   runHdhiveCheckin: (payload) => api.post('/settings/hdhive/checkin', payload),
   checkTg: () => api.get('/settings/tg/check'),
