@@ -1696,11 +1696,16 @@ class Pan115Service:
         else:
             file_list = []
 
-        # 查找同名文件夹
+        # 查找同名文件夹（必须确认 pid 与当前 parent_id 一致，避免搜到其它位置的同名目录）
         for item in file_list:
             if isinstance(item, dict):
                 item_name = item.get("n", "")
-                if item_name == folder_name and self._is_folder_item(item):
+                item_pid = str(item.get("pid") or item.get("parent_id") or "").strip()
+                if (
+                    item_name == folder_name
+                    and self._is_folder_item(item)
+                    and item_pid == str(parent_id)
+                ):
                     folder_id = self._extract_folder_id(item)
                     if folder_id:
                         return folder_id
@@ -1743,19 +1748,26 @@ class Pan115Service:
                     else:
                         retry_list = retry_result.get("list", [])
 
-                # 再次查找同名文件夹
+                # 再次查找同名文件夹（仍需校验 pid）
                 for item in retry_list:
                     if isinstance(item, dict):
                         item_name = item.get("n", "")
-                        if item_name == folder_name and self._is_folder_item(item):
+                        item_pid = str(
+                            item.get("pid") or item.get("parent_id") or ""
+                        ).strip()
+                        if (
+                            item_name == folder_name
+                            and self._is_folder_item(item)
+                            and item_pid == str(parent_id)
+                        ):
                             folder_id = self._extract_folder_id(item)
                             if folder_id:
                                 return folder_id
 
-                # 如果还是找不到，尝试直接获取文件列表查找
+                # 如果还是找不到，尝试直接获取文件列表精确查找
                 try:
                     file_list_result = await self.get_file_list(
-                        cid=parent_id, limit=100
+                        cid=parent_id, limit=1000
                     )
                     direct_list = []
                     if isinstance(file_list_result, dict):
