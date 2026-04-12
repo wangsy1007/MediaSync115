@@ -173,31 +173,65 @@ class ArchiveService:
     async def _list_video_files(
         self, pan115: Pan115Service, cid: str
     ) -> list[dict[str, Any]]:
-        """列出 115 目录下的视频文件"""
+        """递归列出监听目录及其子目录中的视频文件"""
         items: list[dict[str, Any]] = []
-        offset = 0
+        pending_dirs: list[tuple[str, str]] = [(str(cid or "0").strip() or "0", "")]
+        seen_dirs: set[str] = set()
         limit = 1000
-        while True:
-            result = await pan115.get_file_list(cid=cid, offset=offset, limit=limit)
-            batch = result.get("data") or []
-            if not batch:
-                break
-            for it in batch:
-                if not isinstance(it, dict):
-                    continue
-                name = str(it.get("n") or it.get("name") or "")
-                fid = str(it.get("fid") or "")
-                if not fid:
-                    continue
-                if pan115._is_folder_item(it):
-                    continue
-                if not self._is_video(name):
-                    continue
-                items.append({"fid": fid, "name": name, "cid": cid})
-            if len(batch) < limit:
-                break
-            offset += limit
-        items.sort(key=lambda x: x["name"].lower())
+
+        while pending_dirs:
+            current_cid, current_path = pending_dirs.pop(0)
+            if current_cid in seen_dirs:
+                continue
+            seen_dirs.add(current_cid)
+
+            offset = 0
+            while True:
+                result = await pan115.get_file_list(
+                    cid=current_cid, offset=offset, limit=limit
+                )
+                batch = result.get("data") or []
+                if not batch:
+                    break
+
+                for it in batch:
+                    if not isinstance(it, dict):
+                        continue
+
+                    name = str(it.get("n") or it.get("name") or "").strip()
+                    if not name:
+                        continue
+
+                    if pan115._is_folder_item(it):
+                        folder_cid = str(pan115._extract_folder_id(it) or "").strip()
+                        if folder_cid:
+                            next_path = (
+                                f"{current_path}/{name}" if current_path else name
+                            )
+                            pending_dirs.append((folder_cid, next_path))
+                        continue
+
+                    fid = str(it.get("fid") or "").strip()
+                    if not fid or not self._is_video(name):
+                        continue
+
+                    relative_path = f"{current_path}/{name}" if current_path else name
+                    items.append(
+                        {
+                            "fid": fid,
+                            "name": name,
+                            "cid": current_cid,
+                            "relative_path": relative_path,
+                        }
+                    )
+
+                if len(batch) < limit:
+                    break
+                offset += limit
+
+        items.sort(
+            key=lambda x: str(x.get("relative_path") or x.get("name") or "").lower()
+        )
         return items
 
     async def _process_one(
