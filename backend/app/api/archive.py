@@ -11,6 +11,26 @@ from app.services.runtime_settings_service import runtime_settings_service
 router = APIRouter(prefix="/archive", tags=["archive"])
 
 
+def _raise_archive_115_error(exc: Exception) -> None:
+    """将归档流程里的 115 异常转换为更明确的 HTTP 错误"""
+    error_msg = str(exc or "")
+    lowered_error_msg = error_msg.lower()
+
+    if Pan115Service._is_auth_related_error(error_msg):
+        raise HTTPException(
+            status_code=401,
+            detail="115 登录已失效，请前往设置页重新扫码登录后再执行归档扫描",
+        )
+
+    if Pan115Service._is_method_not_allowed_error(error_msg) or "频繁" in error_msg:
+        raise HTTPException(status_code=429, detail="115 接口临时受限，请稍后再试")
+
+    if "enoent" in lowered_error_msg or "不存在" in error_msg:
+        raise HTTPException(status_code=404, detail=f"文件或目录不存在: {error_msg}")
+
+    raise HTTPException(status_code=500, detail=f"归档扫描失败: {error_msg}")
+
+
 class ArchiveConfigRequest(BaseModel):
     archive_enabled: Optional[bool] = None
     archive_watch_cid: Optional[str] = None
@@ -108,7 +128,7 @@ async def list_folders(cid: str = "0"):
         folders.sort(key=lambda x: x["name"].lower())
         return {"cid": cid, "folders": folders}
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        _raise_archive_115_error(exc)
 
 
 @router.get("/tasks")
@@ -131,6 +151,8 @@ async def run_archive_scan():
         return await archive_service.run_scan(trigger="manual")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        _raise_archive_115_error(exc)
 
 
 @router.post("/tasks/{task_id}/retry")
@@ -139,6 +161,8 @@ async def retry_archive_task(task_id: int):
         return await archive_service.retry_task(task_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        _raise_archive_115_error(exc)
 
 
 @router.delete("/tasks/clear")
