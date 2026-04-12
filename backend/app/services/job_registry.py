@@ -79,7 +79,7 @@ class JobRegistry:
         }
 
     async def _archive_scan(self, **kwargs) -> dict[str, Any]:
-        return await archive_service.run_scan(trigger="scheduler")
+        return await archive_service.start_scan(trigger="scheduler")
 
     async def _hdhive_checkin(self, **kwargs) -> dict[str, Any]:
         gamble = runtime_settings_service.get_hdhive_auto_checkin_mode() == "gamble"

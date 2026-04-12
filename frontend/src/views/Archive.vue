@@ -75,6 +75,10 @@
           <span class="status-label">扫描间隔</span>
           <span class="status-value">{{ config.archive_interval_minutes }} 分钟</span>
         </div>
+        <div class="status-item">
+          <span class="status-label">扫描任务</span>
+          <el-tag :type="runtime.scan_running ? 'warning' : 'info'">{{ runtime.scan_running ? '执行中' : '空闲' }}</el-tag>
+        </div>
       </div>
     </el-card>
 
@@ -178,7 +182,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { archiveApi, pan115Api } from '@/api'
 import { formatBeijingTableCell } from '@/utils/timezone'
@@ -189,6 +193,7 @@ const scanLoading = ref(false)
 const tasksLoading = ref(false)
 const total = ref(0)
 const tasks = ref([])
+let scanPollingTimer = null
 
 const config = reactive({
   archive_enabled: false,
@@ -197,6 +202,14 @@ const config = reactive({
   archive_output_cid: '',
   archive_output_name: '',
   archive_interval_minutes: 10
+})
+
+const runtime = reactive({
+  scan_running: false,
+  last_scan_started_at: '',
+  last_scan_finished_at: '',
+  last_scan_trigger: '',
+  last_scan_error: ''
 })
 
 const filters = reactive({
@@ -248,6 +261,11 @@ const loadConfig = async () => {
   config.archive_output_cid = data.archive_output_cid || ''
   config.archive_output_name = data.archive_output_name || ''
   config.archive_interval_minutes = Number(data.archive_interval_minutes || 10)
+  runtime.scan_running = !!data.runtime?.scan_running
+  runtime.last_scan_started_at = data.runtime?.last_scan_started_at || ''
+  runtime.last_scan_finished_at = data.runtime?.last_scan_finished_at || ''
+  runtime.last_scan_trigger = data.runtime?.last_scan_trigger || ''
+  runtime.last_scan_error = data.runtime?.last_scan_error || ''
 }
 
 const loadTasks = async () => {
@@ -293,13 +311,45 @@ const runScan = async () => {
   scanLoading.value = true
   try {
     const { data } = await archiveApi.runScan()
-    ElMessage.success(`归档扫描完成：总计 ${data.total || 0}，成功 ${data.success || 0}，跳过 ${data.skipped || 0}，失败 ${data.failed || 0}`)
+    runtime.scan_running = !!data.runtime?.scan_running
+    runtime.last_scan_started_at = data.runtime?.last_scan_started_at || runtime.last_scan_started_at
+    runtime.last_scan_finished_at = data.runtime?.last_scan_finished_at || runtime.last_scan_finished_at
+    runtime.last_scan_trigger = data.runtime?.last_scan_trigger || runtime.last_scan_trigger
+    runtime.last_scan_error = data.runtime?.last_scan_error || ''
+    ElMessage.success(data.message || '归档扫描已启动')
+    startScanPolling()
     await loadTasks()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '归档扫描失败')
   } finally {
     scanLoading.value = false
   }
+}
+
+const stopScanPolling = () => {
+  if (scanPollingTimer) {
+    clearInterval(scanPollingTimer)
+    scanPollingTimer = null
+  }
+}
+
+const startScanPolling = () => {
+  stopScanPolling()
+  scanPollingTimer = window.setInterval(async () => {
+    try {
+      await Promise.all([loadConfig(), loadTasks()])
+      if (!runtime.scan_running) {
+        stopScanPolling()
+        if (runtime.last_scan_error) {
+          ElMessage.warning(runtime.last_scan_error)
+        } else {
+          ElMessage.success('归档扫描已完成')
+        }
+      }
+    } catch {
+      stopScanPolling()
+    }
+  }, 3000)
 }
 
 const retryTask = async (row) => {
@@ -423,7 +473,16 @@ const confirmPicker = () => {
   ElMessage.success('目录已选择，点击保存配置生效')
 }
 
-onMounted(refreshAll)
+onMounted(async () => {
+  await refreshAll()
+  if (runtime.scan_running) {
+    startScanPolling()
+  }
+})
+
+onBeforeUnmount(() => {
+  stopScanPolling()
+})
 </script>
 
 <style lang="scss" scoped>

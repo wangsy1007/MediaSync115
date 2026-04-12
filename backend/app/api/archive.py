@@ -148,7 +148,7 @@ async def list_archive_tasks(
 @router.post("/scan")
 async def run_archive_scan():
     try:
-        return await archive_service.run_scan(trigger="manual")
+        return await archive_service.start_scan(trigger="manual")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:

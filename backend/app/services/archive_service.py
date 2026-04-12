@@ -89,6 +89,12 @@ class ArchiveService:
     def __init__(self) -> None:
         self._scan_lock = asyncio.Lock()
         self._pan115: Pan115Service | None = None
+        self._background_scan_task: asyncio.Task | None = None
+        self._last_scan_started_at: datetime | None = None
+        self._last_scan_finished_at: datetime | None = None
+        self._last_scan_trigger: str = ""
+        self._last_scan_summary: dict[str, Any] | None = None
+        self._last_scan_error: str = ""
 
     def _get_pan115(self) -> Pan115Service:
         if self._pan115 is None:
@@ -104,7 +110,61 @@ class ArchiveService:
             "archive_enabled": config.get("archive_enabled", False),
             "watch_cid": config.get("archive_watch_cid", ""),
             "output_cid": config.get("archive_output_cid", ""),
+            "scan_running": self.is_scan_running(),
+            "last_scan_started_at": self._last_scan_started_at.isoformat()
+            if isinstance(self._last_scan_started_at, datetime)
+            else "",
+            "last_scan_finished_at": self._last_scan_finished_at.isoformat()
+            if isinstance(self._last_scan_finished_at, datetime)
+            else "",
+            "last_scan_trigger": self._last_scan_trigger,
+            "last_scan_summary": self._last_scan_summary,
+            "last_scan_error": self._last_scan_error,
         }
+
+    def is_scan_running(self) -> bool:
+        return bool(
+            self._background_scan_task and not self._background_scan_task.done()
+        )
+
+    async def start_scan(self, trigger: str = "manual") -> dict[str, Any]:
+        """后台启动一次归档扫描，避免前端请求长时间阻塞。"""
+        if self.is_scan_running() or self._scan_lock.locked():
+            return {
+                "started": False,
+                "running": True,
+                "message": "归档扫描已在执行中，请稍后刷新任务列表查看进度",
+                "runtime": self.get_runtime_status(),
+            }
+
+        self._last_scan_started_at = datetime.utcnow()
+        self._last_scan_finished_at = None
+        self._last_scan_trigger = trigger
+        self._last_scan_summary = None
+        self._last_scan_error = ""
+
+        self._background_scan_task = asyncio.create_task(
+            self.run_scan(trigger=trigger),
+            name=f"archive-scan-{trigger}",
+        )
+        self._background_scan_task.add_done_callback(self._handle_background_scan_done)
+
+        return {
+            "started": True,
+            "running": True,
+            "message": "归档扫描已启动，正在后台执行",
+            "runtime": self.get_runtime_status(),
+        }
+
+    def _handle_background_scan_done(self, task: asyncio.Task) -> None:
+        self._last_scan_finished_at = datetime.utcnow()
+        try:
+            self._last_scan_summary = task.result()
+            self._last_scan_error = ""
+        except Exception as exc:
+            self._last_scan_summary = None
+            self._last_scan_error = str(exc or "")[:2000]
+            logger.exception("Archive background scan failed")
 
     async def run_scan(self, trigger: str = "manual") -> dict[str, Any]:
         """执行一次完整扫描"""
