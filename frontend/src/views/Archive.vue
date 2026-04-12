@@ -79,6 +79,26 @@
           <span class="status-label">扫描任务</span>
           <el-tag :type="runtime.scan_running ? 'warning' : 'info'">{{ runtime.scan_running ? '执行中' : '空闲' }}</el-tag>
         </div>
+        <div class="status-item">
+          <span class="status-label">最近触发</span>
+          <span class="status-value">{{ runtime.last_scan_trigger || '-' }}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">开始时间</span>
+          <span class="status-value">{{ runtime.last_scan_started_at ? formatBeijingTableCell(null, null, runtime.last_scan_started_at) : '-' }}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">结束时间</span>
+          <span class="status-value">{{ runtime.last_scan_finished_at ? formatBeijingTableCell(null, null, runtime.last_scan_finished_at) : '-' }}</span>
+        </div>
+        <div class="status-item status-item-full">
+          <span class="status-label">最近结果</span>
+          <span class="status-value">{{ scanSummaryText }}</span>
+        </div>
+        <div v-if="runtime.last_scan_error" class="status-item status-item-full">
+          <span class="status-label">失败原因</span>
+          <span class="status-value status-error">{{ runtime.last_scan_error }}</span>
+        </div>
       </div>
     </el-card>
 
@@ -209,6 +229,7 @@ const runtime = reactive({
   last_scan_started_at: '',
   last_scan_finished_at: '',
   last_scan_trigger: '',
+  last_scan_summary: null,
   last_scan_error: ''
 })
 
@@ -252,6 +273,13 @@ const getCurrentFolderName = () => {
 const mediaTypeLabel = (v) => v === 'movie' ? '电影' : v === 'tv' ? '剧集' : '-'
 const statusLabel = (v) => ({ processing: '处理中', success: '成功', failed: '失败', skipped: '跳过' }[v] || '待处理')
 const statusTagType = (v) => ({ success: 'success', failed: 'danger', processing: 'warning' }[v] || 'info')
+const scanSummaryText = computed(() => {
+  const summary = runtime.last_scan_summary
+  if (!summary || typeof summary !== 'object') {
+    return runtime.scan_running ? '扫描执行中' : '暂无记录'
+  }
+  return `总计 ${Number(summary.total || 0)} 个，成功 ${Number(summary.success || 0)} 个，跳过 ${Number(summary.skipped || 0)} 个，失败 ${Number(summary.failed || 0)} 个`
+})
 
 const loadConfig = async () => {
   const { data } = await archiveApi.getConfig()
@@ -265,6 +293,7 @@ const loadConfig = async () => {
   runtime.last_scan_started_at = data.runtime?.last_scan_started_at || ''
   runtime.last_scan_finished_at = data.runtime?.last_scan_finished_at || ''
   runtime.last_scan_trigger = data.runtime?.last_scan_trigger || ''
+  runtime.last_scan_summary = data.runtime?.last_scan_summary || null
   runtime.last_scan_error = data.runtime?.last_scan_error || ''
 }
 
@@ -315,6 +344,7 @@ const runScan = async () => {
     runtime.last_scan_started_at = data.runtime?.last_scan_started_at || runtime.last_scan_started_at
     runtime.last_scan_finished_at = data.runtime?.last_scan_finished_at || runtime.last_scan_finished_at
     runtime.last_scan_trigger = data.runtime?.last_scan_trigger || runtime.last_scan_trigger
+    runtime.last_scan_summary = data.runtime?.last_scan_summary || null
     runtime.last_scan_error = data.runtime?.last_scan_error || ''
     ElMessage.success(data.message || '归档扫描已启动')
     startScanPolling()
@@ -548,6 +578,11 @@ onBeforeUnmount(() => {
     gap: 10px;
   }
 
+  .status-item-full {
+    grid-column: 1 / -1;
+    align-items: flex-start;
+  }
+
   .status-label {
     color: var(--ms-text-secondary);
     white-space: nowrap;
@@ -555,6 +590,14 @@ onBeforeUnmount(() => {
 
   .status-value, .year-text, .muted-text {
     color: var(--ms-text-secondary);
+  }
+
+  .status-value {
+    word-break: break-word;
+  }
+
+  .status-error {
+    color: var(--el-color-danger);
   }
 
   .tasks-header {
