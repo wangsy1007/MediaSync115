@@ -4590,33 +4590,6 @@ onBeforeUnmount(() => {
 
     }
 
-    .folder-picker-header {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 12px;
-    }
-
-    .folder-picker-breadcrumb {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .folder-picker-toolbar {
-      display: flex;
-      justify-content: flex-end;
-      align-items: center;
-      flex-shrink: 0;
-    }
-
-    .folder-picker-footer {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }
-
     .about-info {
       color: var(--ms-text-secondary);
       line-height: 1.8;
@@ -4795,20 +4768,6 @@ onBeforeUnmount(() => {
         }
       }
 
-      .folder-picker-footer {
-        flex-direction: column;
-        align-items: flex-start;
-      }
-
-      .folder-picker-header {
-        flex-direction: column;
-        align-items: stretch;
-      }
-
-      .folder-picker-toolbar {
-        justify-content: flex-start;
-      }
-
       :deep(.el-form-item) {
         display: block;
       }
@@ -4842,6 +4801,33 @@ onBeforeUnmount(() => {
   }
 }
 
+.folder-picker-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.folder-picker-breadcrumb {
+  flex: 1;
+  min-width: 0;
+}
+
+.folder-picker-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.folder-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 @media (max-width: 768px) {
   .settings-page {
     .settings-card {
@@ -4869,6 +4855,22 @@ onBeforeUnmount(() => {
         }
       }
     }
+  }
+}
+
+@media (max-width: 900px) {
+  .folder-picker-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .folder-picker-toolbar {
+    justify-content: flex-start;
+  }
+
+  .folder-picker-footer {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 </style>
