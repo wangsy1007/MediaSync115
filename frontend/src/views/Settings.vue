@@ -1581,16 +1581,18 @@
       width="520px"
       :close-on-click-modal="false"
     >
-      <div class="folder-picker-breadcrumb">
-        <el-breadcrumb separator="/">
-          <el-breadcrumb-item v-for="crumb in settingsFolderPickerBreadcrumbs" :key="crumb.cid">
-            <a @click.prevent="navigateSettingsFolderPicker(crumb.cid)">{{ getSettingsFolderDisplayName(crumb) }}</a>
-          </el-breadcrumb-item>
-        </el-breadcrumb>
-      </div>
+      <div class="folder-picker-header">
+        <div class="folder-picker-breadcrumb">
+          <el-breadcrumb separator="/">
+            <el-breadcrumb-item v-for="crumb in settingsFolderPickerBreadcrumbs" :key="crumb.cid">
+              <a @click.prevent="navigateSettingsFolderPicker(crumb.cid)">{{ getSettingsFolderDisplayName(crumb) }}</a>
+            </el-breadcrumb-item>
+          </el-breadcrumb>
+        </div>
 
-      <div class="folder-picker-toolbar">
-        <el-button size="small" :loading="settingsFolderPickerCreating" @click="createSettingsFolderPickerFolder">新建文件夹</el-button>
+        <div class="folder-picker-toolbar">
+          <el-button size="small" :loading="settingsFolderPickerCreating" @click="createSettingsFolderPickerFolder">新建文件夹</el-button>
+        </div>
       </div>
 
       <el-table
@@ -4588,15 +4590,24 @@ onBeforeUnmount(() => {
 
     }
 
-    .folder-picker-breadcrumb {
+    .folder-picker-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
       margin-bottom: 12px;
+    }
+
+    .folder-picker-breadcrumb {
+      flex: 1;
+      min-width: 0;
     }
 
     .folder-picker-toolbar {
       display: flex;
       justify-content: flex-end;
       align-items: center;
-      margin-bottom: 12px;
+      flex-shrink: 0;
     }
 
     .folder-picker-footer {
@@ -4787,6 +4798,15 @@ onBeforeUnmount(() => {
       .folder-picker-footer {
         flex-direction: column;
         align-items: flex-start;
+      }
+
+      .folder-picker-header {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .folder-picker-toolbar {
+        justify-content: flex-start;
       }
 
       :deep(.el-form-item) {
