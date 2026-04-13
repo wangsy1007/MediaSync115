@@ -159,8 +159,31 @@ class ArchiveService:
             self._last_scan_error = ""
         except Exception as exc:
             self._last_scan_summary = None
-            self._last_scan_error = str(exc or "")[:2000]
+            self._last_scan_error = self._format_scan_error(exc)
             logger.exception("Archive background scan failed")
+
+    @staticmethod
+    def _format_scan_error(exc: Exception) -> str:
+        """将后台扫描异常转换为适合前端展示的错误提示。"""
+        error_text = str(exc or "").strip()
+        lowered_error_text = error_text.lower()
+
+        if Pan115Service._is_auth_related_error(error_text):
+            return "115 登录已失效，请前往设置页重新扫码登录后再执行归档扫描"
+
+        if (
+            Pan115Service._is_method_not_allowed_error(error_text)
+            or "频繁" in error_text
+        ):
+            return "115 接口临时受限，请稍后再试"
+
+        if "enoent" in lowered_error_text or "不存在" in error_text:
+            return f"文件或目录不存在：{error_text[:500]}"
+
+        if not error_text:
+            return "归档扫描失败：未知错误"
+
+        return f"归档扫描失败：{error_text[:500]}"
 
     async def run_scan(self, trigger: str = "manual") -> dict[str, Any]:
         """执行一次完整扫描"""
