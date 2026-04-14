@@ -72,7 +72,7 @@ class _QueueRequest:
 class _Pan115ThrottleManager:
     """全局熔断管理器：一旦检测到 405 / 限流，进入冷却期"""
 
-    def __init__(self, cooldown_seconds: float = 60.0):
+    def __init__(self, cooldown_seconds: float = 30.0):
         self._cooldown_seconds = cooldown_seconds
         self._throttled_until: float = 0.0
         self._lock = asyncio.Lock()
@@ -100,7 +100,7 @@ class _Pan115ThrottleManager:
 class _Pan115RateLimiter:
     """三层滑动窗口限速器：QPS / QPM / QPH"""
 
-    def __init__(self, qps: int = 2, qpm: int = 120, qph: int = 3000):
+    def __init__(self, qps: int = 3, qpm: int = 200, qph: int = 12000):
         self.qps = max(qps, 1)
         self.qpm = max(qpm, 1)
         self.qph = max(qph, 1)
@@ -150,7 +150,7 @@ class _Pan115QueueExecutor:
     """115 API 全局队列执行器"""
 
     def __init__(
-        self, qps: int = 2, qpm: int = 120, qph: int = 3000, worker_count: int = 3
+        self, qps: int = 3, qpm: int = 200, qph: int = 12000, worker_count: int = 3
     ):
         self._queue: asyncio.Queue[_QueueRequest] = asyncio.Queue(maxsize=500)
         self._limiter = _Pan115RateLimiter(qps, qpm, qph)
@@ -213,7 +213,7 @@ async def _get_global_pan115_executor() -> _Pan115QueueExecutor:
         if _global_pan115_executor is not None:
             return _global_pan115_executor
         _global_pan115_executor = _Pan115QueueExecutor(
-            qps=2, qpm=120, qph=3000, worker_count=3
+            qps=3, qpm=200, qph=12000, worker_count=3
         )
         _global_pan115_executor.start()
         return _global_pan115_executor

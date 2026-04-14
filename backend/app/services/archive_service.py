@@ -26,6 +26,19 @@ VIDEO_EXTENSIONS = {
     ".m4v",
     ".ts",
 }
+
+SUBTITLE_EXTENSIONS = {
+    ".srt",
+    ".ass",
+    ".ssa",
+    ".vtt",
+    ".sub",
+    ".idx",
+    ".sup",
+}
+
+ARCHIVE_EXTENSIONS = VIDEO_EXTENSIONS | SUBTITLE_EXTENSIONS
+
 IGNORE_PATTERNS = (
     r"\b(?:2160p|1080p|720p|480p|4k|8k)\b",
     r"\b(?:bluray|bdrip|brrip|webrip|web-dl|webdl|hdtv|dvdrip|remux)\b",
@@ -79,8 +92,12 @@ TV_GENRE_MAP = {
 }
 
 
+class _AuthExpiredError(Exception):
+    """115 认证过期，整个扫描应立即中断"""
+
+
 class ArchiveService:
-    """归档刮削服务 - 操作 115 网盘目录"""
+    """归档刮削服务 - 参考 QMediaSync 流程重构"""
 
     def __init__(self) -> None:
         self._scan_lock = asyncio.Lock()
@@ -124,12 +141,11 @@ class ArchiveService:
         )
 
     async def start_scan(self, trigger: str = "manual") -> dict[str, Any]:
-        """后台启动一次归档扫描，避免前端请求长时间阻塞。"""
         if self.is_scan_running() or self._scan_lock.locked():
             return {
                 "started": False,
                 "running": True,
-                "message": "归档扫描已在执行中，请稍后刷新任务列表查看进度",
+                "message": "归档扫描已在执行中，请稍后刷新查看进度",
                 "runtime": self.get_runtime_status(),
             }
 
@@ -164,7 +180,6 @@ class ArchiveService:
 
     @staticmethod
     def _format_scan_error(exc: Exception) -> str:
-        """将后台扫描异常转换为适合前端展示的错误提示。"""
         error_text = str(exc or "").strip()
         lowered_error_text = error_text.lower()
 
@@ -185,8 +200,11 @@ class ArchiveService:
 
         return f"归档扫描失败：{error_text[:500]}"
 
+    # ================================================================
+    #  主扫描流程（参考 QMediaSync）
+    # ================================================================
+
     async def run_scan(self, trigger: str = "manual") -> dict[str, Any]:
-        """执行一次完整扫描"""
         async with self._scan_lock:
             config = self.get_config()
             watch_cid = str(config.get("archive_watch_cid") or "").strip()
@@ -197,7 +215,6 @@ class ArchiveService:
                 raise ValueError("请先配置归档输出目录（115 文件夹 ID）")
 
             pan115 = self._get_pan115()
-            folder_cache: dict[tuple[str, ...], str] = {}
             log_source_type = (
                 "background_task" if trigger != "scheduler" else "scheduler"
             )
@@ -215,21 +232,56 @@ class ArchiveService:
                 },
             )
             try:
-                source_items = await self._list_video_files(pan115, watch_cid)
+                # 阶段一：扫描监听目录下的所有视频+字幕文件
+                source_items = await self._scan_source_files(pan115, watch_cid)
+
+                await operation_log_service.log_background_event(
+                    source_type=log_source_type,
+                    module="archive",
+                    action="archive.scan.files",
+                    status="info",
+                    message=f"扫描完成：发现 {len(source_items)} 个视频/字幕文件",
+                    extra={
+                        "trigger": trigger,
+                        "file_count": len(source_items),
+                    },
+                )
+
+                # 过滤：只取视频文件作为主文件，字幕文件作为附属
+                video_items = [it for it in source_items if it["is_video"]]
+                subtitle_items = [it for it in source_items if it["is_subtitle"]]
+
                 summary = {
                     "success": 0,
                     "failed": 0,
                     "skipped": 0,
-                    "total": len(source_items),
+                    "total": len(video_items),
                     "items": [],
                 }
-                for item in source_items:
+
+                if not video_items:
+                    await operation_log_service.log_background_event(
+                        source_type=log_source_type,
+                        module="archive",
+                        action="archive.scan.finish",
+                        status="info",
+                        message="监听目录中未发现视频文件，跳过归档",
+                        extra={"trigger": trigger, **summary},
+                    )
+                    return summary
+
+                # 阶段二：批量识别 + 预创建分类目录
+                folder_cache: dict[tuple[str, ...], str] = {}
+                processed_cids: set[str] = set()
+
+                for item in video_items:
                     result = await self._process_one(
                         pan115,
                         item,
                         output_cid,
                         trigger=trigger,
                         folder_cache=folder_cache,
+                        subtitle_items=subtitle_items,
                     )
                     summary["items"].append(result)
                     s = str(result.get("status") or "")
@@ -239,6 +291,13 @@ class ArchiveService:
                         summary["skipped"] += 1
                     else:
                         summary["failed"] += 1
+
+                    target_cid = str(result.get("target_cid") or "")
+                    if target_cid and target_cid not in processed_cids:
+                        processed_cids.add(target_cid)
+
+                # 阶段三：清理空源目录
+                await self._cleanup_empty_dirs(pan115, watch_cid, video_items)
 
                 finish_status = "success" if summary["failed"] == 0 else "warning"
                 await operation_log_service.log_background_event(
@@ -256,7 +315,7 @@ class ArchiveService:
                 )
                 return summary
             except Exception as exc:
-                error_message = str(exc or "未知错误")[:2000]
+                error_message = self._format_scan_error(exc)
                 await operation_log_service.log_background_event(
                     source_type=log_source_type,
                     module="archive",
@@ -272,10 +331,14 @@ class ArchiveService:
                 )
                 raise
 
-    async def _list_video_files(
+    # ================================================================
+    #  阶段一：扫描源目录文件（参考 QMediaSync 两阶段扫描）
+    # ================================================================
+
+    async def _scan_source_files(
         self, pan115: Pan115Service, cid: str
     ) -> list[dict[str, Any]]:
-        """递归 BFS 列出监听目录及其子目录中的视频文件"""
+        """递归 BFS 扫描监听目录中的视频和字幕文件"""
         items: list[dict[str, Any]] = []
         pending_dirs: list[tuple[str, str]] = [(str(cid or "0").strip() or "0", "")]
         seen_dirs: set[str] = set()
@@ -314,7 +377,12 @@ class ArchiveService:
                         continue
 
                     fid = str(it.get("fid") or "").strip()
-                    if not fid or not self._is_video(name):
+                    if not fid:
+                        continue
+
+                    is_video = self._is_video(name)
+                    is_subtitle = not is_video and self._is_subtitle(name)
+                    if not is_video and not is_subtitle:
                         continue
 
                     relative_path = f"{current_path}/{name}" if current_path else name
@@ -324,6 +392,8 @@ class ArchiveService:
                             "name": name,
                             "cid": current_cid,
                             "relative_path": relative_path,
+                            "is_video": is_video,
+                            "is_subtitle": is_subtitle,
                         }
                     )
 
@@ -336,6 +406,10 @@ class ArchiveService:
         )
         return items
 
+    # ================================================================
+    #  阶段二：处理单个视频文件（识别 + 预创建目录 + 移动 + 重命名 + 字幕）
+    # ================================================================
+
     async def _process_one(
         self,
         pan115: Pan115Service,
@@ -343,10 +417,11 @@ class ArchiveService:
         output_cid: str,
         trigger: str = "manual",
         folder_cache: dict[tuple[str, ...], str] | None = None,
+        subtitle_items: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """处理单个 115 文件"""
         fid = item["fid"]
         filename = item["name"]
+        source_cid = item.get("cid", "")
 
         parsed = self.parse_media_filename(filename)
         db_task = await self._upsert_task(
@@ -360,19 +435,6 @@ class ArchiveService:
             status="info",
             message=f"开始归档文件：{filename}",
             extra={"task_id": db_task.id, "trigger": trigger, "source_fid": fid},
-        )
-        await operation_log_service.log_background_event(
-            source_type="background_task",
-            module="archive",
-            action="archive.file.parsed",
-            status="info",
-            message=(
-                f"文件解析完成：类型={parsed['media_type']}，"
-                f"标题={parsed['query_title']}，"
-                f"年份={parsed.get('year') or '-'}，"
-                f"季集={parsed.get('season') or '-'} / {parsed.get('episode') or '-'}"
-            ),
-            extra={"task_id": db_task.id, "parsed": parsed},
         )
 
         try:
@@ -394,7 +456,8 @@ class ArchiveService:
                     parsed,
                     folder_cache=folder_cache,
                 )
-                target_desc = f"tv/{genre_name}/{title_folder}/Season {int(parsed.get('season') or 1):02d}"
+                season = int(parsed.get("season") or 1)
+                target_desc = f"tv/{genre_name}/{title_folder}/Season {season:02d}"
             else:
                 target_cid = await self._ensure_movie_path(
                     pan115,
@@ -422,27 +485,32 @@ class ArchiveService:
                 message=f"TMDB 匹配成功：{title} ({year})，分类={genre_name}",
                 extra={"task_id": db_task.id, "matched": matched},
             )
-            await operation_log_service.log_background_event(
-                source_type="background_task",
-                module="archive",
-                action="archive.file.plan",
-                status="info",
-                message=f"归档目标目录已生成：{target_desc}",
-                extra={
-                    "task_id": db_task.id,
-                    "target_cid": target_cid,
-                    "target_desc": target_desc,
-                },
-            )
 
+            # --- 参考QMediaSync：移动视频文件 ---
             await pan115.move_file(fid, target_cid)
+
+            # --- 参考QMediaSync：移动后重命名为规范文件名 ---
+            new_filename = self._build_target_filename(parsed, matched, filename)
+            try:
+                await pan115.rename_file(fid, new_filename)
+            except Exception:
+                logger.warning(
+                    "重命名 %s -> %s 失败，保留原文件名", filename, new_filename
+                )
+
+            # --- 参考QMediaSync：关联移动字幕文件 ---
+            if subtitle_items:
+                await self._move_subtitles(
+                    pan115, item, subtitle_items, target_cid, parsed, matched
+                )
+
             await self._mark_task_success(db_task.id)
             await operation_log_service.log_background_event(
                 source_type="background_task",
                 module="archive",
                 action="archive.file.success",
                 status="success",
-                message=f"归档完成：{filename} 已移动到 {target_desc}",
+                message=f"归档完成：{filename} → {target_desc}",
                 extra={"task_id": db_task.id, "target_desc": target_desc},
             )
             return {
@@ -451,6 +519,7 @@ class ArchiveService:
                 "source_fid": fid,
                 "source_filename": filename,
                 "target_desc": target_desc,
+                "target_cid": target_cid,
             }
         except Exception as exc:
             msg = str(exc) or "未知错误"
@@ -471,6 +540,100 @@ class ArchiveService:
                 "message": msg,
             }
 
+    # ================================================================
+    #  参考QMediaSync：重命名与字幕关联
+    # ================================================================
+
+    @staticmethod
+    def _build_target_filename(
+        parsed: dict[str, Any], matched: dict[str, Any], original_filename: str
+    ) -> str:
+        title = str(matched.get("title") or parsed.get("query_title") or "")
+        year = str(matched.get("year") or parsed.get("year") or "")
+        ext = parsed.get("extension", "")
+
+        title = re.sub(r'[\\/:*?"<>|]', "", title).strip()
+        if not title:
+            return original_filename
+
+        if parsed["media_type"] == "tv":
+            season = int(parsed.get("season") or 1)
+            return (
+                f"{title} ({year}) - S{season:02d}E{parsed.get('episode', 1):02d}{ext}"
+                if year
+                else f"{title} - S{season:02d}E{parsed.get('episode', 1):02d}{ext}"
+            )
+        else:
+            return f"{title} ({year}){ext}" if year else f"{title}{ext}"
+
+    async def _move_subtitles(
+        self,
+        pan115: Pan115Service,
+        video_item: dict[str, Any],
+        subtitle_items: list[dict[str, Any]],
+        target_cid: str,
+        parsed: dict[str, Any],
+        matched: dict[str, Any],
+    ) -> None:
+        video_base = re.sub(r"\.[^.]+$", "", video_item["name"]).lower()
+        video_cid = video_item.get("cid", "")
+
+        for sub in subtitle_items:
+            sub_cid = sub.get("cid", "")
+            if sub_cid != video_cid:
+                continue
+
+            sub_base = re.sub(r"\.[^.]+$", "", sub["name"]).lower()
+            if not sub_base.startswith(video_base):
+                continue
+
+            try:
+                await pan115.move_file(sub["fid"], target_cid)
+                new_sub_name = self._build_target_filename(parsed, matched, sub["name"])
+                try:
+                    await pan115.rename_file(sub["fid"], new_sub_name)
+                except Exception:
+                    logger.warning("字幕重命名 %s 失败", sub["name"])
+            except Exception:
+                logger.warning("字幕移动 %s 失败", sub["name"])
+
+    # ================================================================
+    #  参考QMediaSync：清理空源目录
+    # ================================================================
+
+    async def _cleanup_empty_dirs(
+        self,
+        pan115: Pan115Service,
+        watch_cid: str,
+        moved_items: list[dict[str, Any]],
+    ) -> None:
+        moved_cids: set[str] = set()
+        for it in moved_items:
+            cid = str(it.get("cid") or "")
+            if cid and cid != watch_cid:
+                moved_cids.add(cid)
+
+        for cid in moved_cids:
+            try:
+                result = await pan115.get_file_list(cid=cid, limit=10)
+                remaining = result.get("data") or []
+                has_content = False
+                for it in remaining:
+                    if isinstance(it, dict):
+                        has_content = True
+                        break
+                if not has_content:
+                    try:
+                        await pan115.delete_file(cid)
+                    except Exception:
+                        logger.debug("清理空目录 %s 失败（可忽略）", cid)
+            except Exception:
+                logger.debug("检查目录 %s 内容失败（可忽略）", cid)
+
+    # ================================================================
+    #  参考QMediaSync：预创建分类目录（带缓存）
+    # ================================================================
+
     async def _ensure_movie_path(
         self,
         pan115: Pan115Service,
@@ -479,7 +642,6 @@ class ArchiveService:
         title_folder: str,
         folder_cache: dict[tuple[str, ...], str] | None = None,
     ) -> str:
-        """确保电影归档目录存在，返回最终目录 CID"""
         cache_key = ("movie", str(root_cid), str(genre), str(title_folder))
         if folder_cache and cache_key in folder_cache:
             return folder_cache[cache_key]
@@ -500,7 +662,6 @@ class ArchiveService:
         parsed: dict[str, Any],
         folder_cache: dict[tuple[str, ...], str] | None = None,
     ) -> str:
-        """确保剧集归档目录存在，返回最终目录 CID"""
         season = int(parsed.get("season") or 1)
         cache_key = (
             "tv",
@@ -641,9 +802,16 @@ class ArchiveService:
         config = self.get_config()
         output_cid = str(config.get("archive_output_cid") or "").strip()
         pan115 = self._get_pan115()
+        parsed = self.parse_media_filename(filename)
         return await self._process_one(
             pan115,
-            {"fid": fid, "name": filename, "cid": ""},
+            {
+                "fid": fid,
+                "name": filename,
+                "cid": "",
+                "is_video": True,
+                "is_subtitle": False,
+            },
             output_cid,
             trigger="retry",
             folder_cache={},
@@ -782,6 +950,13 @@ class ArchiveService:
         if idx < 0:
             return False
         return filename[idx:].lower() in VIDEO_EXTENSIONS
+
+    @staticmethod
+    def _is_subtitle(filename: str) -> bool:
+        idx = filename.rfind(".")
+        if idx < 0:
+            return False
+        return filename[idx:].lower() in SUBTITLE_EXTENSIONS
 
     @staticmethod
     def _normalize_title(value: str) -> str:
