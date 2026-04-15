@@ -266,15 +266,69 @@ class ArchiveService:
                     )
                     return summary
 
-                # 阶段二：批量识别 + 预创建分类目录
+                # 阶段二：并发 TMDB 识别（纯网络请求，不涉及 115 操作）
+                identify_tasks = []
+                for item in video_items:
+                    parsed = self.parse_media_filename(item["name"])
+                    identify_tasks.append((item, parsed))
+
+                identified: list[dict[str, Any]] = []
+                identify_semaphore = asyncio.Semaphore(5)
+
+                async def _identify_one(
+                    _item: dict[str, Any], _parsed: dict[str, Any]
+                ) -> dict[str, Any]:
+                    async with identify_semaphore:
+                        try:
+                            matched = await self.identify_media(_parsed)
+                            return {
+                                "item": _item,
+                                "parsed": _parsed,
+                                "matched": matched,
+                            }
+                        except Exception:
+                            return {"item": _item, "parsed": _parsed, "matched": None}
+
+                identify_results = await asyncio.gather(
+                    *[_identify_one(it, ps) for it, ps in identify_tasks],
+                    return_exceptions=False,
+                )
+
+                for ir in identify_results:
+                    if ir and ir.get("matched"):
+                        identified.append(ir)
+
+                if not identified:
+                    await operation_log_service.log_background_event(
+                        source_type=log_source_type,
+                        module="archive",
+                        action="archive.scan.finish",
+                        status="warning",
+                        message=f"所有 {len(video_items)} 个文件均未匹配到 TMDB 结果",
+                        extra={"trigger": trigger, "total": len(video_items)},
+                    )
+                    summary["failed"] = len(video_items)
+                    summary["total"] = len(video_items)
+                    return summary
+
+                # 阶段三：串行处理每个文件（涉及 115 移动/重命名，必须走限速队列）
                 folder_cache: dict[tuple[str, ...], str] = {}
                 processed_cids: set[str] = set()
+                identified_video_map: dict[str, dict[str, Any]] = {
+                    str(ir["item"].get("fid", "")): ir for ir in identified
+                }
 
                 for item in video_items:
-                    result = await self._process_one(
+                    fid = str(item.get("fid", ""))
+                    identify_info = identified_video_map.get(fid)
+                    if not identify_info:
+                        continue
+
+                    result = await self._process_identified(
                         pan115,
-                        item,
-                        output_cid,
+                        item=item,
+                        identify_info=identify_info,
+                        output_cid=output_cid,
                         trigger=trigger,
                         folder_cache=folder_cache,
                         subtitle_items=subtitle_items,
@@ -406,7 +460,120 @@ class ArchiveService:
         return items
 
     # ================================================================
-    #  阶段二：处理单个视频文件（识别 + 预创建目录 + 移动 + 重命名 + 字幕）
+    #  阶段二：处理已识别的视频文件（移动 + 重命名 + 字幕）
+    # ================================================================
+
+    async def _process_identified(
+        self,
+        pan115: Pan115Service,
+        item: dict[str, Any],
+        identify_info: dict[str, Any],
+        output_cid: str,
+        trigger: str = "manual",
+        folder_cache: dict[tuple[str, ...], str] | None = None,
+        subtitle_items: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        parsed = identify_info["parsed"]
+        matched = identify_info["matched"]
+        if not matched:
+            return {
+                "status": ArchiveStatus.FAILED.value,
+                "source_fid": item.get("fid", ""),
+                "source_filename": item.get("name", ""),
+                "message": "TMDB 未匹配",
+            }
+
+        fid = item["fid"]
+        filename = item["name"]
+
+        db_task = await self._upsert_task(
+            task_id=None, source_fid=fid, source_filename=filename
+        )
+
+        try:
+            genre_name = str(matched.get("genre_name") or "其他")
+            region_name = str(matched.get("region_name") or MOVIE_REGION_DEFAULT)
+            title = str(matched.get("title") or parsed["query_title"])
+            year = str(matched.get("year") or parsed.get("year") or "")
+            title_folder = f"{title} ({year})" if year else title
+
+            if parsed["media_type"] == "tv":
+                target_cid = await self._ensure_tv_path(
+                    pan115,
+                    output_cid,
+                    region_name,
+                    title_folder,
+                    parsed,
+                    folder_cache=folder_cache,
+                )
+                season = int(parsed.get("season") or 1)
+                target_desc = f"剧集/{region_name}/{title_folder}/第{season}季"
+            else:
+                target_cid = await self._ensure_movie_path(
+                    pan115,
+                    output_cid,
+                    region_name,
+                    title_folder,
+                    folder_cache=folder_cache,
+                )
+                target_desc = f"电影/{region_name}/{title_folder}"
+
+            await self._update_task(
+                db_task.id,
+                media_type=parsed["media_type"],
+                tmdb_id=matched.get("tmdb_id"),
+                tmdb_title=title,
+                tmdb_year=year,
+                genre_name=region_name,
+                target_path=target_desc,
+            )
+
+            await pan115.move_file(fid, target_cid)
+
+            new_filename = self._build_target_filename(parsed, matched, filename)
+            try:
+                await pan115.rename_file(fid, new_filename)
+            except Exception:
+                logger.warning(
+                    "重命名 %s -> %s 失败，保留原文件名", filename, new_filename
+                )
+
+            if subtitle_items:
+                await self._move_subtitles(
+                    pan115, item, subtitle_items, target_cid, parsed, matched
+                )
+
+            await self._mark_task_success(db_task.id)
+            await operation_log_service.log_background_event(
+                source_type="background_task",
+                module="archive",
+                action="archive.file.success",
+                status="success",
+                message=f"归档完成：{filename} → {target_desc}",
+                extra={"task_id": db_task.id, "target_desc": target_desc},
+            )
+            return {
+                "task_id": db_task.id,
+                "status": ArchiveStatus.SUCCESS.value,
+                "source_fid": fid,
+                "source_filename": filename,
+                "target_desc": target_desc,
+                "target_cid": target_cid,
+            }
+        except Exception as exc:
+            msg = str(exc) or "未知错误"
+            await self._mark_task_failed(db_task.id, msg)
+            logger.warning("归档文件 %s 失败: %s", filename, msg)
+            return {
+                "task_id": db_task.id,
+                "status": ArchiveStatus.FAILED.value,
+                "source_fid": fid,
+                "source_filename": filename,
+                "message": msg,
+            }
+
+    # ================================================================
+    #  处理单个视频文件（完整流程：识别 + 移动 + 重命名 + 字幕）
     # ================================================================
 
     async def _process_one(
