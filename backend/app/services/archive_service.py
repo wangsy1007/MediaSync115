@@ -292,8 +292,8 @@ class ArchiveService:
                     if target_cid and target_cid not in processed_cids:
                         processed_cids.add(target_cid)
 
-                # 阶段三：清理空源目录
-                await self._cleanup_empty_dirs(pan115, watch_cid, video_items)
+                # 阶段三：清理空源目录树
+                await self._cleanup_empty_dir_tree(pan115, watch_cid, video_items)
 
                 finish_status = "success" if summary["failed"] == 0 else "warning"
                 await operation_log_service.log_background_event(
@@ -389,6 +389,7 @@ class ArchiveService:
                             "fid": fid,
                             "name": name,
                             "cid": current_cid,
+                            "pid": str(it.get("pid") or current_cid).strip(),
                             "relative_path": relative_path,
                             "is_video": is_video,
                             "is_subtitle": is_subtitle,
@@ -597,37 +598,52 @@ class ArchiveService:
                 logger.warning("字幕移动 %s 失败", sub["name"])
 
     # ================================================================
-    #  参考QMediaSync：清理空源目录
+    #  清理空源目录树（从叶子往上逐层删除空目录）
     # ================================================================
 
-    async def _cleanup_empty_dirs(
+    async def _cleanup_empty_dir_tree(
         self,
         pan115: Pan115Service,
         watch_cid: str,
         moved_items: list[dict[str, Any]],
     ) -> None:
         moved_cids: set[str] = set()
+        cid_to_pid: dict[str, str] = {}
         for it in moved_items:
             cid = str(it.get("cid") or "")
+            pid = str(it.get("pid") or "")
             if cid and cid != watch_cid:
                 moved_cids.add(cid)
+                if pid:
+                    cid_to_pid[cid] = pid
+
+        if not moved_cids:
+            return
+
+        deleted: set[str] = set()
 
         for cid in moved_cids:
-            try:
-                result = await pan115.get_file_list(cid=cid, limit=10)
-                remaining = result.get("data") or []
-                has_content = False
-                for it in remaining:
-                    if isinstance(it, dict):
-                        has_content = True
+            current = cid
+            while current and current != watch_cid and current not in deleted:
+                try:
+                    result = await pan115.get_file_list(cid=current, limit=10)
+                    remaining = result.get("data") or []
+                    if remaining:
                         break
-                if not has_content:
-                    try:
-                        await pan115.delete_file(cid)
-                    except Exception:
-                        logger.debug("清理空目录 %s 失败（可忽略）", cid)
-            except Exception:
-                logger.debug("检查目录 %s 内容失败（可忽略）", cid)
+                except Exception:
+                    logger.debug("检查目录 %s 内容失败（可忽略）", current)
+                    break
+
+                parent = cid_to_pid.get(current)
+
+                try:
+                    await pan115.delete_file([current])
+                    deleted.add(current)
+                except Exception:
+                    logger.debug("删除空目录 %s 失败（可忽略）", current)
+                    break
+
+                current = parent if parent else ""
 
     # ================================================================
     #  参考QMediaSync：预创建分类目录（带缓存）
