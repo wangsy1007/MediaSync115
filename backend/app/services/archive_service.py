@@ -365,7 +365,9 @@ class ArchiveService:
                     if not isinstance(it, dict):
                         continue
 
-                    name = str(it.get("n") or it.get("name") or "").strip()
+                    name = str(
+                        it.get("n") or it.get("name") or it.get("fn") or ""
+                    ).strip()
                     if not name:
                         continue
 
