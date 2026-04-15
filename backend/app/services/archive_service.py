@@ -190,8 +190,9 @@ class ArchiveService:
         if (
             Pan115Service._is_method_not_allowed_error(error_text)
             or "频繁" in error_text
+            or "网络风控" in error_text
         ):
-            return "115 接口临时受限，请稍后再试"
+            return "115 文件列表接口被临时风控拦截（405），请等待数小时后再试，或在设置页重新扫码登录刷新 Cookie"
 
         if "enoent" in lowered_error_text or "不存在" in error_text:
             return f"文件或目录不存在：{error_text[:500]}"
