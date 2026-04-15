@@ -1505,35 +1505,39 @@ class Pan115Service:
         """
         判断文件项是否为文件夹
 
+        115 API 返回格式不统一：
+        - 标准 /files 接口：文件夹有 ico="folder"，文件有 ico=扩展名
+        - 部分接口/缓存：可能缺少 ico 字段
+
+        判断优先级：
+        1. ico="folder" → 文件夹
+        2. ico 有值且非 "folder" → 文件
+        3. sha1 有值 → 文件（文件的哈希）
+        4. fs（文件大小）> 0 → 文件
+        5. 都无法判断时，有 pid 且无 sha1/fs → 文件夹
+
         Args:
             item: 文件信息字典
 
         Returns:
             是否为文件夹
         """
-        # 方法1：检查 ico 字段（文件夹通常是 "folder"）
-        ico = item.get("ico", "")
+        ico = str(item.get("ico") or "").strip().lower()
         if ico == "folder":
             return True
-
-        # 方法2：检查 pc 字段（父目录标识）
-        pc = item.get("pc")
-        if pc is not None:
-            # pc 是字符串时，非 "0" 表示文件夹
-            if isinstance(pc, str):
-                return pc != "0" and bool(pc)
-            # pc 是数字时，1 表示文件夹
-            if isinstance(pc, int):
-                return pc == 1
-
-        # 方法3：检查是否没有文件大小（文件夹通常 size 为 0 或无此字段）
-        # 同时检查是否有 fid（文件有 fid，文件夹可能没有）
-        has_size = item.get("s") is not None and item.get("s", 0) > 0
-        has_fid = bool(item.get("fid"))
-
-        # 如果有大小或者有 fid，可能是文件
-        if has_size:
+        if ico:
             return False
+
+        sha1 = str(item.get("sha1") or "").strip()
+        if sha1:
+            return False
+
+        try:
+            fs = int(item.get("fs") or 0)
+            if fs > 0:
+                return False
+        except (ValueError, TypeError):
+            pass
 
         return True
 
