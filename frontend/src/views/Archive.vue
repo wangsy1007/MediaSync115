@@ -21,6 +21,18 @@
           <el-form-item label="启用归档">
             <el-switch v-model="config.archive_enabled" />
           </el-form-item>
+          <el-form-item label="转存后自动归档">
+            <el-switch v-model="config.archive_auto_on_transfer" />
+            <div class="form-hint">转存分享链接成功后自动触发归档扫描</div>
+          </el-form-item>
+          <el-form-item label="离线完成后自动归档">
+            <el-switch v-model="config.archive_auto_on_offline" />
+            <div class="form-hint">离线下载完成后自动触发归档扫描</div>
+          </el-form-item>
+          <el-form-item label="离线监控间隔">
+            <el-input-number v-model="config.offline_monitor_interval_minutes" :min="1" :max="60" />
+            <span class="suffix-text">分钟</span>
+          </el-form-item>
           <el-form-item label="兜底扫描间隔">
             <el-input-number v-model="config.archive_interval_minutes" :min="1" :max="1440" />
             <span class="suffix-text">分钟</span>
@@ -43,7 +55,7 @@
               </el-tag>
               <el-button size="small" @click="openPicker('output')">选择目录</el-button>
             </div>
-            <div class="form-hint">归档后的文件将整理到此目录下的 movies / tv 子目录中</div>
+            <div class="form-hint">归档后的文件将整理到此目录下的 电影/剧集 子目录中</div>
           </el-form-item>
         </div>
 
@@ -221,7 +233,10 @@ const config = reactive({
   archive_watch_name: '',
   archive_output_cid: '',
   archive_output_name: '',
-  archive_interval_minutes: 10
+  archive_interval_minutes: 10,
+  archive_auto_on_transfer: true,
+  archive_auto_on_offline: true,
+  offline_monitor_interval_minutes: 3
 })
 
 const runtime = reactive({
@@ -289,6 +304,9 @@ const loadConfig = async () => {
   config.archive_output_cid = data.archive_output_cid || ''
   config.archive_output_name = data.archive_output_name || ''
   config.archive_interval_minutes = Number(data.archive_interval_minutes || 10)
+  config.archive_auto_on_transfer = data.archive_auto_on_transfer !== false
+  config.archive_auto_on_offline = data.archive_auto_on_offline !== false
+  config.offline_monitor_interval_minutes = Number(data.offline_monitor_interval_minutes || 3)
   runtime.scan_running = !!data.runtime?.scan_running
   runtime.last_scan_started_at = data.runtime?.last_scan_started_at || ''
   runtime.last_scan_finished_at = data.runtime?.last_scan_finished_at || ''

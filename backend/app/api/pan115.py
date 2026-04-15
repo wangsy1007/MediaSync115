@@ -8,6 +8,23 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Query, Response
 from app.services.pan115_service import Pan115Service, pan115_service
 from app.services.runtime_settings_service import runtime_settings_service
+
+
+async def _trigger_archive_if_enabled(trigger: str = "transfer") -> None:
+    if not runtime_settings_service.get_archive_enabled():
+        return
+    if not runtime_settings_service.get_archive_auto_on_transfer():
+        return
+    if not runtime_settings_service.get_archive_watch_cid():
+        return
+    try:
+        from app.services.archive_service import archive_service
+
+        await archive_service.start_scan(trigger=trigger)
+    except Exception:
+        pass
+
+
 from pydantic import BaseModel
 from typing import Optional, List
 from app.services.sync_service import sync_service
@@ -841,6 +858,7 @@ async def save_share_file(request: SaveShareRequest):
         result = await service.save_share_file(
             request.share_code, request.file_id, target_pid, request.receive_code
         )
+        asyncio.create_task(_trigger_archive_if_enabled("transfer"))
         return result
     except Exception as e:
         handle_115_error(e)
@@ -859,6 +877,7 @@ async def save_share_files(request: SaveShareFilesRequest):
         result = await service.save_share_files(
             request.share_code, request.file_ids, target_pid, request.receive_code
         )
+        asyncio.create_task(_trigger_archive_if_enabled("transfer"))
         return result
     except Exception as e:
         handle_115_error(e)
@@ -879,6 +898,7 @@ async def save_share_all(
     try:
         target_pid = _get_transfer_default_folder_id()
         result = await service.save_share_all(share_code, target_pid, receive_code)
+        asyncio.create_task(_trigger_archive_if_enabled("transfer"))
         return result
     except Exception as e:
         handle_115_error(e)
@@ -910,6 +930,7 @@ async def save_share_to_folder(request: SaveShareToFolderRequest):
                     target_folder_id=target_folder_id,
                     receive_code=request.receive_code,
                 )
+                asyncio.create_task(_trigger_archive_if_enabled("transfer"))
                 return result
 
             # 3. 如果没有 tmdb_id，走默认的全量转存逻辑
@@ -919,6 +940,7 @@ async def save_share_to_folder(request: SaveShareToFolderRequest):
                 transfer_parent_id,
                 request.receive_code,
             )
+            asyncio.create_task(_trigger_archive_if_enabled("transfer"))
             return result
         except Exception as e:
             last_error = e
@@ -1013,6 +1035,7 @@ async def save_share_files_to_folder(request: SaveShareFilesToFolderRequest):
                 transfer_parent_id,
                 request.receive_code,
             )
+            asyncio.create_task(_trigger_archive_if_enabled("transfer"))
             return result
         except Exception as e:
             last_error = e

@@ -38,6 +38,9 @@ class ArchiveConfigRequest(BaseModel):
     archive_output_cid: Optional[str] = None
     archive_output_name: Optional[str] = None
     archive_interval_minutes: Optional[int] = None
+    archive_auto_on_transfer: Optional[bool] = None
+    archive_auto_on_offline: Optional[bool] = None
+    offline_monitor_interval_minutes: Optional[int] = None
 
     class Config:
         extra = "allow"

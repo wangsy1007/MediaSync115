@@ -158,6 +158,9 @@ class RuntimeSettingsService:
             "archive_output_cid": "",
             "archive_output_name": "",
             "archive_interval_minutes": 10,
+            "archive_auto_on_transfer": True,
+            "archive_auto_on_offline": True,
+            "offline_monitor_interval_minutes": 3,
         }
         self._data = dict(self._defaults)
         self._load()
@@ -679,6 +682,19 @@ class RuntimeSettingsService:
         except Exception:
             return 10
 
+    def get_archive_auto_on_transfer(self) -> bool:
+        return bool(self._data.get("archive_auto_on_transfer", True))
+
+    def get_archive_auto_on_offline(self) -> bool:
+        return bool(self._data.get("archive_auto_on_offline", True))
+
+    def get_offline_monitor_interval_minutes(self) -> int:
+        value = self._data.get("offline_monitor_interval_minutes", 3)
+        try:
+            return max(1, int(value))
+        except Exception:
+            return 3
+
     def get_archive_config(self) -> dict[str, Any]:
         return {
             "archive_enabled": self.get_archive_enabled(),
@@ -687,6 +703,9 @@ class RuntimeSettingsService:
             "archive_output_cid": self.get_archive_output_cid(),
             "archive_output_name": self.get_archive_output_name(),
             "archive_interval_minutes": self.get_archive_interval_minutes(),
+            "archive_auto_on_transfer": self.get_archive_auto_on_transfer(),
+            "archive_auto_on_offline": self.get_archive_auto_on_offline(),
+            "offline_monitor_interval_minutes": self.get_offline_monitor_interval_minutes(),
         }
 
     def update_archive_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -726,6 +745,27 @@ class RuntimeSettingsService:
         ):
             self._data["archive_interval_minutes"] = max(
                 1, int(payload["archive_interval_minutes"])
+            )
+        if (
+            "archive_auto_on_transfer" in payload
+            and payload["archive_auto_on_transfer"] is not None
+        ):
+            self._data["archive_auto_on_transfer"] = bool(
+                payload["archive_auto_on_transfer"]
+            )
+        if (
+            "archive_auto_on_offline" in payload
+            and payload["archive_auto_on_offline"] is not None
+        ):
+            self._data["archive_auto_on_offline"] = bool(
+                payload["archive_auto_on_offline"]
+            )
+        if (
+            "offline_monitor_interval_minutes" in payload
+            and payload["offline_monitor_interval_minutes"] is not None
+        ):
+            self._data["offline_monitor_interval_minutes"] = max(
+                1, int(payload["offline_monitor_interval_minutes"])
             )
 
         self._save()

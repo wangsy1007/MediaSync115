@@ -12,6 +12,7 @@ from app.services.operation_log_service import operation_log_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.subscription_service import subscription_service
 from app.services.archive_service import archive_service
+from app.services.offline_monitor_service import offline_monitor_service
 
 
 class JobRegistry:
@@ -24,6 +25,7 @@ class JobRegistry:
             "system.warmup_explore_home_cache": self._warmup_explore_home_cache,
             "system.noop": self._noop,
             "system.archive_scan": self._archive_scan,
+            "system.offline_monitor": self._offline_monitor,
             "hdhive.checkin": self._hdhive_checkin,
             "subscription.check_hdhive": self._check_subscription_hdhive,
             "subscription.check_pansou": self._check_subscription_pansou,
@@ -80,6 +82,9 @@ class JobRegistry:
 
     async def _archive_scan(self, **kwargs) -> dict[str, Any]:
         return await archive_service.start_scan(trigger="scheduler")
+
+    async def _offline_monitor(self, **kwargs) -> dict[str, Any]:
+        return await offline_monitor_service.check_and_trigger()
 
     async def _hdhive_checkin(self, **kwargs) -> dict[str, Any]:
         gamble = runtime_settings_service.get_hdhive_auto_checkin_mode() == "gamble"
