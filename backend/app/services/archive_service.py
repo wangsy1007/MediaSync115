@@ -52,43 +52,43 @@ EPISODE_PATTERNS = (
     re.compile(r"(?i)\bEP?(?P<episode>\d{1,3})\b"),
 )
 MOVIE_GENRE_MAP = {
-    28: "action",
-    12: "adventure",
-    16: "animation",
-    35: "comedy",
-    80: "crime",
-    99: "documentary",
-    18: "drama",
-    10751: "family",
-    14: "fantasy",
-    36: "history",
-    27: "horror",
-    10402: "music",
-    9648: "mystery",
-    10749: "romance",
-    878: "science-fiction",
-    10770: "tv-movie",
-    53: "thriller",
-    10752: "war",
-    37: "western",
+    28: "动作",
+    12: "冒险",
+    16: "动画",
+    35: "喜剧",
+    80: "犯罪",
+    99: "纪录片",
+    18: "剧情",
+    10751: "家庭",
+    14: "奇幻",
+    36: "历史",
+    27: "恐怖",
+    10402: "音乐",
+    9648: "悬疑",
+    10749: "爱情",
+    878: "科幻",
+    10770: "电视电影",
+    53: "惊悚",
+    10752: "战争",
+    37: "西部",
 }
 TV_GENRE_MAP = {
-    10759: "action-adventure",
-    16: "animation",
-    35: "comedy",
-    80: "crime",
-    99: "documentary",
-    18: "drama",
-    10751: "family",
-    10762: "kids",
-    9648: "mystery",
-    10763: "news",
-    10764: "reality",
-    10765: "sci-fi-fantasy",
-    10766: "soap",
-    10767: "talk",
-    10768: "war-politics",
-    37: "western",
+    10759: "动作冒险",
+    16: "动画",
+    35: "喜剧",
+    80: "犯罪",
+    99: "纪录片",
+    18: "剧情",
+    10751: "家庭",
+    10762: "儿童",
+    9648: "悬疑",
+    10763: "新闻",
+    10764: "真人秀",
+    10765: "科幻奇幻",
+    10766: "肥皂剧",
+    10767: "脱口秀",
+    10768: "战争政治",
+    37: "西部",
 }
 
 
@@ -461,7 +461,7 @@ class ArchiveService:
                     folder_cache=folder_cache,
                 )
                 season = int(parsed.get("season") or 1)
-                target_desc = f"tv/{genre_name}/{title_folder}/Season {season:02d}"
+                target_desc = f"剧集/{genre_name}/{title_folder}/第{season}季"
             else:
                 target_cid = await self._ensure_movie_path(
                     pan115,
@@ -470,7 +470,7 @@ class ArchiveService:
                     title_folder,
                     folder_cache=folder_cache,
                 )
-                target_desc = f"movies/{genre_name}/{title_folder}"
+                target_desc = f"电影/{genre_name}/{title_folder}"
 
             await self._update_task(
                 db_task.id,
@@ -650,7 +650,7 @@ class ArchiveService:
         if folder_cache and cache_key in folder_cache:
             return folder_cache[cache_key]
 
-        movies_cid = await pan115.get_or_create_folder(root_cid, "movies")
+        movies_cid = await pan115.get_or_create_folder(root_cid, "电影")
         genre_cid = await pan115.get_or_create_folder(movies_cid, genre)
         folder_cid = await pan115.get_or_create_folder(genre_cid, title_folder)
         if folder_cache is not None:
@@ -677,10 +677,10 @@ class ArchiveService:
         if folder_cache and cache_key in folder_cache:
             return folder_cache[cache_key]
 
-        tv_cid = await pan115.get_or_create_folder(root_cid, "tv")
+        tv_cid = await pan115.get_or_create_folder(root_cid, "剧集")
         genre_cid = await pan115.get_or_create_folder(tv_cid, genre)
         title_cid = await pan115.get_or_create_folder(genre_cid, title_folder)
-        season_dir = f"Season {season:02d}"
+        season_dir = f"第{season}季"
         season_cid = await pan115.get_or_create_folder(title_cid, season_dir)
         if folder_cache is not None:
             folder_cache[cache_key] = season_cid
