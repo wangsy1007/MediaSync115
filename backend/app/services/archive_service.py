@@ -111,7 +111,8 @@ class ArchiveService:
 
     def _get_pan115(self) -> Pan115Service:
         if self._pan115 is None:
-            self._pan115 = Pan115Service()
+            cookie = runtime_settings_service.get_pan115_cookie()
+            self._pan115 = Pan115Service(cookie)
         return self._pan115
 
     def get_config(self) -> dict[str, Any]:
