@@ -51,27 +51,17 @@ EPISODE_PATTERNS = (
     re.compile(r"(?i)\b(?P<season>\d{1,2})x(?P<episode>\d{1,3})\b"),
     re.compile(r"(?i)\bEP?(?P<episode>\d{1,3})\b"),
 )
-MOVIE_GENRE_MAP = {
-    28: "动作",
-    12: "冒险",
-    16: "动画",
-    35: "喜剧",
-    80: "犯罪",
-    99: "纪录片",
-    18: "剧情",
-    10751: "家庭",
-    14: "奇幻",
-    36: "历史",
-    27: "恐怖",
-    10402: "音乐",
-    9648: "悬疑",
-    10749: "爱情",
-    878: "科幻",
-    10770: "电视电影",
-    53: "惊悚",
-    10752: "战争",
-    37: "西部",
+MOVIE_REGION_MAP = {
+    "CN": "华语电影",
+    "HK": "华语电影",
+    "TW": "华语电影",
+    "SG": "华语电影",
+    "JP": "日韩电影",
+    "KR": "日韩电影",
+    "KP": "日韩电影",
 }
+MOVIE_REGION_DEFAULT = "外语电影"
+
 TV_GENRE_MAP = {
     10759: "动作冒险",
     16: "动画",
@@ -90,6 +80,7 @@ TV_GENRE_MAP = {
     10768: "战争政治",
     37: "西部",
 }
+TV_GENRE_DEFAULT = "其他"
 
 
 class _AuthExpiredError(Exception):
@@ -446,7 +437,8 @@ class ArchiveService:
             if not matched:
                 raise ValueError("TMDB 未匹配到可用结果")
 
-            genre_name = str(matched.get("genre_name") or "other")
+            genre_name = str(matched.get("genre_name") or "其他")
+            region_name = str(matched.get("region_name") or MOVIE_REGION_DEFAULT)
             title = str(matched.get("title") or parsed["query_title"])
             year = str(matched.get("year") or parsed.get("year") or "")
             title_folder = f"{title} ({year})" if year else title
@@ -466,11 +458,11 @@ class ArchiveService:
                 target_cid = await self._ensure_movie_path(
                     pan115,
                     output_cid,
-                    genre_name,
+                    region_name,
                     title_folder,
                     folder_cache=folder_cache,
                 )
-                target_desc = f"电影/{genre_name}/{title_folder}"
+                target_desc = f"电影/{region_name}/{title_folder}"
 
             await self._update_task(
                 db_task.id,
@@ -478,7 +470,7 @@ class ArchiveService:
                 tmdb_id=matched.get("tmdb_id"),
                 tmdb_title=title,
                 tmdb_year=year,
-                genre_name=genre_name,
+                genre_name=genre_name if parsed["media_type"] == "tv" else region_name,
                 target_path=target_desc,
             )
             await operation_log_service.log_background_event(
@@ -486,7 +478,7 @@ class ArchiveService:
                 module="archive",
                 action="archive.file.matched",
                 status="info",
-                message=f"TMDB 匹配成功：{title} ({year})，分类={genre_name}",
+                message=f"TMDB 匹配成功：{title} ({year})，分类={'剧集/' + genre_name if parsed['media_type'] == 'tv' else '电影/' + region_name}",
                 extra={"task_id": db_task.id, "matched": matched},
             )
 
@@ -642,17 +634,17 @@ class ArchiveService:
         self,
         pan115: Pan115Service,
         root_cid: str,
-        genre: str,
+        region: str,
         title_folder: str,
         folder_cache: dict[tuple[str, ...], str] | None = None,
     ) -> str:
-        cache_key = ("movie", str(root_cid), str(genre), str(title_folder))
+        cache_key = ("movie", str(root_cid), str(region), str(title_folder))
         if folder_cache and cache_key in folder_cache:
             return folder_cache[cache_key]
 
         movies_cid = await pan115.get_or_create_folder(root_cid, "电影")
-        genre_cid = await pan115.get_or_create_folder(movies_cid, genre)
-        folder_cid = await pan115.get_or_create_folder(genre_cid, title_folder)
+        region_cid = await pan115.get_or_create_folder(movies_cid, region)
+        folder_cid = await pan115.get_or_create_folder(region_cid, title_folder)
         if folder_cache is not None:
             folder_cache[cache_key] = folder_cid
         return folder_cid
@@ -742,12 +734,16 @@ class ArchiveService:
             else str(parsed.get("year") or "")
         )
         genre_name = self._extract_genre_name(detail, media_type)
+        region_name = (
+            self._extract_movie_region(detail) if media_type == "movie" else genre_name
+        )
 
         return {
             "tmdb_id": tmdb_id,
             "title": title,
             "year": year_text,
             "genre_name": genre_name,
+            "region_name": region_name,
         }
 
     # ---------- 文件名解析 ----------
@@ -975,7 +971,7 @@ class ArchiveService:
 
     @staticmethod
     def _extract_genre_name(detail: dict[str, Any], media_type: str) -> str:
-        genre_map = MOVIE_GENRE_MAP if media_type == "movie" else TV_GENRE_MAP
+        genre_map = TV_GENRE_MAP
         genres = detail.get("genres") if isinstance(detail.get("genres"), list) else []
         for g in genres:
             if isinstance(g, dict):
@@ -984,14 +980,32 @@ class ArchiveService:
                     return genre_map[gid]
         for g in genres:
             if isinstance(g, dict):
-                n = (
-                    re.sub(r"[\\/:*?\"<>|]", " ", str(g.get("name") or ""))
-                    .strip()
-                    .lower()
-                )
+                n = re.sub(r"[\\/:*?\"<>|]", " ", str(g.get("name") or "")).strip()
                 if n:
                     return n
-        return "other"
+        return TV_GENRE_DEFAULT
+
+    @staticmethod
+    def _extract_movie_region(detail: dict[str, Any]) -> str:
+        origin_country = detail.get("origin_country")
+        if isinstance(origin_country, list) and origin_country:
+            for country in origin_country:
+                country_str = str(country).upper().strip()
+                if country_str in MOVIE_REGION_MAP:
+                    return MOVIE_REGION_MAP[country_str]
+            first = str(origin_country[0]).upper().strip()
+            if first in MOVIE_REGION_MAP:
+                return MOVIE_REGION_MAP[first]
+
+        production_countries = detail.get("production_countries")
+        if isinstance(production_countries, list) and production_countries:
+            for pc in production_countries:
+                if isinstance(pc, dict):
+                    iso = str(pc.get("iso_3166_1") or "").upper().strip()
+                    if iso in MOVIE_REGION_MAP:
+                        return MOVIE_REGION_MAP[iso]
+
+        return MOVIE_REGION_DEFAULT
 
 
 archive_service = ArchiveService()
