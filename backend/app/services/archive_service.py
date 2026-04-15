@@ -598,7 +598,7 @@ class ArchiveService:
                 logger.warning("字幕移动 %s 失败", sub["name"])
 
     # ================================================================
-    #  清理空源目录树（从叶子往上逐层删除空目录）
+    #  清理源目录树（归档后删除残余广告图片等，从叶子往上逐层删除空目录）
     # ================================================================
 
     async def _cleanup_empty_dir_tree(
@@ -617,6 +617,23 @@ class ArchiveService:
                 if pid:
                     cid_to_pid[cid] = pid
 
+        # 补全父级目录链的 pid（确保能回溯到 watch_cid）
+        for cid in list(moved_cids):
+            current = cid_to_pid.get(cid, "")
+            while current and current != watch_cid and current not in cid_to_pid:
+                try:
+                    result = await pan115.get_file_list(cid=current, limit=1)
+                    items = result.get("data") or []
+                    if items and isinstance(items[0], dict):
+                        pid = str(items[0].get("pid") or "").strip()
+                        if pid:
+                            cid_to_pid[current] = pid
+                            current = pid
+                            continue
+                except Exception:
+                    pass
+                break
+
         if not moved_cids:
             return
 
@@ -626,21 +643,54 @@ class ArchiveService:
             current = cid
             while current and current != watch_cid and current not in deleted:
                 try:
-                    result = await pan115.get_file_list(cid=current, limit=10)
+                    result = await pan115.get_file_list(cid=current, limit=100)
                     remaining = result.get("data") or []
-                    if remaining:
-                        break
                 except Exception:
                     logger.debug("检查目录 %s 内容失败（可忽略）", current)
                     break
 
+                # 先删除目录内残留的非视频非字幕文件（广告图片等）
+                leftover_fids: list[str] = []
+                leftover_folder_cids: list[str] = []
+                for it in remaining:
+                    if not isinstance(it, dict):
+                        continue
+                    if pan115._is_folder_item(it):
+                        fid = str(
+                            pan115._extract_folder_id(it) or it.get("fid") or ""
+                        ).strip()
+                        if fid:
+                            leftover_folder_cids.append(fid)
+                    else:
+                        fid = str(it.get("fid") or "").strip()
+                        if fid:
+                            leftover_fids.append(fid)
+
+                if leftover_fids:
+                    try:
+                        await pan115.delete_file(leftover_fids)
+                    except Exception:
+                        logger.debug("删除残留文件失败（可忽略）：%s", leftover_fids)
+
+                # 目录内如果还有子目录，说明子目录还没被清理，不能删该层
+                still_has_folders = False
+                if leftover_folder_cids:
+                    for sub_cid in leftover_folder_cids:
+                        if sub_cid not in deleted:
+                            still_has_folders = True
+                            break
+
                 parent = cid_to_pid.get(current)
 
+                if still_has_folders:
+                    break
+
+                # 目录为空或只剩已删除的子目录，删除该目录
                 try:
                     await pan115.delete_file([current])
                     deleted.add(current)
                 except Exception:
-                    logger.debug("删除空目录 %s 失败（可忽略）", current)
+                    logger.debug("删除目录 %s 失败（可忽略）", current)
                     break
 
                 current = parent if parent else ""
