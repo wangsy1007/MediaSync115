@@ -97,11 +97,15 @@ docker pull wangsy1007/mediasync115:latest
 
 docker run -d \
   --name mediasync115 \
-  -p 5173:80 \
+  -p 5173:5173 \
+  -p 9008:9008 \
   -v $(pwd)/data:/app/data \
+  -v $(pwd)/strm:/app/strm \
   --restart unless-stopped \
   wangsy1007/mediasync115:latest
 ```
+
+如果你要使用 STRM 生成功能，建议把宿主机目录挂载到容器内固定路径 `/app/strm`，然后在设置页把 `STRM 输出目录` 填成 `/app/strm`。
 
 如果你确实需要强制指定架构，也可以显式传入 `--platform`：
 
@@ -121,16 +125,18 @@ services:
     container_name: mediasync115
     restart: unless-stopped
     ports:
-      - "5173:80"
+      - "5173:5173"
+      - "9008:9008"
     volumes:
       - ./data:/app/data
+      - ${STRM_HOST_DIR:-./strm}:/app/strm
     healthcheck:
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1/healthz', timeout=10)"
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5173/healthz', timeout=10)"
         ]
       interval: 30s
       timeout: 10s
@@ -143,6 +149,20 @@ services:
 ```bash
 docker compose up -d
 ```
+
+如果你想把 STRM 输出到宿主机其他目录，可以在仓库根目录创建 `.env`，例如：
+
+```bash
+STRM_HOST_DIR=/Volumes/Media/strm
+```
+
+然后重新执行：
+
+```bash
+docker compose up -d --build
+```
+
+设置页中请把 `STRM 输出目录` 固定填写为 `/app/strm`。
 
 首次启动后，请在设置页补齐必要配置，例如：
 
@@ -159,8 +179,8 @@ cp backend/.env.example backend/.env
 ```
 
 访问地址：
-- `http://127.0.0.1:5173`
-- `http://127.0.0.1:5173/api/docs`
+- `http://127.0.0.1:9008`
+- `http://127.0.0.1:9008/api/docs`
 
 ## NAS Manual Update
 
@@ -177,8 +197,9 @@ cp backend/.env.example backend/.env
 
 如果 NAS 只支持填写镜像参数，请保持等效配置：
 - 镜像：`wangsy1007/mediasync115:latest`
-- 端口：`5173 -> 80`
+- 端口：`5173`（前端 UI）、`9008`（STRM 播放）
 - 卷：宿主机数据目录映射到 `/app/data`
+- 可选：宿主机 STRM 目录映射到 `/app/strm`
 - 重启策略：`unless-stopped`
 
 ### 2. 用户手动更新

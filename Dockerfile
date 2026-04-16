@@ -61,6 +61,6 @@ LABEL org.opencontainers.image.version="${APP_BUILD_VERSION}" \
       org.opencontainers.image.revision="${APP_BUILD_GIT_SHA}" \
       org.opencontainers.image.created="${APP_BUILD_TIME}"
 
-EXPOSE 80
+EXPOSE 5173 9008
 
 CMD ["/start.sh"]

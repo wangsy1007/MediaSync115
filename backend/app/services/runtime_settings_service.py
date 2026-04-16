@@ -161,6 +161,13 @@ class RuntimeSettingsService:
             "archive_auto_on_transfer": True,
             "archive_auto_on_offline": True,
             "offline_monitor_interval_minutes": 3,
+            "strm_enabled": False,
+            "strm_output_dir": "",
+            "strm_base_url": "",
+            "strm_redirect_mode": "auto",
+            "strm_refresh_emby_after_generate": False,
+            "strm_refresh_feiniu_after_generate": False,
+            "strm_token_secret": "",
         }
         self._data = dict(self._defaults)
         self._load()
@@ -708,6 +715,84 @@ class RuntimeSettingsService:
             "offline_monitor_interval_minutes": self.get_offline_monitor_interval_minutes(),
         }
 
+    def get_strm_enabled(self) -> bool:
+        return bool(self._data.get("strm_enabled", False))
+
+    def get_strm_output_dir(self) -> str:
+        return str(self._data.get("strm_output_dir") or "").strip()
+
+    def get_strm_base_url(self) -> str:
+        return str(self._data.get("strm_base_url") or "").strip().rstrip("/")
+
+    def get_strm_redirect_mode(self) -> str:
+        value = str(self._data.get("strm_redirect_mode") or "auto").strip().lower()
+        if value in {"redirect", "proxy"}:
+            return value
+        return "auto"
+
+    def get_strm_refresh_emby_after_generate(self) -> bool:
+        return bool(self._data.get("strm_refresh_emby_after_generate", False))
+
+    def get_strm_refresh_feiniu_after_generate(self) -> bool:
+        return bool(self._data.get("strm_refresh_feiniu_after_generate", False))
+
+    def get_strm_token_secret(self) -> str:
+        return str(self._data.get("strm_token_secret") or "").strip()
+
+    def get_strm_config(self) -> dict[str, Any]:
+        return {
+            "strm_enabled": self.get_strm_enabled(),
+            "strm_output_dir": self.get_strm_output_dir(),
+            "strm_base_url": self.get_strm_base_url(),
+            "strm_redirect_mode": self.get_strm_redirect_mode(),
+            "strm_refresh_emby_after_generate": self.get_strm_refresh_emby_after_generate(),
+            "strm_refresh_feiniu_after_generate": self.get_strm_refresh_feiniu_after_generate(),
+        }
+
+    def update_strm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("STRM 配置格式无效")
+
+        if "strm_enabled" in payload and payload["strm_enabled"] is not None:
+            self._data["strm_enabled"] = bool(payload["strm_enabled"])
+        if "strm_output_dir" in payload and payload["strm_output_dir"] is not None:
+            self._data["strm_output_dir"] = str(
+                payload["strm_output_dir"] or ""
+            ).strip()
+        if "strm_base_url" in payload and payload["strm_base_url"] is not None:
+            self._data["strm_base_url"] = (
+                str(payload["strm_base_url"] or "").strip().rstrip("/")
+            )
+        if (
+            "strm_redirect_mode" in payload
+            and payload["strm_redirect_mode"] is not None
+        ):
+            mode = str(payload["strm_redirect_mode"] or "auto").strip().lower()
+            self._data["strm_redirect_mode"] = (
+                mode if mode in {"auto", "redirect", "proxy"} else "auto"
+            )
+        if (
+            "strm_refresh_emby_after_generate" in payload
+            and payload["strm_refresh_emby_after_generate"] is not None
+        ):
+            self._data["strm_refresh_emby_after_generate"] = bool(
+                payload["strm_refresh_emby_after_generate"]
+            )
+        if (
+            "strm_refresh_feiniu_after_generate" in payload
+            and payload["strm_refresh_feiniu_after_generate"] is not None
+        ):
+            self._data["strm_refresh_feiniu_after_generate"] = bool(
+                payload["strm_refresh_feiniu_after_generate"]
+            )
+        if "strm_token_secret" in payload and payload["strm_token_secret"] is not None:
+            self._data["strm_token_secret"] = str(
+                payload["strm_token_secret"] or ""
+            ).strip()
+
+        self._save()
+        return self.get_strm_config()
+
     def update_archive_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise ValueError("归档配置格式无效")
@@ -1060,6 +1145,12 @@ class RuntimeSettingsService:
             "archive_watch_cid": self.get_archive_watch_cid(),
             "archive_output_cid": self.get_archive_output_cid(),
             "archive_interval_minutes": self.get_archive_interval_minutes(),
+            "strm_enabled": self.get_strm_enabled(),
+            "strm_output_dir": self.get_strm_output_dir(),
+            "strm_base_url": self.get_strm_base_url(),
+            "strm_redirect_mode": self.get_strm_redirect_mode(),
+            "strm_refresh_emby_after_generate": self.get_strm_refresh_emby_after_generate(),
+            "strm_refresh_feiniu_after_generate": self.get_strm_refresh_feiniu_after_generate(),
         }
 
 

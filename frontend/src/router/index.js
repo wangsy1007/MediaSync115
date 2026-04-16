@@ -46,6 +46,11 @@ const routes = [
     component: () => import('@/views/Archive.vue')
   },
   {
+    path: '/strm',
+    name: 'Strm',
+    component: () => import('@/views/Strm.vue')
+  },
+  {
     path: '/subscription-logs',
     redirect: '/logs'
   },

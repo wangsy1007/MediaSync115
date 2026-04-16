@@ -1854,7 +1854,7 @@ const savingUpdateSettings = ref(false)
 const checkingUpdates = ref(false)
 
 const appInfo = ref({
-  currentVersion: '1.0.5',
+  currentVersion: '1.1.0',
   currentImageTag: '',
   currentGitSha: '',
   currentBuildTime: '',
@@ -2066,6 +2066,7 @@ const feiniuSyncStatusTagType = computed(() => {
   if (feiniuSyncStatus.status === 'failed') return 'danger'
   return 'info'
 })
+
 
 const isCustomUpdateSource = computed(() => updateSourceForm.value.sourceType === 'custom_dockerhub')
 const effectiveUpdateRepository = computed(() => {

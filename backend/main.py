@@ -21,6 +21,7 @@ from app.api import (
     scheduler,
     search,
     settings as runtime_settings_api,
+    strm as strm_api,
     subscriptions,
     workflow,
 )
@@ -197,12 +198,17 @@ UNAUTHENTICATED_API_PATHS = {
     "/api/auth/logout",
     "/api/auth/session",
 }
+UNAUTHENTICATED_API_PREFIXES = ("/api/strm/play/",)
 
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path or ""
-    if not path.startswith("/api") or path in UNAUTHENTICATED_API_PATHS:
+    if (
+        not path.startswith("/api")
+        or path in UNAUTHENTICATED_API_PATHS
+        or path.startswith(UNAUTHENTICATED_API_PREFIXES)
+    ):
         return await call_next(request)
 
     session = auth_service.get_request_session(request)
@@ -357,6 +363,7 @@ app.include_router(subscriptions.router, prefix="/api")
 app.include_router(pan115.router, prefix="/api")
 app.include_router(pansou.router, prefix="/api")
 app.include_router(runtime_settings_api.router, prefix="/api")
+app.include_router(strm_api.router, prefix="/api")
 app.include_router(scheduler.router, prefix="/api")
 app.include_router(workflow.router, prefix="/api")
 app.include_router(logs_api.router, prefix="/api")

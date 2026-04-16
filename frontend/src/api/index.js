@@ -207,6 +207,13 @@ export const archiveApi = {
   clearTasks: (includeFailed = false) => api.delete('/archive/tasks/clear', { params: { include_failed: includeFailed } })
 }
 
+export const strmApi = {
+  getConfig: () => api.get('/strm/config'),
+  updateConfig: (payload) => api.put('/strm/config', payload),
+  generate: () => api.post('/strm/generate', null, { timeout: 300000 }),
+  diagnose: () => api.get('/strm/diagnose', { timeout: 30000 })
+}
+
 export const subscriptionApi = {
   list: (params) => api.get('/subscriptions', { params }),
   listForStatus: (params) => api.get('/subscriptions/status-map', {

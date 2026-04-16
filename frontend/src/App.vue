@@ -58,6 +58,10 @@
             <el-icon><FolderOpened /></el-icon>
             <span>归档刮削</span>
           </el-menu-item>
+          <el-menu-item index="/strm">
+            <el-icon><Link /></el-icon>
+            <span>STRM</span>
+          </el-menu-item>
           <el-menu-item index="/logs">
             <el-icon><Document /></el-icon>
             <span>日志</span>
@@ -163,6 +167,10 @@
             <el-icon><FolderOpened /></el-icon>
             <span>归档刮削</span>
           </el-menu-item>
+          <el-menu-item index="/strm">
+            <el-icon><Link /></el-icon>
+            <span>STRM</span>
+          </el-menu-item>
           <el-menu-item index="/logs">
             <el-icon><Document /></el-icon>
             <span>日志</span>
@@ -211,6 +219,7 @@ import {
   Star,
   Download,
   FolderOpened,
+  Link,
   Document,
   Setting,
   Monitor,
@@ -228,7 +237,7 @@ const systemDark = ref(supportsMatchMedia ? window.matchMedia('(prefers-color-sc
 const beijingNow = ref(formatBeijingDateTime(new Date()))
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
 const mobileMenuOpen = ref(false)
-const appVersionLabel = ref('v1.0.5')
+const appVersionLabel = ref('v1.1.0')
 const isLoginRoute = computed(() => route.path === '/login')
 
 const activeMenu = computed(() => {
