@@ -14,10 +14,6 @@ trap shutdown SIGINT SIGTERM
 
 nginx -t
 
-echo "Starting nginx..."
-nginx -g 'daemon off;' &
-nginx_pid=$!
-
 echo "Starting backend..."
 uvicorn main:app --host 127.0.0.1 --port 8000 &
 uvicorn_pid=$!
@@ -41,11 +37,18 @@ wait_for_backend() {
   done
 
   echo "Backend did not become ready within ${max_wait}s."
-  return 0
+  return 1
 }
 
-wait_for_backend &
-readiness_pid=$!
+if ! wait_for_backend; then
+  shutdown
+  wait "${uvicorn_pid}" 2>/dev/null || true
+  exit 1
+fi
+
+echo "Starting nginx..."
+nginx -g 'daemon off;' &
+nginx_pid=$!
 
 wait -n "${uvicorn_pid}" "${nginx_pid}"
 exit_code=$?
@@ -54,6 +57,5 @@ shutdown
 
 wait "${uvicorn_pid}" 2>/dev/null || true
 wait "${nginx_pid}" 2>/dev/null || true
-wait "${readiness_pid}" 2>/dev/null || true
 
 exit "${exit_code}"
