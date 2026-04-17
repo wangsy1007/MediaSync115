@@ -892,6 +892,51 @@ def _build_pansou_keyword_from_media(payload: dict, media_type: str) -> str:
     return ""
 
 
+def _build_seedhub_keyword_candidates(
+    payload: dict, media_type: str, tmdb_id: int
+) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    if media_type == "tv":
+        title = _normalize_keyword_text(payload.get("name") or payload.get("title"))
+        original_title = _normalize_keyword_text(
+            payload.get("original_name") or payload.get("original_title")
+        )
+        date_like = (
+            payload.get("first_air_date")
+            or payload.get("release_date")
+            or payload.get("release")
+        )
+    else:
+        title = _normalize_keyword_text(payload.get("title") or payload.get("name"))
+        original_title = _normalize_keyword_text(
+            payload.get("original_title") or payload.get("original_name")
+        )
+        date_like = payload.get("release_date") or payload.get("release")
+
+    year = _extract_year_from_date_like(date_like)
+
+    def add_keyword(keyword: str) -> None:
+        normalized = _normalize_keyword_text(keyword)
+        if not normalized:
+            return
+        fingerprint = normalized.casefold()
+        if fingerprint in seen:
+            return
+        seen.add(fingerprint)
+        candidates.append(normalized)
+
+    add_keyword(title)
+    add_keyword(original_title)
+    if title and year:
+        add_keyword(f"{title} {year}")
+    if original_title and year:
+        add_keyword(f"{original_title} {year}")
+    add_keyword(f"TMDB {tmdb_id}")
+    return candidates
+
+
 def _normalize_pansou_pan115_list(payload: Any) -> list[dict]:
     rows = _extract_pansou_rows(payload)
     items: list[dict] = []
@@ -2151,7 +2196,7 @@ async def _search_seedhub_magnet_resources(
     tmdb_id: int, media_type: str, limit: int = 40
 ) -> tuple[str, list[dict]]:
     media_payload = await _load_media_payload(tmdb_id, media_type)
-    keyword_candidates = _build_pansou_keyword_candidates(
+    keyword_candidates = _build_seedhub_keyword_candidates(
         media_payload, media_type, tmdb_id
     )
     selected_keyword = (
@@ -2221,7 +2266,7 @@ async def create_seedhub_magnet_task(
         raise HTTPException(status_code=400, detail="media_type must be movie or tv")
 
     media_payload = await _load_media_payload(tmdb_id, normalized_media_type)
-    keyword_candidates = _build_pansou_keyword_candidates(
+    keyword_candidates = _build_seedhub_keyword_candidates(
         media_payload, normalized_media_type, tmdb_id
     )
 
