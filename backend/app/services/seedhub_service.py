@@ -4,7 +4,6 @@ import html
 import re
 import time
 from urllib.parse import quote
-from urllib.request import Request, urlopen
 
 import httpx
 
@@ -14,6 +13,9 @@ class SeedHubService:
         self.base_url = base_url.rstrip("/")
         self._search_cache_ttl = 15 * 60
         self._magnet_cache_ttl = 60 * 60
+        self._request_timeout = 20.0
+        self._resolve_concurrency = 8
+        self._request_retries = 2
         self._search_cache: dict[str, tuple[float, list[dict]]] = {}
         self._magnet_cache: dict[str, tuple[float, str]] = {}
         self._headers = {
@@ -25,7 +27,9 @@ class SeedHubService:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
 
-    async def search_magnets_by_keyword(self, keyword: str, limit: int = 40) -> list[dict]:
+    async def search_magnets_by_keyword(
+        self, keyword: str, limit: int = 40
+    ) -> list[dict]:
         normalized_keyword = str(keyword or "").strip()
         if not normalized_keyword:
             return []
@@ -35,46 +39,24 @@ class SeedHubService:
         if cached:
             return cached[:normalized_limit]
 
-        async with httpx.AsyncClient(
-            timeout=20.0,
-            follow_redirects=True,
-            headers=self._headers,
-        ) as client:
-            movie_ids = await self._search_movie_ids(normalized_keyword, client=client, limit=5)
+        async with self._create_client() as client:
+            movie_ids = await self._search_movie_ids(
+                normalized_keyword, client=client, limit=1
+            )
             if not movie_ids:
                 return []
 
-            entry_batches = await asyncio.gather(
-                *(self._fetch_seed_entries(movie_id, client=client) for movie_id in movie_ids),
-                return_exceptions=True,
-            )
-
-            queued_entries: list[tuple[str, dict]] = []
-            for movie_id, batch in zip(movie_ids, entry_batches):
-                if not isinstance(batch, list) or not batch:
-                    continue
-                for entry in batch[: max(normalized_limit, 20)]:
-                    queued_entries.append((movie_id, entry))
-
-            if not queued_entries:
+            movie_id = movie_ids[0]
+            entries = await self._fetch_seed_entries(movie_id, client=client)
+            if not entries:
                 return []
 
             collected = await self._resolve_entry_batch(
-                queued_entries[: max(normalized_limit, 20)],
+                [(movie_id, entry) for entry in entries],
                 client,
                 max_results=normalized_limit,
-                concurrency=3,
+                concurrency=self._resolve_concurrency,
             )
-
-            if len(collected) < normalized_limit and len(queued_entries) > max(normalized_limit, 20):
-                remaining = await self._resolve_entry_batch(
-                    queued_entries[max(normalized_limit, 20):],
-                    client,
-                    max_results=normalized_limit,
-                    existing=collected,
-                    concurrency=2,
-                )
-                collected = remaining
 
             self._write_search_cache(normalized_keyword, collected)
             return collected[:normalized_limit]
@@ -103,28 +85,25 @@ class SeedHubService:
             size = str(entry.get("size") or "").strip()
             updated_at = str(entry.get("updated_at") or "").strip()
 
-            for use_shared_client in (True, False):
-                async with semaphore:
-                    magnet = await self._resolve_magnet(seed_id, client=client if use_shared_client else None)
-                if not magnet:
-                    await asyncio.sleep(0.05)
-                    continue
-                magnet_key = magnet.lower()
-                if magnet_key in seen_magnets:
-                    return None
-                seen_magnets.add(magnet_key)
-                return {
-                    "id": f"seedhub-{seed_id}",
-                    "name": title or f"SeedHub 资源 #{seed_id}",
-                    "title": title or f"SeedHub 资源 #{seed_id}",
-                    "size": size,
-                    "magnet": magnet,
-                    "source_service": "seedhub",
-                    "seed_id": seed_id,
-                    "updated_at": updated_at,
-                    "movie_id": movie_id,
-                }
-            return None
+            async with semaphore:
+                magnet = await self._resolve_magnet(seed_id, client=client)
+            if not magnet:
+                return None
+            magnet_key = magnet.lower()
+            if magnet_key in seen_magnets:
+                return None
+            seen_magnets.add(magnet_key)
+            return {
+                "id": f"seedhub-{seed_id}",
+                "name": title or f"SeedHub 资源 #{seed_id}",
+                "title": title or f"SeedHub 资源 #{seed_id}",
+                "size": size,
+                "magnet": magnet,
+                "source_service": "seedhub",
+                "seed_id": seed_id,
+                "updated_at": updated_at,
+                "movie_id": movie_id,
+            }
 
         resolved_items = await asyncio.gather(
             *(resolve(movie_id, entry) for movie_id, entry in queued_entries),
@@ -137,7 +116,9 @@ class SeedHubService:
                 break
         return collected[:max_results]
 
-    async def _search_movie_ids(self, keyword: str, client: httpx.AsyncClient | None = None, limit: int = 4) -> list[str]:
+    async def _search_movie_ids(
+        self, keyword: str, client: httpx.AsyncClient | None = None, limit: int = 1
+    ) -> list[str]:
         url = f"{self.base_url}/s/{quote(keyword)}/"
         text = await self._fetch_text(url, client=client)
         if not text:
@@ -154,7 +135,9 @@ class SeedHubService:
                 break
         return movie_ids
 
-    async def _fetch_seed_entries(self, movie_id: str, client: httpx.AsyncClient | None = None) -> list[dict]:
+    async def _fetch_seed_entries(
+        self, movie_id: str, client: httpx.AsyncClient | None = None
+    ) -> list[dict]:
         url = f"{self.base_url}/movies/{movie_id}/"
         text = await self._fetch_text(url, client=client)
         if not text:
@@ -188,7 +171,9 @@ class SeedHubService:
             )
         return entries
 
-    async def _resolve_magnet(self, seed_id: str, client: httpx.AsyncClient | None = None) -> str:
+    async def _resolve_magnet(
+        self, seed_id: str, client: httpx.AsyncClient | None = None
+    ) -> str:
         cached = self._read_magnet_cache(seed_id)
         if cached:
             return cached
@@ -212,25 +197,33 @@ class SeedHubService:
         self._write_magnet_cache(seed_id, decoded)
         return decoded
 
-    async def _fetch_text(self, url: str, client: httpx.AsyncClient | None = None) -> str:
-        try:
-            if client is None:
-                async with httpx.AsyncClient(
-                    timeout=20.0,
-                    follow_redirects=True,
-                    headers=self._headers,
-                ) as async_client:
-                    response = await async_client.get(url)
-                    response.raise_for_status()
-            else:
+    async def _fetch_text(
+        self, url: str, client: httpx.AsyncClient | None = None
+    ) -> str:
+        if client is None:
+            async with self._create_client() as async_client:
+                return await self._fetch_text_with_client(url, async_client)
+        return await self._fetch_text_with_client(url, client)
+
+    def _create_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            timeout=self._request_timeout,
+            follow_redirects=True,
+            headers=self._headers,
+            limits=httpx.Limits(max_connections=12, max_keepalive_connections=6),
+        )
+
+    async def _fetch_text_with_client(self, url: str, client: httpx.AsyncClient) -> str:
+        for attempt in range(self._request_retries):
+            try:
                 response = await client.get(url)
                 response.raise_for_status()
-            text = response.text
-            if text:
-                return text
-        except Exception:
-            pass
-        return await asyncio.to_thread(self._fetch_text_via_urllib, url)
+                return response.text or ""
+            except Exception as exc:
+                if attempt + 1 >= self._request_retries:
+                    break
+                await asyncio.sleep(0.2 * (attempt + 1))
+        return ""
 
     def _read_search_cache(self, keyword: str) -> list[dict] | None:
         cached = self._search_cache.get(keyword)
@@ -257,15 +250,6 @@ class SeedHubService:
 
     def _write_magnet_cache(self, seed_id: str, magnet: str) -> None:
         self._magnet_cache[seed_id] = (time.time(), magnet)
-
-    def _fetch_text_via_urllib(self, url: str) -> str:
-        try:
-            req = Request(url, headers=self._headers)
-            with urlopen(req, timeout=20) as resp:
-                content = resp.read()
-            return content.decode("utf-8", errors="ignore")
-        except Exception:
-            return ""
 
 
 seedhub_service = SeedHubService()

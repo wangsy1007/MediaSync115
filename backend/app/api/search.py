@@ -2158,14 +2158,13 @@ async def _search_seedhub_magnet_resources(
         keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
     )
     normalized_limit = max(1, min(int(limit or 40), 80))
+    if not selected_keyword:
+        return f"TMDB {tmdb_id}", []
 
-    for keyword in keyword_candidates:
-        items = await seedhub_service.search_magnets_by_keyword(
-            keyword, limit=normalized_limit
-        )
-        if items:
-            return keyword, items
-    return selected_keyword, []
+    items = await seedhub_service.search_magnets_by_keyword(
+        selected_keyword, limit=normalized_limit
+    )
+    return selected_keyword, items
 
 
 async def _search_butailing_magnet_resources(

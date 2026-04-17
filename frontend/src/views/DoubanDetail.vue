@@ -1014,16 +1014,16 @@ const fetchSeedhubMagnet = async () => {
       return
     }
 
-    const keywords = buildPansouKeywords()
-    let merged = magnetResources.value.slice()
-    for (const keyword of keywords) {
-      const { data } = await searchApi.getSeedhubMagnetByKeyword(keyword, mediaType.value, seedhubFetchLimit)
-      const rows = Array.isArray(data?.list) ? data.list : []
-      const normalizedRows = rows.map((item) => ({ ...item, source_service: item?.source_service || 'seedhub' }))
-      merged = mergeMagnetResources(merged, normalizedRows)
-      if (normalizedRows.length > 0) break
+    const keyword = buildPansouKeywords()[0] || ''
+    if (!keyword) {
+      magnetResources.value = magnetResources.value.slice()
+      ElMessage.info('缺少可用关键词，无法从 SeedHub 获取磁链')
+      return
     }
-    magnetResources.value = merged
+    const { data } = await searchApi.getSeedhubMagnetByKeyword(keyword, mediaType.value, seedhubFetchLimit)
+    const rows = Array.isArray(data?.list) ? data.list : []
+    const normalizedRows = rows.map((item) => ({ ...item, source_service: item?.source_service || 'seedhub' }))
+    magnetResources.value = mergeMagnetResources(magnetResources.value, normalizedRows)
     if (seedhubMagnetResources.value.length === 0) {
       ElMessage.info('SeedHub 暂未找到可用磁链')
     }

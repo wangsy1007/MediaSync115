@@ -32,10 +32,18 @@ class SeedhubTaskService:
             raise ValueError("unsupported media type")
 
         normalized_limit = max(1, min(int(limit or 40), 80))
-        candidates = [str(item or "").strip() for item in keyword_candidates if str(item or "").strip()]
+        candidates = [
+            str(item or "").strip()
+            for item in keyword_candidates
+            if str(item or "").strip()
+        ]
         if not candidates:
             candidates = [f"TMDB {tmdb_id}"]
-        query_key = self._build_query_key(normalized_media_type, tmdb_id, candidates, normalized_limit)
+        else:
+            candidates = candidates[:1]
+        query_key = self._build_query_key(
+            normalized_media_type, tmdb_id, candidates, normalized_limit
+        )
 
         async with self._lock:
             self._prune_locked()
@@ -118,7 +126,12 @@ class SeedhubTaskService:
             task = self._tasks.get(task_id)
             if not task:
                 return None
-            if task.get("status") in {"success", "failed", "partial_success", "cancelled"}:
+            if task.get("status") in {
+                "success",
+                "failed",
+                "partial_success",
+                "cancelled",
+            }:
                 return dict(task)
 
             now_iso = datetime.utcnow().isoformat()
@@ -155,9 +168,11 @@ class SeedhubTaskService:
                 if not current or current.get("status") == "cancelled":
                     return
 
-                await self._update_task(task_id, {"keyword": keyword, "message": f"正在搜索: {keyword}"})
+                await self._update_task(
+                    task_id, {"keyword": keyword, "message": f"正在搜索: {keyword}"}
+                )
 
-                movie_ids = await seedhub_service._search_movie_ids(keyword, limit=4)
+                movie_ids = await seedhub_service._search_movie_ids(keyword, limit=1)
                 if not movie_ids:
                     continue
 
@@ -178,14 +193,19 @@ class SeedhubTaskService:
 
                     async def resolve_entry(entry: dict[str, Any]) -> None:
                         current_inner = await self.get(task_id)
-                        if not current_inner or current_inner.get("status") == "cancelled":
+                        if (
+                            not current_inner
+                            or current_inner.get("status") == "cancelled"
+                        ):
                             return
                         if len(current_inner.get("items") or []) >= limit:
                             return
 
                         async with self._global_semaphore:
                             async with per_task_semaphore:
-                                magnet = await self._resolve_magnet_cached(str(entry.get("seed_id") or ""))
+                                magnet = await self._resolve_magnet_cached(
+                                    str(entry.get("seed_id") or "")
+                                )
 
                         await self._increment(task_id, {"resolved_count": 1})
                         if not magnet:
@@ -199,8 +219,10 @@ class SeedhubTaskService:
 
                         item = {
                             "id": f"seedhub-{entry.get('seed_id')}",
-                            "name": entry.get("title") or f"SeedHub 资源 #{entry.get('seed_id')}",
-                            "title": entry.get("title") or f"SeedHub 资源 #{entry.get('seed_id')}",
+                            "name": entry.get("title")
+                            or f"SeedHub 资源 #{entry.get('seed_id')}",
+                            "title": entry.get("title")
+                            or f"SeedHub 资源 #{entry.get('seed_id')}",
                             "size": entry.get("size") or "",
                             "magnet": magnet,
                             "source_service": "seedhub",
@@ -210,7 +232,10 @@ class SeedhubTaskService:
                         }
                         await self._append_item(task_id, item, limit)
 
-                    await asyncio.gather(*(resolve_entry(entry) for entry in entries), return_exceptions=True)
+                    await asyncio.gather(
+                        *(resolve_entry(entry) for entry in entries),
+                        return_exceptions=True,
+                    )
 
                     current = await self.get(task_id)
                     if current and len(current.get("items") or []) >= limit:
@@ -288,7 +313,9 @@ class SeedhubTaskService:
             }
         return magnet
 
-    async def _append_item(self, task_id: str, item: dict[str, Any], limit: int) -> None:
+    async def _append_item(
+        self, task_id: str, item: dict[str, Any], limit: int
+    ) -> None:
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
@@ -347,14 +374,19 @@ class SeedhubTaskService:
         finished_ids = [
             task_id
             for task_id, item in self._tasks.items()
-            if item.get("status") in {"success", "failed", "partial_success", "cancelled"}
+            if item.get("status")
+            in {"success", "failed", "partial_success", "cancelled"}
         ]
         for task_id in finished_ids[: len(self._tasks) - 500]:
             self._tasks.pop(task_id, None)
 
     @staticmethod
-    def _build_query_key(media_type: str, tmdb_id: int, keyword_candidates: list[str], limit: int) -> str:
-        head_keyword = keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+    def _build_query_key(
+        media_type: str, tmdb_id: int, keyword_candidates: list[str], limit: int
+    ) -> str:
+        head_keyword = (
+            keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+        )
         return f"{media_type}:{tmdb_id}:{head_keyword}:{limit}"
 
 
