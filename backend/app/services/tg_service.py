@@ -1,5 +1,6 @@
 import re
 import asyncio
+import importlib.util
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import unquote, urlencode, urlparse
@@ -53,10 +54,14 @@ def _load_telethon() -> None:
             UsernameNotOccupiedError as telethon_username_not_occupied_error,
         )
         from telethon.sessions import StringSession as telethon_string_session
-        from telethon.tl.types import MessageEntityTextUrl as telethon_message_entity_text_url
+        from telethon.tl.types import (
+            MessageEntityTextUrl as telethon_message_entity_text_url,
+        )
     except Exception as exc:  # pragma: no cover - runtime fallback
         TELETHON_IMPORT_ERROR = str(exc)
-        raise RuntimeError(f"Telethon 未安装或加载失败: {TELETHON_IMPORT_ERROR}") from exc
+        raise RuntimeError(
+            f"Telethon 未安装或加载失败: {TELETHON_IMPORT_ERROR}"
+        ) from exc
 
     TelegramClient = telethon_client
     StringSession = telethon_string_session
@@ -156,6 +161,10 @@ class TgService:
                 return parsed_proxy
         return None
 
+    @staticmethod
+    def _telethon_proxy_supported() -> bool:
+        return importlib.util.find_spec("python_socks") is not None
+
     def set_config(
         self,
         *,
@@ -203,9 +212,14 @@ class TgService:
                 created_at: datetime = item.get("created_at") or now
                 state = str(item.get("state") or "pending")
                 terminal_ttl_seconds = 600
-                if now >= expires_at or (state != "pending" and (now - created_at).total_seconds() > terminal_ttl_seconds):
+                if now >= expires_at or (
+                    state != "pending"
+                    and (now - created_at).total_seconds() > terminal_ttl_seconds
+                ):
                     expired_tokens.append(token)
-            expired_items = [self._qr_pending.pop(token, None) for token in expired_tokens]
+            expired_items = [
+                self._qr_pending.pop(token, None) for token in expired_tokens
+            ]
         for item in expired_items:
             if not item:
                 continue
@@ -283,17 +297,18 @@ class TgService:
         self._ensure_login_config()
         api_id = int(str(self._api_id).strip())
         proxy = self._resolve_proxy()
-        return TelegramClient(
-            StringSession(session_value),
-            api_id=api_id,
-            api_hash=self._api_hash,
-            proxy=proxy,
-            device_model="MediaSync115",
-            system_version="Linux",
-            app_version="1.0.4",
-            system_lang_code="zh-CN",
-            lang_code="zh-CN",
-        )
+        client_kwargs = {
+            "api_id": api_id,
+            "api_hash": self._api_hash,
+            "device_model": "MediaSync115",
+            "system_version": "Linux",
+            "app_version": "1.0.4",
+            "system_lang_code": "zh-CN",
+            "lang_code": "zh-CN",
+        }
+        if proxy and self._telethon_proxy_supported():
+            client_kwargs["proxy"] = proxy
+        return TelegramClient(StringSession(session_value), **client_kwargs)
 
     @staticmethod
     def _is_likely_115_share_identifier(value: str) -> bool:
@@ -302,7 +317,11 @@ class TgService:
             return False
         if raw.startswith(("http://", "https://", "//")):
             lowered = raw.lower()
-            return "115.com" in lowered or "115cdn.com" in lowered or "anxia.com" in lowered
+            return (
+                "115.com" in lowered
+                or "115cdn.com" in lowered
+                or "anxia.com" in lowered
+            )
         return bool(re.match(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]{4})?$", raw))
 
     @staticmethod
@@ -322,7 +341,11 @@ class TgService:
             url = str(matched.group(1) or "").strip()
             if not url:
                 continue
-            if receive_code and "password=" not in url.lower() and "pwd=" not in url.lower():
+            if (
+                receive_code
+                and "password=" not in url.lower()
+                and "pwd=" not in url.lower()
+            ):
                 joiner = "&" if "?" in url else "?"
                 url = f"{url}{joiner}{urlencode({'password': receive_code})}"
             key = url.lower()
@@ -357,7 +380,11 @@ class TgService:
         text = str(value or "").strip().lower()
         if not text:
             return ""
-        text = re.sub(r"[`~!@#$%^&*()_+=\[\]{}\\|;:'\",.<>/?，。！？：；【】（）《》、·\-]+", " ", text)
+        text = re.sub(
+            r"[`~!@#$%^&*()_+=\[\]{}\\|;:'\",.<>/?，。！？：；【】（）《》、·\-]+",
+            " ",
+            text,
+        )
         text = re.sub(r"\s+", " ", text).strip()
         return text
 
@@ -452,7 +479,11 @@ class TgService:
         entities = getattr(message, "entities", None) or []
         for ent in entities:
             if isinstance(ent, MessageEntityTextUrl):
-                links.extend(self._extract_share_link_from_text(str(getattr(ent, "url", "") or "")))
+                links.extend(
+                    self._extract_share_link_from_text(
+                        str(getattr(ent, "url", "") or "")
+                    )
+                )
         if not links:
             return []
 
@@ -465,7 +496,9 @@ class TgService:
                 seen.add(key)
             row_id = f"tg-{str(channel).replace('@', '')}-{getattr(message, 'id', 0)}-{index}"
             title_fallback = f"Telegram 资源 {getattr(message, 'id', 0)}"
-            resource_name = self._build_resource_name(raw_text or message_text, title_fallback)
+            resource_name = self._build_resource_name(
+                raw_text or message_text, title_fallback
+            )
             rows.append(
                 {
                     "id": row_id,
@@ -521,7 +554,9 @@ class TgService:
         try:
             await client.connect()
             try:
-                user = await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+                user = await client.sign_in(
+                    phone=phone, code=code, phone_code_hash=phone_code_hash
+                )
             except SessionPasswordNeededError:
                 return {
                     "need_password": True,
@@ -543,7 +578,9 @@ class TgService:
         finally:
             await client.disconnect()
 
-    async def verify_login_password(self, *, password: str, session: str) -> dict[str, Any]:
+    async def verify_login_password(
+        self, *, password: str, session: str
+    ) -> dict[str, Any]:
         self._ensure_login_config()
         pwd = str(password or "").strip()
         if not pwd:
@@ -753,14 +790,20 @@ class TgService:
         target_channels = channels or self._channels
         if not target_channels:
             return []
-        normalized_media = "tv" if str(media_type or "").strip().lower() == "tv" else "movie"
+        normalized_media = (
+            "tv" if str(media_type or "").strip().lower() == "tv" else "movie"
+        )
 
         from app.services.runtime_settings_service import runtime_settings_service
         from app.services.tg_index_service import tg_index_service
 
         index_enabled = runtime_settings_service.get_tg_index_enabled()
-        fallback_enabled = runtime_settings_service.get_tg_index_realtime_fallback_enabled()
-        index_query_limit = runtime_settings_service.get_tg_index_query_limit_per_channel()
+        fallback_enabled = (
+            runtime_settings_service.get_tg_index_realtime_fallback_enabled()
+        )
+        index_query_limit = (
+            runtime_settings_service.get_tg_index_query_limit_per_channel()
+        )
 
         if index_enabled:
             indexed_rows = await tg_index_service.search_resources(
@@ -795,7 +838,9 @@ class TgService:
                 except Exception:
                     continue
 
-                async for message in client.iter_messages(entity, search=normalized_keyword, limit=limit):
+                async for message in client.iter_messages(
+                    entity, search=normalized_keyword, limit=limit
+                ):
                     msg_date = getattr(message, "date", None)
                     if msg_date and msg_date.tzinfo is None:
                         msg_date = msg_date.replace(tzinfo=timezone.utc)
@@ -813,7 +858,10 @@ class TgService:
                     )
         finally:
             await client.disconnect()
-        has_context = bool(self._normalize_for_match(expected_title) or self._normalize_for_match(expected_original_title))
+        has_context = bool(
+            self._normalize_for_match(expected_title)
+            or self._normalize_for_match(expected_original_title)
+        )
         if has_context:
             filtered_rows: list[dict[str, Any]] = []
             for row in rows:
