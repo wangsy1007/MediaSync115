@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from copy import deepcopy
 from datetime import datetime, timezone
 import logging
@@ -22,6 +23,7 @@ class ExploreHomeWarmupService:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._section_snapshots: dict[str, dict[str, Any]] = {}
+        self._task: asyncio.Task | None = None
 
     def _build_snapshot_key(
         self, source: str, section_key: str, start: int, limit: int
@@ -33,6 +35,44 @@ class ExploreHomeWarmupService:
 
     def clear_snapshots(self) -> None:
         self._section_snapshots.clear()
+
+    def is_running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    def warmup_in_background(self, force_refresh: bool = False) -> bool:
+        if self.is_running():
+            return False
+
+        async def runner() -> None:
+            try:
+                await self.warmup(force_refresh=force_refresh)
+            except asyncio.CancelledError:
+                logger.info("explore home warmup background task cancelled")
+                raise
+            except Exception:
+                logger.exception("explore home warmup background task crashed")
+
+        task = asyncio.create_task(runner(), name="explore-home-warmup")
+        self._task = task
+
+        def cleanup(done_task: asyncio.Task) -> None:
+            if self._task is done_task:
+                self._task = None
+            with contextlib.suppress(Exception):
+                done_task.result()
+
+        task.add_done_callback(cleanup)
+        return True
+
+    async def stop(self) -> None:
+        task = self._task
+        if task is None or task.done():
+            self._task = None
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        self._task = None
 
     def get_cached_section(
         self, source: str, section_key: str, start: int, limit: int

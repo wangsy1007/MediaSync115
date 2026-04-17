@@ -168,11 +168,12 @@ async def lifespan(app: FastAPI):
     await emby_sync_scheduler_service.ensure_sync_task()
     await feiniu_sync_scheduler_service.ensure_sync_task()
     await archive_scheduler_service.ensure_scan_task()
-    await explore_home_warmup_service.warmup(force_refresh=False)
+    explore_home_warmup_service.warmup_in_background(force_refresh=False)
     await tg_bot_service.start()
     global _app_ready
     _app_ready = True
     yield
+    await explore_home_warmup_service.stop()
     await tg_bot_service.stop()
     await scheduler_manager.stop()
     await pansou_service.close()
