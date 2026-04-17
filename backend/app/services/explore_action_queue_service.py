@@ -898,7 +898,7 @@ class ExploreActionQueueService:
         for row in attempts:
             source = str(row.get("source") or "unknown")
             status = str(row.get("status") or "unknown").strip().lower() or "unknown"
-            if status == "failed":
+            if status in {"failed", "transfer_failed"}:
                 error = str(row.get("error") or "").strip()
                 parts.append(f"{source}: {error[:60] or 'failed'}")
             elif status == "empty":
@@ -912,11 +912,14 @@ class ExploreActionQueueService:
         return f"暂未找到可转存资源（{'; '.join(parts)}）"
 
     async def _find_pan115_share_link(
-        self, route_info: dict[str, Any], payload: dict[str, Any]
+        self,
+        route_info: dict[str, Any],
+        payload: dict[str, Any],
+        source_order: list[str] | None = None,
     ) -> dict[str, Any]:
         media_type = route_info["media_type"]
         tmdb_id = int(route_info["tmdb_id"])
-        source_order = self._resolve_save_source_order()
+        source_order = list(source_order or self._resolve_save_source_order())
         keyword_candidates = self._build_keyword_candidates(payload, tmdb_id)
         attempts: list[dict[str, Any]] = []
 
@@ -1131,57 +1134,77 @@ class ExploreActionQueueService:
         route_info = await self._resolve_route(payload)
         media_type = route_info["media_type"]
         tmdb_id = int(route_info["tmdb_id"])
-
-        search_result = await self._find_pan115_share_link(route_info, payload)
-        share_link = str(search_result.get("share_link") or "").strip()
-        if not share_link:
-            raise ValueError(
-                self._build_attempt_error_summary(
-                    list(search_result.get("attempts") or [])
-                )
-            )
-
+        source_order = self._resolve_save_source_order()
         folder = runtime_settings_service.get_pan115_default_folder()
         folder_id = str(folder.get("folder_id") or "0").strip() or "0"
-        receive_code = self._extract_receive_code(share_link)
+        attempts: list[dict[str, Any]] = []
 
-        result = await pan115_service.save_share_directly(
-            share_link,
-            folder_id,
-            receive_code,
-        )
+        for source in source_order:
+            search_result = await self._find_pan115_share_link(
+                route_info, payload, source_order=[source]
+            )
+            attempts.extend(list(search_result.get("attempts") or []))
+            share_link = str(search_result.get("share_link") or "").strip()
+            if not share_link:
+                continue
 
-        transfer_success = True
-        if isinstance(result, dict):
-            if "success" in result:
-                transfer_success = bool(result.get("success"))
-            elif "state" in result:
-                transfer_success = bool(result.get("state"))
-
-        if not transfer_success:
-            if isinstance(result, dict):
-                error_text = (
-                    str(result.get("error") or "")
-                    or str(result.get("message") or "")
-                    or str(result.get("error_msg") or "")
+            receive_code = self._extract_receive_code(share_link)
+            try:
+                result = await pan115_service.save_share_directly(
+                    share_link,
+                    folder_id,
+                    receive_code,
                 )
-            else:
-                error_text = str(result)
-            raise ValueError(error_text or "转存失败")
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "source": source,
+                        "status": "transfer_failed",
+                        "error": str(exc)[:300],
+                    }
+                )
+                continue
 
-        return {
-            "tmdb_id": tmdb_id,
-            "media_type": media_type,
-            "share_link": share_link,
-            "selected_source": str(search_result.get("selected_source") or ""),
-            "source_order": list(search_result.get("source_order") or []),
-            "attempts": list(search_result.get("attempts") or []),
-            "save_mode": "direct",
-            "target_parent_id": folder_id,
-            "message": str(result.get("message") or "已提交转存任务")
-            if isinstance(result, dict)
-            else "已提交转存任务",
-        }
+            transfer_success = True
+            if isinstance(result, dict):
+                if "success" in result:
+                    transfer_success = bool(result.get("success"))
+                elif "state" in result:
+                    transfer_success = bool(result.get("state"))
+
+            if not transfer_success:
+                if isinstance(result, dict):
+                    error_text = (
+                        str(result.get("error") or "")
+                        or str(result.get("message") or "")
+                        or str(result.get("error_msg") or "")
+                    )
+                else:
+                    error_text = str(result)
+                attempts.append(
+                    {
+                        "source": source,
+                        "status": "transfer_failed",
+                        "error": (error_text or "转存失败")[:300],
+                    }
+                )
+                continue
+
+            return {
+                "tmdb_id": tmdb_id,
+                "media_type": media_type,
+                "share_link": share_link,
+                "selected_source": source,
+                "source_order": source_order,
+                "attempts": attempts,
+                "save_mode": "direct",
+                "target_parent_id": folder_id,
+                "message": str(result.get("message") or "已提交转存任务")
+                if isinstance(result, dict)
+                else "已提交转存任务",
+            }
+
+        raise ValueError(self._build_attempt_error_summary(attempts))
 
 
 explore_action_queue_service = ExploreActionQueueService()

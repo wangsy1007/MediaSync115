@@ -1099,7 +1099,7 @@ class SubscriptionService:
                     {
                         "step": "fetch_source_selected",
                         "status": "success",
-                        "message": f"来源 {source} 命中资源 {len(source_resources)} 条",
+                        "message": f"来源 {source} 命中资源 {len(source_resources)} 条，已加入候选列表",
                         "payload": {"source": source, "count": len(source_resources)},
                     }
                 )
@@ -1116,8 +1116,7 @@ class SubscriptionService:
                     source_resources = sort_by_preference(
                         source_resources, pref_res, pref_fmt
                     )
-                primary_resources = source_resources
-                break
+                primary_resources.extend(source_resources)
 
         if not primary_resources:
             traces.append(

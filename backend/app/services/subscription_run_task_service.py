@@ -40,6 +40,14 @@ class SubscriptionRunTaskService:
                     }
                     return existing
             else:
+                all_task_id = self._running_by_channel.get("all")
+                if all_task_id and all_task_id in self._tasks:
+                    existing = dict(self._tasks[all_task_id])
+                    existing["already_running"] = True
+                    existing["message"] = str(
+                        existing.get("message") or "全部渠道任务正在运行中"
+                    )
+                    return existing
                 existing_task_id = self._running_by_channel.get(normalized_channel)
                 if existing_task_id and existing_task_id in self._tasks:
                     existing = dict(self._tasks[existing_task_id])
@@ -175,12 +183,12 @@ class SubscriptionRunTaskService:
                     self._running_by_channel.pop(channel, None)
 
     async def _run_all_channels(self, task_id: str, force_auto_download: bool) -> None:
-        """依次执行所有渠道的订阅检查"""
+        """按单个影视顺序统一执行一次订阅检查。"""
         await self._update_task(
             task_id,
             {
                 "status": "running",
-                "message": "开始执行全部渠道订阅检查",
+                "message": "开始按资源优先级执行订阅检查",
             },
         )
         await operation_log_service.log_background_event(
@@ -188,87 +196,72 @@ class SubscriptionRunTaskService:
             module="subscriptions",
             action="subscription.run.background.running",
             status="info",
-            message="订阅后台任务开始执行: 全部渠道",
+            message="订阅后台任务开始执行：按资源优先级逐个影视检查",
             trace_id=task_id,
             extra={"channel": "all", "force_auto_download": force_auto_download},
         )
+        try:
+            async with async_session_maker() as db:
+                result = await subscription_service.run_channel_check(
+                    db,
+                    "all",
+                    force_auto_download=force_auto_download,
+                    progress_callback=lambda payload: self._update_task(
+                        task_id,
+                        {
+                            "status": "running",
+                            "message": payload.get("message") or "任务执行中",
+                            "progress": payload,
+                        },
+                    ),
+                )
 
-        results = {}
-        success_count = 0
-        failed_count = 0
-
-        for idx, ch in enumerate(ALL_CHANNELS):
-            channel_message = f"正在执行 {ch} ({idx + 1}/{len(ALL_CHANNELS)})"
+            final_status = str(result.get("status") or "success")
+            final_message = str(result.get("message") or "任务执行完成")
             await self._update_task(
                 task_id,
                 {
-                    "status": "running",
-                    "message": channel_message,
-                    "progress": {
-                        "current_channel": ch,
-                        "current_index": idx + 1,
-                        "total_channels": len(ALL_CHANNELS),
-                    },
+                    "status": final_status,
+                    "message": final_message,
+                    "result": result,
+                    "finished_at": datetime.utcnow().isoformat(),
                 },
             )
-
-            try:
-                async with async_session_maker() as db:
-                    result = await subscription_service.run_channel_check(
-                        db,
-                        ch,
-                        force_auto_download=force_auto_download,
-                    )
-                    results[ch] = {
-                        "status": "success",
-                        "message": result.get("message") or "执行完成",
-                        "checked_count": result.get("checked_count", 0),
-                        "new_resource_count": result.get("new_resource_count", 0),
-                    }
-                    success_count += 1
-            except Exception as exc:
-                results[ch] = {
+            await operation_log_service.log_background_event(
+                source_type="background_task",
+                module="subscriptions",
+                action="subscription.run.background.finish",
+                status="success" if final_status == "success" else "warning",
+                message=final_message,
+                trace_id=task_id,
+                extra={"channel": "all"},
+            )
+            await self._notify_result("all", result)
+        except Exception as exc:
+            await self._update_task(
+                task_id,
+                {
                     "status": "failed",
+                    "message": "任务执行失败",
                     "error": str(exc),
-                    "message": f"执行失败: {exc}",
-                }
-                failed_count += 1
-
-        final_status = (
-            "success"
-            if failed_count == 0
-            else ("partial" if success_count > 0 else "failed")
-        )
-        final_message = f"全部渠道执行完成: {success_count} 成功, {failed_count} 失败"
-
-        await self._update_task(
-            task_id,
-            {
-                "status": final_status,
-                "message": final_message,
-                "result": {
-                    "channels": results,
-                    "success_count": success_count,
-                    "failed_count": failed_count,
+                    "finished_at": datetime.utcnow().isoformat(),
                 },
-                "finished_at": datetime.utcnow().isoformat(),
-            },
-        )
-        await operation_log_service.log_background_event(
-            source_type="background_task",
-            module="subscriptions",
-            action="subscription.run.background.finish",
-            status=final_status,
-            message=final_message,
-            trace_id=task_id,
-            extra={"channel": "all", "results": results},
-        )
-        await self._notify_all_channels_result(results, success_count, failed_count)
-
-        async with self._lock:
-            current = self._running_by_channel.get("all")
-            if current == task_id:
-                self._running_by_channel.pop("all", None)
+            )
+            await operation_log_service.log_background_event(
+                source_type="background_task",
+                module="subscriptions",
+                action="subscription.run.background.finish",
+                status="failed",
+                message="订阅后台任务执行失败：全部渠道",
+                trace_id=task_id,
+                extra={"channel": "all", "error": str(exc)},
+            )
+            await self._notify_error("all", str(exc))
+        finally:
+            async with self._lock:
+                current = self._running_by_channel.get("all")
+                if current == task_id:
+                    self._running_by_channel.pop("all", None)
 
     async def _update_task(self, task_id: str, patch: dict[str, Any]) -> None:
         async with self._lock:
