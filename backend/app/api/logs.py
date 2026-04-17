@@ -22,7 +22,9 @@ def _parse_iso_datetime(value: Optional[str], field_name: str) -> datetime | Non
             return dt.astimezone(timezone.utc).replace(tzinfo=None)
         return dt
     except Exception:
-        raise HTTPException(status_code=400, detail=f"invalid {field_name}, expected ISO datetime")
+        raise HTTPException(
+            status_code=400, detail=f"invalid {field_name}, expected ISO datetime"
+        )
 
 
 @router.get("")
@@ -69,7 +71,9 @@ async def list_operation_logs(
             summary_query = summary_query.where(condition)
 
         rows_result = await db.execute(
-            base_query.order_by(OperationLog.created_at.desc(), OperationLog.id.desc()).offset(offset).limit(limit)
+            base_query.order_by(OperationLog.created_at.desc(), OperationLog.id.desc())
+            .offset(offset)
+            .limit(limit)
         )
         total_result = await db.execute(total_query)
         summary_result = await db.execute(summary_query.group_by(OperationLog.status))
@@ -113,11 +117,17 @@ async def list_operation_logs(
 @router.get("/modules")
 async def list_operation_log_modules():
     async with async_session_maker() as db:
-        modules_result = await db.execute(select(OperationLog.module).distinct().order_by(OperationLog.module.asc()))
-        source_result = await db.execute(
-            select(OperationLog.source_type).distinct().order_by(OperationLog.source_type.asc())
+        modules_result = await db.execute(
+            select(OperationLog.module).distinct().order_by(OperationLog.module.asc())
         )
-        status_result = await db.execute(select(OperationLog.status).distinct().order_by(OperationLog.status.asc()))
+        source_result = await db.execute(
+            select(OperationLog.source_type)
+            .distinct()
+            .order_by(OperationLog.source_type.asc())
+        )
+        status_result = await db.execute(
+            select(OperationLog.status).distinct().order_by(OperationLog.status.asc())
+        )
 
     return {
         "modules": [item for item in modules_result.scalars().all() if item],
@@ -130,3 +140,9 @@ async def list_operation_log_modules():
 async def prune_operation_logs(days: int = Query(30, ge=1, le=3650)):
     removed = await operation_log_service.prune(days=days)
     return {"success": True, "removed": removed, "days": days}
+
+
+@router.delete("/clear")
+async def clear_operation_logs():
+    removed = await operation_log_service.clear()
+    return {"success": True, "removed": removed}

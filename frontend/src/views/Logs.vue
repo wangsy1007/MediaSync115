@@ -25,6 +25,7 @@
         />
         <el-input-number v-model="filters.limit" :min="20" :max="500" :step="20" />
         <el-button type="primary" :loading="loading" @click="handleSearch">刷新</el-button>
+        <el-button type="danger" plain :loading="clearing" @click="handleClearLogs">清空日志</el-button>
       </div>
     </div>
 
@@ -124,7 +125,7 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { logsApi } from '@/api'
 import { formatBeijingTableCell } from '@/utils/timezone'
 
@@ -481,6 +482,7 @@ const formatMessage = (row) => {
 }
 
 const loading = ref(false)
+const clearing = ref(false)
 const logs = ref([])
 const total = ref(0)
 const currentPage = ref(1)
@@ -582,6 +584,36 @@ const handleSearch = async () => {
 const handlePageChange = async (page) => {
   currentPage.value = Number(page || 1)
   await fetchLogs()
+}
+
+const handleClearLogs = async () => {
+  try {
+    await ElMessageBox.confirm('确认清空所有运行日志吗？该操作不可恢复。', '提示', {
+      type: 'warning',
+      confirmButtonText: '确认清空',
+      cancelButtonText: '取消'
+    })
+  } catch {
+    return
+  }
+
+  clearing.value = true
+  try {
+    const { data } = await logsApi.clear()
+    logs.value = []
+    total.value = 0
+    currentPage.value = 1
+    summary.success = 0
+    summary.warning = 0
+    summary.failed = 0
+    summary.info = 0
+    await fetchFilterOptions()
+    ElMessage.success(`已清空 ${Number(data?.removed || 0)} 条日志`)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '清空日志失败')
+  } finally {
+    clearing.value = false
+  }
 }
 
 onMounted(async () => {

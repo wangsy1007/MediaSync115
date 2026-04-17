@@ -195,7 +195,8 @@ export const licenseApi = {
 export const logsApi = {
   list: (params) => api.get('/logs', { params }),
   modules: () => api.get('/logs/modules'),
-  prune: (days = 30) => api.post('/logs/prune', null, { params: { days } })
+  prune: (days = 30) => api.post('/logs/prune', null, { params: { days } }),
+  clear: () => api.delete('/logs/clear')
 }
 
 export const archiveApi = {

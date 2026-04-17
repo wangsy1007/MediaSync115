@@ -190,13 +190,24 @@ class OperationLogService:
         ttl_days = max(1, int(days or 30))
         cutoff = datetime.utcnow() - timedelta(days=ttl_days)
         async with async_session_maker() as db:
-            result = await db.execute(delete(OperationLog).where(OperationLog.created_at < cutoff))
+            result = await db.execute(
+                delete(OperationLog).where(OperationLog.created_at < cutoff)
+            )
             await db.commit()
+            return int(result.rowcount or 0)
+
+    async def clear(self) -> int:
+        async with async_session_maker() as db:
+            result = await db.execute(delete(OperationLog))
+            await db.commit()
+            self._last_pruned_at = datetime.utcnow()
             return int(result.rowcount or 0)
 
     async def maybe_prune(self, days: int = 30, interval_minutes: int = 60) -> None:
         now = datetime.utcnow()
-        if self._last_pruned_at and now - self._last_pruned_at < timedelta(minutes=max(1, interval_minutes)):
+        if self._last_pruned_at and now - self._last_pruned_at < timedelta(
+            minutes=max(1, interval_minutes)
+        ):
             return
         await self.prune(days=days)
         self._last_pruned_at = now
