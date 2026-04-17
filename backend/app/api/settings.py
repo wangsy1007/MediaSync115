@@ -378,6 +378,7 @@ def _build_proxy_health_payload(
     applied_proxy: str = "",
     proxy_scheme: str = "",
     status_code: int | None = None,
+    latency_ms: int | None = None,
 ) -> dict[str, Any]:
     return {
         "status": status,
@@ -387,6 +388,7 @@ def _build_proxy_health_payload(
         "applied_proxy": str(applied_proxy or "").strip(),
         "proxy_scheme": str(proxy_scheme or "").strip(),
         "status_code": status_code,
+        "latency_ms": latency_ms,
     }
 
 
@@ -431,7 +433,9 @@ async def _probe_target_health(
         async with httpx.AsyncClient(
             timeout=10.0, follow_redirects=False, proxy=applied_proxy
         ) as client:
+            start = time.perf_counter()
             response = await client.get(normalized_target)
+            latency_ms = int((time.perf_counter() - start) * 1000)
         status_code = int(response.status_code)
         if 200 <= status_code < 400:
             return _build_proxy_health_payload(
@@ -442,6 +446,7 @@ async def _probe_target_health(
                 applied_proxy=applied_proxy,
                 proxy_scheme=_extract_proxy_scheme(applied_proxy),
                 status_code=status_code,
+                latency_ms=latency_ms,
             )
         return _build_proxy_health_payload(
             status="error",
@@ -451,6 +456,7 @@ async def _probe_target_health(
             applied_proxy=applied_proxy,
             proxy_scheme=_extract_proxy_scheme(applied_proxy),
             status_code=status_code,
+            latency_ms=latency_ms,
         )
     except Exception as exc:
         return _build_proxy_health_payload(

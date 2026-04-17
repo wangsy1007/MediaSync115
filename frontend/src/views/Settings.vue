@@ -925,6 +925,9 @@
                   <div class="service-detail">
                     已应用代理：{{ getHealthAppliedProxyText(service) }}
                   </div>
+                  <div v-if="getHealthLatencyText(service)" class="service-detail">
+                    {{ getHealthLatencyText(service) }}
+                  </div>
                 </el-card>
               </el-col>
             </el-row>
@@ -2497,6 +2500,14 @@ const getHealthAppliedProxyText = (service) => {
   return appliedProxy
 }
 
+const getHealthLatencyText = (service) => {
+  const latency = service?.latency_ms
+  if (latency == null) {
+    return ''
+  }
+  return `代理延迟：${latency} ms`
+}
+
 const handleSaveProxy = async () => {
   savingProxy.value = true
   try {
@@ -2518,6 +2529,14 @@ const handleSaveProxy = async () => {
 const handleTestProxy = async () => {
   testingProxy.value = true
   try {
+    // 先保存当前输入的代理配置，再检测，避免用户输入后未保存导致检测异常
+    await settingsApi.updateRuntime({
+      http_proxy: proxyForm.value.httpProxy || null,
+      https_proxy: proxyForm.value.httpsProxy || null,
+      all_proxy: proxyForm.value.allProxy || null,
+      socks_proxy: proxyForm.value.socksProxy || null
+    })
+    await fetchProxyStatus()
     await fetchHealthStatus()
     const validCount = healthStatus.value.validCount
     const totalCount = healthStatus.value.totalCount
@@ -2532,7 +2551,7 @@ const handleTestProxy = async () => {
       ElMessage.warning(`部分服务连接异常 (${validCount}/${totalCount} 正常)，${notConfiguredCount} 项未配置`)
     }
   } catch (error) {
-    ElMessage.error('服务状态检测失败')
+    ElMessage.error(error.response?.data?.detail || '服务状态检测失败')
   } finally {
     testingProxy.value = false
   }
