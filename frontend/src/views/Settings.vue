@@ -731,7 +731,7 @@
               <el-button type="primary" :loading="savingTgIndexConfig" @click="handleSaveTgIndexConfig">
                 保存索引配置
               </el-button>
-              <el-button :loading="loadingTgIndexStatus" @click="fetchTgIndexStatus">
+              <el-button :loading="refreshingTgIndexStatusTask" @click="handleRefreshTgIndexStatus">
                 刷新索引状态
               </el-button>
               <el-button :loading="runningTgBackfill" @click="handleStartTgBackfill">开始全量回填</el-button>
@@ -762,6 +762,30 @@
             </el-table-column>
             <el-table-column prop="last_synced_at" label="最近同步时间" min-width="170" :formatter="formatBeijingTableCell" />
             <el-table-column prop="last_error" label="最近错误" min-width="220" />
+          </el-table>
+
+          <el-divider content-position="left">TG 索引任务</el-divider>
+          <el-table :data="tgIndexStatus.latestJobs" size="small" border>
+            <el-table-column prop="job_type" label="任务类型" width="130">
+              <template #default="{ row }">
+                {{ getTgIndexJobTypeLabel(row.job_type) }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="status" label="状态" width="110">
+              <template #default="{ row }">
+                <el-tag :type="getTgIndexJobStatusType(row.status)" size="small">
+                  {{ getTgIndexJobStatusText(row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="message" label="任务消息" min-width="260" />
+            <el-table-column label="进度" min-width="180">
+              <template #default="{ row }">
+                {{ formatTgIndexJobProgress(row) }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="started_at" label="开始时间" min-width="170" :formatter="formatBeijingTableCell" />
+            <el-table-column prop="finished_at" label="结束时间" min-width="170" :formatter="formatBeijingTableCell" />
           </el-table>
         </el-card>
       </el-tab-pane>
@@ -1836,6 +1860,7 @@ const pollingPan115Qr = ref(false)
 const cancelingPan115Qr = ref(false)
 const savingTgIndexConfig = ref(false)
 const loadingTgIndexStatus = ref(false)
+const refreshingTgIndexStatusTask = ref(false)
 const runningTgBackfill = ref(false)
 const runningTgIncremental = ref(false)
 const rebuildingTgIndex = ref(false)
@@ -1971,6 +1996,76 @@ const tgIndexStatus = reactive({
   runningJobs: [],
   latestJobs: []
 })
+let tgIndexStatusPollTimer = null
+
+const getTgIndexJobTypeLabel = (jobType) => {
+  const value = String(jobType || '').trim()
+  if (value === 'status_refresh') return '刷新状态'
+  if (value === 'backfill') return '全量回填'
+  if (value === 'incremental') return '增量同步'
+  if (value === 'backfill_rebuild') return '重建索引'
+  return value || '-'
+}
+
+const getTgIndexJobStatusText = (status) => {
+  const value = String(status || '').trim()
+  if (value === 'queued') return '排队中'
+  if (value === 'running') return '执行中'
+  if (value === 'success') return '成功'
+  if (value === 'partial') return '部分成功'
+  if (value === 'failed') return '失败'
+  if (value === 'not_found') return '不存在'
+  return value || '-'
+}
+
+const getTgIndexJobStatusType = (status) => {
+  const value = String(status || '').trim()
+  if (value === 'success') return 'success'
+  if (value === 'partial') return 'warning'
+  if (value === 'failed') return 'danger'
+  if (value === 'running') return 'primary'
+  return 'info'
+}
+
+const formatTgIndexJobProgress = (job) => {
+  const currentChannel = String(job?.current_channel || '').trim()
+  const currentIndex = Number(job?.current_index || 0)
+  const totalChannels = Number(job?.total_channels || 0)
+  const processedMessages = Number(job?.processed_messages || 0)
+  const indexedRows = Number(job?.indexed_rows || 0)
+  const parts = []
+  if (currentChannel) {
+    parts.push(totalChannels > 0 ? `${currentChannel} (${currentIndex}/${totalChannels})` : currentChannel)
+  }
+  parts.push(`消息 ${processedMessages}`)
+  parts.push(`索引 ${indexedRows}`)
+  return parts.join('，')
+}
+
+const stopTgIndexStatusPolling = () => {
+  if (tgIndexStatusPollTimer) {
+    clearTimeout(tgIndexStatusPollTimer)
+    tgIndexStatusPollTimer = null
+  }
+}
+
+const syncTgIndexTaskFlags = () => {
+  const runningJobs = Array.isArray(tgIndexStatus.runningJobs) ? tgIndexStatus.runningJobs : []
+  refreshingTgIndexStatusTask.value = runningJobs.some(job => job?.job_type === 'status_refresh')
+  runningTgBackfill.value = runningJobs.some(job => job?.job_type === 'backfill')
+  runningTgIncremental.value = runningJobs.some(job => job?.job_type === 'incremental')
+  rebuildingTgIndex.value = runningJobs.some(job => job?.job_type === 'backfill_rebuild')
+}
+
+const scheduleTgIndexStatusPolling = () => {
+  stopTgIndexStatusPolling()
+  if (!Array.isArray(tgIndexStatus.runningJobs) || tgIndexStatus.runningJobs.length === 0) {
+    return
+  }
+  tgIndexStatusPollTimer = setTimeout(() => {
+    fetchTgIndexStatus(false)
+  }, 2000)
+}
 const embyStatus = reactive({
   checked: false,
   valid: false,
@@ -3216,7 +3311,7 @@ const handleTgLogout = async () => {
   }
 }
 
-const fetchTgIndexStatus = async () => {
+const fetchTgIndexStatus = async (showError = true) => {
   loadingTgIndexStatus.value = true
   try {
     const { data } = await settingsApi.getTgIndexStatus()
@@ -3226,10 +3321,30 @@ const fetchTgIndexStatus = async () => {
     tgIndexStatus.channels = Array.isArray(index.channels) ? index.channels : []
     tgIndexStatus.runningJobs = Array.isArray(status.running_jobs) ? status.running_jobs : []
     tgIndexStatus.latestJobs = Array.isArray(status.latest_jobs) ? status.latest_jobs : []
+    syncTgIndexTaskFlags()
+    scheduleTgIndexStatusPolling()
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '获取 TG 索引状态失败')
+    stopTgIndexStatusPolling()
+    if (showError) {
+      ElMessage.error(error.response?.data?.detail || '获取 TG 索引状态失败')
+    }
   } finally {
     loadingTgIndexStatus.value = false
+  }
+}
+
+const handleRefreshTgIndexStatus = async () => {
+  try {
+    const { data } = await settingsApi.refreshTgIndexStatus()
+    const job = data.job || {}
+    await fetchTgIndexStatus(false)
+    if (job.already_running) {
+      ElMessage.info(job.message || 'TG 索引状态刷新任务已在运行中')
+    } else {
+      ElMessage.success('TG 索引状态刷新任务已启动')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '启动 TG 索引状态刷新失败')
   }
 }
 
@@ -3251,81 +3366,48 @@ const handleSaveTgIndexConfig = async () => {
   }
 }
 
-const pollTgIndexJob = async (jobId) => {
-  const normalized = String(jobId || '').trim()
-  if (!normalized) return
-  for (let i = 0; i < 600; i++) {
-    try {
-      const { data } = await settingsApi.getTgIndexJob(normalized)
-      const job = data.job || {}
-      if (String(job.status || '') !== 'running') {
-        await fetchTgIndexStatus()
-        if (job.status === 'success') {
-          ElMessage.success(job.message || 'TG 索引任务执行成功')
-        } else if (job.status === 'partial') {
-          ElMessage.warning(job.message || 'TG 索引任务部分成功')
-        } else if (job.status === 'failed') {
-          ElMessage.error(job.message || 'TG 索引任务失败')
-        }
-        return
-      }
-    } catch (error) {
-      ElMessage.error(error.response?.data?.detail || '查询 TG 索引任务状态失败')
-      return
-    }
-    await wait(2000)
-  }
-  ElMessage.warning('TG 索引任务仍在运行，请稍后刷新状态')
-}
-
 const handleStartTgBackfill = async () => {
-  runningTgBackfill.value = true
   try {
     const { data } = await settingsApi.startTgIndexBackfill(false)
-    const jobId = data.job?.job_id || ''
-    ElMessage.success('TG 全量回填任务已启动')
-    await fetchTgIndexStatus()
-    if (jobId) {
-      await pollTgIndexJob(jobId)
+    const job = data.job || {}
+    await fetchTgIndexStatus(false)
+    if (job.already_running) {
+      ElMessage.info(job.message || 'TG 全量回填任务已在运行中')
+    } else {
+      ElMessage.success('TG 全量回填任务已启动')
     }
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '启动 TG 全量回填失败')
-  } finally {
-    runningTgBackfill.value = false
   }
 }
 
 const handleRunTgIncremental = async () => {
-  runningTgIncremental.value = true
   try {
     const { data } = await settingsApi.runTgIndexIncremental()
-    const jobId = data.job?.job_id || ''
-    ElMessage.success('TG 增量同步任务已启动')
-    await fetchTgIndexStatus()
-    if (jobId) {
-      await pollTgIndexJob(jobId)
+    const job = data.job || {}
+    await fetchTgIndexStatus(false)
+    if (job.already_running) {
+      ElMessage.info(job.message || 'TG 增量同步任务已在运行中')
+    } else {
+      ElMessage.success('TG 增量同步任务已启动')
     }
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '启动 TG 增量同步失败')
-  } finally {
-    runningTgIncremental.value = false
   }
 }
 
 const handleRebuildTgIndex = async () => {
-  rebuildingTgIndex.value = true
   try {
     const { data } = await settingsApi.rebuildTgIndex()
-    const jobId = data.job?.job_id || ''
-    ElMessage.success('TG 索引重建任务已启动')
-    await fetchTgIndexStatus()
-    if (jobId) {
-      await pollTgIndexJob(jobId)
+    const job = data.job || {}
+    await fetchTgIndexStatus(false)
+    if (job.already_running) {
+      ElMessage.info(job.message || '已有 TG 索引任务正在运行，请等待完成')
+    } else {
+      ElMessage.success('TG 索引重建任务已启动')
     }
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '启动 TG 索引重建失败')
-  } finally {
-    rebuildingTgIndex.value = false
   }
 }
 
@@ -4228,6 +4310,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopPan115QrPolling()
   stopTgQrPolling()
+  stopTgIndexStatusPolling()
   stopEmbySyncPolling()
   stopFeiniuSyncPolling()
 })

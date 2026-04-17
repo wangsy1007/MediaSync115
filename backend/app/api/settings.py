@@ -1059,6 +1059,18 @@ async def get_tg_index_status():
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/tg/index/status/refresh")
+async def refresh_tg_index_status():
+    try:
+        job = await tg_sync_service.start_status_refresh()
+        return {
+            "success": True,
+            "job": job,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/tg/index/backfill/start")
 async def start_tg_index_backfill(payload: TgIndexBackfillRequest):
     try:
