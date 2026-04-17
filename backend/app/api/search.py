@@ -20,8 +20,7 @@ from app.services.douban_explore_service import (
     resolve_douban_explore_item,
 )
 from app.services.explore_action_queue_service import explore_action_queue_service
-from app.services.emby_service import emby_service
-from app.services.feiniu_service import feiniu_service
+from app.services.emby_sync_index_service import emby_sync_index_service
 from app.services.feiniu_sync_index_service import feiniu_sync_index_service
 from app.services.explore_home_warmup_service import (
     EXPLORE_HOME_WARMUP_LIMIT,
@@ -36,7 +35,6 @@ from app.services.seedhub_task_service import seedhub_task_service
 from app.services.tg_service import tg_service
 from app.services.tmdb_service import tmdb_service
 from app.services.tmdb_explore_service import TMDB_SECTION_SOURCES, fetch_tmdb_section
-from app.services.tv_missing_service import tv_missing_service
 from app.utils.proxy import proxy_manager
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -321,25 +319,45 @@ async def _set_cached_imdb_bridge(cache_key: str, payload: dict[str, Any]) -> No
 
 
 async def _resolve_emby_status_payload(media_type: str, tmdb_id: int) -> dict[str, Any]:
-    if media_type == "tv":
-        tv_status = await tv_missing_service.get_tv_missing_status(
-            tmdb_id, include_specials=False
-        )
-        status_text = str(tv_status.get("status") or "")
-        missing_count = int((tv_status.get("counts") or {}).get("missing") or 0)
-        exists_in_emby = status_text == "ok" and missing_count == 0
+    if not (
+        runtime_settings_service.get_emby_url().strip()
+        and runtime_settings_service.get_emby_api_key().strip()
+    ):
         return {
-            "exists_in_emby": exists_in_emby,
-            "status": status_text or "request_failed",
-            "matched_type": "tv_complete" if exists_in_emby else "",
+            "exists_in_emby": False,
+            "status": "not_configured",
+            "matched_type": "",
         }
 
-    movie_status = await emby_service.get_movie_status_by_tmdb(tmdb_id)
+    if media_type == "tv":
+        tv_status = await emby_sync_index_service.get_tv_existing_episodes(tmdb_id)
+        if tv_status is None:
+            return {
+                "exists_in_emby": False,
+                "status": "cache_unavailable",
+                "matched_type": "",
+            }
+        status_text = str(tv_status.get("status") or "")
+        existing_episodes = tv_status.get("existing_episodes") or set()
+        exists_in_emby = status_text == "ok" and bool(existing_episodes)
+        return {
+            "exists_in_emby": exists_in_emby,
+            "status": status_text or "cache_unavailable",
+            "matched_type": "tv" if exists_in_emby else "",
+        }
+
+    movie_status = await emby_sync_index_service.get_movie_status(tmdb_id)
+    if movie_status is None:
+        return {
+            "exists_in_emby": False,
+            "status": "cache_unavailable",
+            "matched_type": "",
+        }
     status_text = str(movie_status.get("status") or "")
     exists_in_emby = status_text == "ok" and bool(movie_status.get("exists"))
     return {
         "exists_in_emby": exists_in_emby,
-        "status": status_text or "request_failed",
+        "status": status_text or "cache_unavailable",
         "matched_type": "movie" if exists_in_emby else "",
     }
 
@@ -386,26 +404,41 @@ async def _build_emby_status_map(
 async def _resolve_feiniu_status_payload(
     media_type: str, tmdb_id: int
 ) -> dict[str, Any]:
+    if not runtime_settings_service.get_feiniu_url().strip():
+        return {
+            "exists_in_feiniu": False,
+            "status": "not_configured",
+            "matched_type": "",
+        }
+
     if media_type == "tv":
         tv_status = await feiniu_sync_index_service.get_tv_existing_episodes(tmdb_id)
         if tv_status is None:
-            tv_status = await feiniu_service.get_tv_episode_status_by_tmdb(tmdb_id)
+            return {
+                "exists_in_feiniu": False,
+                "status": "cache_unavailable",
+                "matched_type": "",
+            }
         status_text = str(tv_status.get("status") or "")
         existing_episodes = tv_status.get("existing_episodes") or set()
         return {
             "exists_in_feiniu": bool(existing_episodes),
-            "status": status_text or "request_failed",
+            "status": status_text or "cache_unavailable",
             "existing_episodes": len(existing_episodes),
         }
 
     movie_status = await feiniu_sync_index_service.get_movie_status(tmdb_id)
     if movie_status is None:
-        movie_status = await feiniu_service.get_movie_status_by_tmdb(tmdb_id)
+        return {
+            "exists_in_feiniu": False,
+            "status": "cache_unavailable",
+            "matched_type": "",
+        }
     status_text = str(movie_status.get("status") or "")
     exists_in_feiniu = status_text == "ok" and bool(movie_status.get("exists"))
     return {
         "exists_in_feiniu": exists_in_feiniu,
-        "status": status_text or "request_failed",
+        "status": status_text or "cache_unavailable",
         "matched_type": "movie" if exists_in_feiniu else "",
     }
 

@@ -967,11 +967,7 @@ const fetchTv = async () => {
       // 根据 number_of_seasons 生成季度列表
       selectedSeason.value = data.number_of_seasons
     }
-
-    // 获取 IMDB ID 和豆瓣链接
-    await fetchExternalIds()
-    await refreshEmbyStatus()
-    await refreshFeiniuStatus()
+    void hydrateTvAuxiliaryData()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '获取电视剧信息失败')
   } finally {
@@ -1007,6 +1003,14 @@ const refreshFeiniuStatus = async () => {
   } catch {
     isInFeiniu.value = false
   }
+}
+
+const hydrateTvAuxiliaryData = async () => {
+  await Promise.allSettled([
+    fetchExternalIds(),
+    refreshEmbyStatus(),
+    refreshFeiniuStatus()
+  ])
 }
 
 const fetchExternalIds = async () => {
@@ -1537,24 +1541,12 @@ const handleSaveMagnet = async (item) => {
 watch(magnetSourceTab, (tab) => {
   if (tab === 'seedhub') magnetPager.value.seedhub = 1
   if (tab === 'butailing') magnetPager.value.butailing = 1
-  if (tab === 'seedhub' && seedhubMagnetResources.value.length === 0 && !seedhubMagnetLoading.value) {
-    handleFetchSeedhubMagnet()
-  } else if (tab === 'butailing' && butailingMagnetResources.value.length === 0 && !butailingMagnetLoading.value && !butailingMagnetTried.value) {
-    handleFetchButailingMagnet()
-  }
 })
 
 watch(pan115SourceTab, (tab) => {
   if (tab === 'pansou') pan115Pager.value.pansou = 1
   if (tab === 'hdhive') pan115Pager.value.hdhive = 1
   if (tab === 'tg') pan115Pager.value.tg = 1
-  if (tab === 'pansou' && pansouPan115Resources.value.length === 0 && !pansouLoading.value && !pansouTried.value) {
-    handleFetchPansouPan115()
-  } else if (tab === 'hdhive' && hdhivePan115Resources.value.length === 0 && !hdhiveLoading.value && !hdhiveTried.value) {
-    handleFetchHdhivePan115()
-  } else if (tab === 'tg' && tgPan115Resources.value.length === 0 && !tgLoading.value && !tgTried.value) {
-    handleFetchTgPan115()
-  }
 })
 
 watch(() => route.params.id, () => {

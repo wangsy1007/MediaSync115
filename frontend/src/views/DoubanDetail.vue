@@ -46,7 +46,7 @@
               <span v-if="detail.imdb_id" class="imdb-tag">IMDB: {{ detail.imdb_id }}</span>
             </span>
             <span v-else>
-              未匹配 TMDB，当前页面会自动使用豆瓣名称关键词检索 115 与磁链资源。
+              未匹配 TMDB，当前页面可使用豆瓣名称关键词手动检索 115 与磁链资源。
               <span v-if="detail.imdb_id" class="imdb-tag">IMDB: {{ detail.imdb_id }}</span>
             </span>
           </p>
@@ -1061,41 +1061,6 @@ const fetchButailingMagnet = async () => {
   }
 }
 
-const ensureActiveTabLoaded = async () => {
-  if (!detail.value) return
-  if (activeTab.value === 'pan115') {
-    if (pan115SourceTab.value === 'pansou') {
-      if (pansouPan115Resources.value.length === 0 && !pansouLoading.value && !pansouTried.value) {
-        await fetchPansouPan115()
-      }
-      return
-    }
-    if (pan115SourceTab.value === 'hdhive') {
-      if (hdhivePan115Resources.value.length === 0 && !hdhiveLoading.value && !hdhiveTried.value) {
-        await fetchHdhivePan115()
-      }
-      return
-    }
-    if (pan115SourceTab.value === 'tg') {
-      if (tgPan115Resources.value.length === 0 && !tgLoading.value && !tgTried.value) {
-        await fetchTgPan115()
-      }
-      return
-    }
-    return
-  }
-
-  if (activeTab.value === 'magnet') {
-    if (magnetSourceTab.value === 'seedhub') {
-      if (seedhubMagnetResources.value.length === 0 && !seedhubMagnetLoading.value && !seedhubMagnetTried.value) {
-        await fetchSeedhubMagnet()
-      }
-      return
-    }
-    return
-  }
-}
-
 const loadDetail = async () => {
   if (!doubanId.value) return
   loading.value = true
@@ -1107,15 +1072,20 @@ const loadDetail = async () => {
       casts: Array.isArray(data?.casts) ? data.casts : []
     }
     pan115SourceTab.value = 'pansou'
-    await refreshSubscribeState()
-    await refreshEmbyStatus()
-    await refreshFeiniuStatus()
-    await ensureActiveTabLoaded()
+    void hydrateDoubanAuxiliaryData()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || error.message || '豆瓣详情获取失败')
   } finally {
     loading.value = false
   }
+}
+
+const hydrateDoubanAuxiliaryData = async () => {
+  await Promise.allSettled([
+    refreshSubscribeState(),
+    refreshEmbyStatus(),
+    refreshFeiniuStatus()
+  ])
 }
 
 const getDefaultTransferFolderId = async () => {
@@ -1492,8 +1462,11 @@ const handleRematchTmdb = async () => {
     }
     if (mappedTmdbId.value) {
       ElMessage.success('TMDB 匹配成功')
-      await refreshSubscribeState()
-      await ensureActiveTabLoaded()
+      await Promise.allSettled([
+        refreshSubscribeState(),
+        refreshEmbyStatus(),
+        refreshFeiniuStatus()
+      ])
       return
     }
     ElMessage.warning('仍未匹配到 TMDB，可继续使用豆瓣关键词资源搜索')
@@ -1510,41 +1483,15 @@ const openDoubanPage = () => {
   window.open(url, '_blank', 'noopener,noreferrer')
 }
 
-watch(activeTab, async () => {
-  await ensureActiveTabLoaded()
-})
-
-watch(mappedTmdbId, async () => {
-  await refreshEmbyStatus()
-  await refreshFeiniuStatus()
-})
-
 watch(pan115SourceTab, async (tab) => {
   if (tab === 'pansou') pan115Pager.value.pansou = 1
   if (tab === 'hdhive') pan115Pager.value.hdhive = 1
   if (tab === 'tg') pan115Pager.value.tg = 1
-  if (tab === 'pansou' && pansouPan115Resources.value.length === 0 && !pansouLoading.value && !pansouTried.value) {
-    await fetchPansouPan115()
-    return
-  }
-  if (tab === 'hdhive' && hdhivePan115Resources.value.length === 0 && !hdhiveLoading.value && !hdhiveTried.value) {
-    await fetchHdhivePan115()
-    return
-  }
-  if (tab === 'tg' && tgPan115Resources.value.length === 0 && !tgLoading.value && !tgTried.value) {
-    await fetchTgPan115()
-    return
-  }
 })
 
 watch(magnetSourceTab, async (tab) => {
   if (tab === 'seedhub') magnetPager.value.seedhub = 1
   if (tab === 'butailing') magnetPager.value.butailing = 1
-  if (tab === 'seedhub' && seedhubMagnetResources.value.length === 0 && !seedhubMagnetLoading.value && !seedhubMagnetTried.value) {
-    await fetchSeedhubMagnet()
-  } else if (tab === 'butailing' && butailingMagnetResources.value.length === 0 && !butailingMagnetLoading.value && !butailingMagnetTried.value) {
-    await fetchButailingMagnet()
-  }
 })
 
 watch(() => `${route.params.mediaType || ''}:${route.params.id || ''}`, async () => {
