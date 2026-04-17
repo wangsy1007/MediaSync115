@@ -28,7 +28,10 @@ class SeedHubService:
         }
 
     async def search_magnets_by_keyword(
-        self, keyword: str, limit: int = 40
+        self,
+        keyword: str,
+        limit: int = 40,
+        expected_context: dict | None = None,
     ) -> list[dict]:
         normalized_keyword = str(keyword or "").strip()
         if not normalized_keyword:
@@ -40,13 +43,18 @@ class SeedHubService:
             return cached[:normalized_limit]
 
         async with self._create_client() as client:
-            movie_ids = await self._search_movie_ids(
-                normalized_keyword, client=client, limit=1
+            movie_candidates = await self._search_movie_candidates(
+                normalized_keyword,
+                client=client,
+                limit=5,
+                expected_context=expected_context,
             )
-            if not movie_ids:
+            if not movie_candidates:
                 return []
 
-            movie_id = movie_ids[0]
+            movie_id = str(movie_candidates[0].get("movie_id") or "").strip()
+            if not movie_id:
+                return []
             entries = await self._fetch_seed_entries(movie_id, client=client)
             if not entries:
                 return []
@@ -117,23 +125,130 @@ class SeedHubService:
         return collected[:max_results]
 
     async def _search_movie_ids(
-        self, keyword: str, client: httpx.AsyncClient | None = None, limit: int = 1
+        self,
+        keyword: str,
+        client: httpx.AsyncClient | None = None,
+        limit: int = 1,
+        expected_context: dict | None = None,
     ) -> list[str]:
+        candidates = await self._search_movie_candidates(
+            keyword,
+            client=client,
+            limit=limit,
+            expected_context=expected_context,
+        )
+        return [
+            str(item.get("movie_id") or "").strip()
+            for item in candidates
+            if str(item.get("movie_id") or "").strip()
+        ]
+
+    async def _search_movie_candidates(
+        self,
+        keyword: str,
+        client: httpx.AsyncClient | None = None,
+        limit: int = 5,
+        expected_context: dict | None = None,
+    ) -> list[dict]:
         url = f"{self.base_url}/s/{quote(keyword)}/"
         text = await self._fetch_text(url, client=client)
         if not text:
             return []
 
-        movie_ids: list[str] = []
-        seen: set[str] = set()
-        for match in re.findall(r"/movies/(\d+)/", text):
-            if match in seen:
+        candidates = self._parse_search_candidates(text)
+        if not candidates:
+            return []
+        return self._rank_search_candidates(
+            candidates[: max(1, limit)], expected_context=expected_context
+        )[: max(1, limit)]
+
+    def _parse_search_candidates(self, text: str) -> list[dict]:
+        candidates: list[dict] = []
+        seen_ids: set[str] = set()
+        pattern = re.compile(
+            r'<div class="cover">.*?title="(?P<anchor_title>[^"]*)"[^>]*href="/movies/(?P<movie_id>\d+)/".*?'
+            r'<li><h2><a[^>]+href="/movies/\d+/"[^>]*>.*?</a>\s*(?P<title>.*?)</h2></li>\s*'
+            r"<li>(?P<meta>.*?)</li>",
+            re.IGNORECASE | re.DOTALL,
+        )
+        for matched in pattern.finditer(text):
+            movie_id = str(matched.group("movie_id") or "").strip()
+            if not movie_id or movie_id in seen_ids:
                 continue
-            seen.add(match)
-            movie_ids.append(match)
-            if len(movie_ids) >= limit:
-                break
-        return movie_ids
+            seen_ids.add(movie_id)
+            title = self._clean_html_text(matched.group("title") or "")
+            anchor_title = self._clean_html_text(matched.group("anchor_title") or "")
+            meta = self._clean_html_text(matched.group("meta") or "")
+            year_match = re.search(r"\b(19\d{2}|20\d{2})\b", meta)
+            year = year_match.group(1) if year_match else ""
+            media_type = ""
+            meta_parts = [part.strip() for part in meta.split("/") if str(part).strip()]
+            if len(meta_parts) >= 2:
+                media_type = meta_parts[1]
+            candidates.append(
+                {
+                    "movie_id": movie_id,
+                    "title": title,
+                    "anchor_title": anchor_title,
+                    "year": year,
+                    "media_type": media_type,
+                }
+            )
+        return candidates
+
+    def _rank_search_candidates(
+        self, candidates: list[dict], expected_context: dict | None = None
+    ) -> list[dict]:
+        if not candidates:
+            return []
+        context = expected_context or {}
+        expected_title = self._normalize_title_fingerprint(
+            context.get("expected_title")
+        )
+        expected_original_title = self._normalize_title_fingerprint(
+            context.get("expected_original_title")
+        )
+        expected_year = str(context.get("expected_year") or "").strip()
+        expected_media_type = str(context.get("expected_media_type") or "").strip()
+
+        ranked: list[tuple[tuple[int, int], dict]] = []
+        for index, item in enumerate(candidates):
+            title_fp = self._normalize_title_fingerprint(item.get("title"))
+            anchor_fp = self._normalize_title_fingerprint(item.get("anchor_title"))
+            item_year = str(item.get("year") or "").strip()
+            item_media_type = str(item.get("media_type") or "").strip()
+            score = 0
+            if expected_title and (
+                title_fp == expected_title or anchor_fp == expected_title
+            ):
+                score += 100
+            if expected_original_title and (
+                title_fp == expected_original_title
+                or anchor_fp == expected_original_title
+            ):
+                score += 90
+            if expected_year and item_year == expected_year:
+                score += 40
+            if expected_media_type and item_media_type == expected_media_type:
+                score += 10
+            ranked.append(((score, -index), item))
+
+        ranked.sort(key=lambda entry: entry[0], reverse=True)
+        return [item for _, item in ranked]
+
+    def _normalize_title_fingerprint(self, value: object) -> str:
+        text = html.unescape(str(value or "").strip()).casefold()
+        if not text:
+            return ""
+        return re.sub(
+            r"[\s\-_:：·•.,，。!！?？'\"“”‘’()（）\[\]【】/\\]+",
+            "",
+            text,
+        )
+
+    def _clean_html_text(self, value: object) -> str:
+        text = re.sub(r"<[^>]+>", "", str(value or ""))
+        return html.unescape(text).strip()
 
     async def _fetch_seed_entries(
         self, movie_id: str, client: httpx.AsyncClient | None = None

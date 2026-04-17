@@ -24,6 +24,7 @@ class SeedhubTaskService:
         media_type: str,
         tmdb_id: int,
         keyword_candidates: list[str],
+        expected_context: dict[str, Any] | None = None,
         limit: int = 40,
         force_refresh: bool = False,
     ) -> dict[str, Any]:
@@ -60,6 +61,7 @@ class SeedhubTaskService:
                         "tmdb_id": tmdb_id,
                         "keyword": cached_result.get("keyword") or candidates[0],
                         "keyword_candidates": candidates,
+                        "expected_context": dict(expected_context or {}),
                         "status": "success",
                         "message": "命中缓存",
                         "items": list(cached_result.get("items") or []),
@@ -93,6 +95,7 @@ class SeedhubTaskService:
                 "tmdb_id": tmdb_id,
                 "keyword": candidates[0],
                 "keyword_candidates": candidates,
+                "expected_context": dict(expected_context or {}),
                 "status": "queued",
                 "message": "任务已排队",
                 "items": [],
@@ -151,6 +154,7 @@ class SeedhubTaskService:
 
         query_key = str(task.get("query_key") or "")
         keyword_candidates = list(task.get("keyword_candidates") or [])
+        expected_context = dict(task.get("expected_context") or {})
         limit = int(task.get("limit") or 40)
         seen_magnets: set[str] = set()
 
@@ -172,7 +176,9 @@ class SeedhubTaskService:
                     task_id, {"keyword": keyword, "message": f"正在搜索: {keyword}"}
                 )
 
-                movie_ids = await seedhub_service._search_movie_ids(keyword, limit=1)
+                movie_ids = await seedhub_service._search_movie_ids(
+                    keyword, limit=1, expected_context=expected_context
+                )
                 if not movie_ids:
                     continue
 

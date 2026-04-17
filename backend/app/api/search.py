@@ -881,6 +881,12 @@ def _extract_tg_expected_context(payload: dict, media_type: str) -> dict[str, st
     }
 
 
+def _extract_seedhub_expected_context(payload: dict, media_type: str) -> dict[str, str]:
+    context = _extract_tg_expected_context(payload, media_type)
+    context["expected_media_type"] = "剧集" if media_type == "tv" else "电影"
+    return context
+
+
 def _build_pansou_keyword_from_media(payload: dict, media_type: str) -> str:
     if not isinstance(payload, dict):
         return ""
@@ -2196,6 +2202,7 @@ async def _search_seedhub_magnet_resources(
     tmdb_id: int, media_type: str, limit: int = 40
 ) -> tuple[str, list[dict]]:
     media_payload = await _load_media_payload(tmdb_id, media_type)
+    expected_context = _extract_seedhub_expected_context(media_payload, media_type)
     keyword_candidates = _build_seedhub_keyword_candidates(
         media_payload, media_type, tmdb_id
     )
@@ -2207,7 +2214,9 @@ async def _search_seedhub_magnet_resources(
         return f"TMDB {tmdb_id}", []
 
     items = await seedhub_service.search_magnets_by_keyword(
-        selected_keyword, limit=normalized_limit
+        selected_keyword,
+        limit=normalized_limit,
+        expected_context=expected_context,
     )
     return selected_keyword, items
 
@@ -2274,6 +2283,9 @@ async def create_seedhub_magnet_task(
         media_type=normalized_media_type,
         tmdb_id=tmdb_id,
         keyword_candidates=keyword_candidates,
+        expected_context=_extract_seedhub_expected_context(
+            media_payload, normalized_media_type
+        ),
         limit=limit,
         force_refresh=force_refresh,
     )
