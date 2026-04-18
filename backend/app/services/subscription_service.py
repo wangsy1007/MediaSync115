@@ -215,7 +215,11 @@ class SubscriptionService:
                     continue
 
                 tv_missing_snapshot = cleanup_before.get("tv_missing_snapshot")
-                resources, fetch_trace = await self._fetch_resources(
+                (
+                    resources,
+                    fetch_trace,
+                    source_attempt_info,
+                ) = await self._fetch_resources(
                     normalized_channel,
                     sub,
                     hdhive_unlock_context,
@@ -235,16 +239,26 @@ class SubscriptionService:
                         if isinstance(trace.get("payload"), dict)
                         else None,
                     )
+
+                # 记录来源尝试链路汇总日志
+                source_summary = source_attempt_info.get("summary", "")
                 await self._create_step_log(
                     db,
                     run_id=run_id,
                     channel=normalized_channel,
                     subscription_id=sub_id,
                     subscription_title=sub_title,
-                    step="fetch_resources",
-                    status="info",
-                    message=f"资源抓取完成，候选 {len(resources)} 条",
+                    step="fetch_resources_summary",
+                    status="success" if resources else "warning",
+                    message=f"资源抓取完成，候选 {len(resources)} 条 —— {source_summary}",
+                    payload={
+                        "resource_count": len(resources),
+                        "source_order": source_attempt_info.get("source_order", []),
+                        "attempts": source_attempt_info.get("attempts", []),
+                        "summary": source_summary,
+                    },
                 )
+
                 # 为每部影视记录资源抓取汇总
                 fetch_sources_tried = [
                     t.get("payload", {}).get("source", t.get("step", ""))
@@ -256,20 +270,14 @@ class SubscriptionService:
                     module="subscriptions",
                     action="subscription.item.fetch_done",
                     status="success" if resources else "warning",
-                    message=(
-                        f"[{sub_title}] 资源抓取完成：候选 {len(resources)} 条"
-                        + (
-                            f"（命中来源：{', '.join(fetch_sources_tried)}）"
-                            if fetch_sources_tried
-                            else "（无命中来源）"
-                        )
-                    ),
+                    message=(f"[{sub_title}] {source_summary}"),
                     trace_id=run_id,
                     extra={
                         "subscription_id": sub_id,
                         "title": sub_title,
                         "resource_count": len(resources),
                         "sources_hit": fetch_sources_tried,
+                        "source_attempt_summary": source_summary,
                     },
                 )
                 store_stats = await self._store_new_resources(db, sub_id, resources)
@@ -1037,8 +1045,9 @@ class SubscriptionService:
         sub: "SubscriptionSnapshot",
         hdhive_unlock_context: dict[str, Any] | None = None,
         source_order: list[str] | None = None,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         traces: list[dict[str, Any]] = []
+        source_attempts: list[dict[str, Any]] = []  # 记录每个来源的尝试结果
         active_order = list(source_order or self._resolve_source_order(channel))
         traces.append(
             {
@@ -1056,12 +1065,21 @@ class SubscriptionService:
                     "message": "当前优先级来源均不可用，请检查配置",
                 }
             )
-            return [], traces
+            return (
+                [],
+                traces,
+                {"source_order": active_order, "attempts": [], "summary": "无可用来源"},
+            )
 
         primary_resources: list[dict[str, Any]] = []
         for source in active_order:
             source_resources: list[dict[str, Any]] = []
             source_traces: list[dict[str, Any]] = []
+            attempt_info: dict[str, Any] = {
+                "source": source,
+                "status": "empty",
+                "count": 0,
+            }
             try:
                 if source == "hdhive":
                     source_resources, source_traces = await self._fetch_from_hdhive(sub)
@@ -1078,6 +1096,8 @@ class SubscriptionService:
                         "payload": {"error": str(exc)[:300]},
                     }
                 )
+                attempt_info["status"] = "failed"
+                attempt_info["error"] = str(exc)[:100]
                 source_resources = []
 
             traces.extend(source_traces)
@@ -1103,6 +1123,8 @@ class SubscriptionService:
                         "payload": {"source": source, "count": len(source_resources)},
                     }
                 )
+                attempt_info["status"] = "success"
+                attempt_info["count"] = len(source_resources)
                 if source == "hdhive":
                     source_resources = await self._prepare_hdhive_locked_resources(
                         source_resources,
@@ -1117,6 +1139,8 @@ class SubscriptionService:
                         source_resources, pref_res, pref_fmt
                     )
                 primary_resources.extend(source_resources)
+
+            source_attempts.append(attempt_info)
 
         if not primary_resources:
             traces.append(
@@ -1138,8 +1162,69 @@ class SubscriptionService:
                     offline_resources, pref_res, pref_fmt
                 )
             primary_resources.extend(offline_resources)
+            source_attempts.append(
+                {
+                    "source": "offline",
+                    "status": "success",
+                    "count": len(offline_resources),
+                }
+            )
 
-        return primary_resources, traces
+        # 生成来源尝试链路摘要
+        summary = self._build_source_attempt_summary(source_attempts, active_order)
+        return (
+            primary_resources,
+            traces,
+            {
+                "source_order": active_order,
+                "attempts": source_attempts,
+                "summary": summary,
+            },
+        )
+
+    def _build_source_attempt_summary(
+        self, attempts: list[dict[str, Any]], source_order: list[str]
+    ) -> str:
+        """构建来源尝试链路的中文摘要"""
+        if not attempts:
+            return "未尝试任何来源"
+
+        # 来源名称映射
+        source_names = {
+            "hdhive": "HDHive",
+            "pansou": "Pansou",
+            "tg": "TG",
+            "offline": "离线磁力",
+        }
+
+        # 构建尝试链路
+        chain_parts: list[str] = []
+        success_sources: list[str] = []
+
+        for attempt in attempts:
+            source = attempt.get("source", "")
+            status = attempt.get("status", "")
+            count = attempt.get("count", 0)
+            source_name = source_names.get(source, source)
+
+            if status == "success":
+                chain_parts.append(f"{source_name}({count}条)")
+                success_sources.append(source_name)
+            elif status == "failed":
+                error = attempt.get("error", "")
+                chain_parts.append(f"{source_name}(失败)")
+            else:  # empty
+                chain_parts.append(f"{source_name}(无资源)")
+
+        if not chain_parts:
+            return "未尝试任何来源"
+
+        chain_str = " → ".join(chain_parts)
+
+        if success_sources:
+            return f"尝试来源 [{chain_str}]，最终命中 {', '.join(success_sources)}"
+        else:
+            return f"尝试来源 [{chain_str}]，均未命中可用资源"
 
     def _resolve_source_order(self, channel: str) -> list[str]:
         _ = channel
