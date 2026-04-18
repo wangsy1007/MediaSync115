@@ -2754,7 +2754,7 @@ class SubscriptionService:
     @staticmethod
     def _normalize_channel(channel: str) -> str:
         normalized = str(channel or "").strip().lower()
-        if normalized not in {"pansou", "hdhive", "tg", "priority"}:
+        if normalized not in {"pansou", "hdhive", "tg", "priority", "all"}:
             raise ValueError("unsupported channel")
         return normalized
 
