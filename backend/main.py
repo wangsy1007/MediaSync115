@@ -40,6 +40,7 @@ from app.services.hdhive_checkin_scheduler_service import (
 from app.services.subscription_scheduler_service import subscription_scheduler_service
 from app.services.tg_bot import tg_bot_service
 from app.services.archive_scheduler_service import archive_scheduler_service
+from app.analytics import kafka_producer
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +162,10 @@ async def lifespan(app: FastAPI):
     pansou_service.set_base_url(runtime_settings_service.get_pansou_base_url())
     await init_db()
     await operation_log_service.prune(days=30)
+
+    # 初始化 Kafka 生产者
+    kafka_producer.init(settings.KAFKA_BOOTSTRAP_SERVERS)
+
     await scheduler_manager.init()
     await subscription_scheduler_service.ensure_subscription_tasks()
     await subscription_scheduler_service.ensure_chart_subscription_task()
@@ -177,6 +182,7 @@ async def lifespan(app: FastAPI):
     await tg_bot_service.stop()
     await scheduler_manager.stop()
     await pansou_service.close()
+    kafka_producer.close()
 
 
 app = FastAPI(

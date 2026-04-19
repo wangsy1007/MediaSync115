@@ -1231,6 +1231,26 @@ async def search(
         items = payload.get("items") if isinstance(payload.get("items"), list) else []
         payload["emby_status_map"] = await _build_emby_status_map(items)
         payload["feiniu_status_map"] = await _build_feiniu_status_map(items)
+
+        # 发送搜索关键词事件到 Kafka
+        try:
+            from app.analytics import kafka_producer
+
+            if kafka_producer._enabled:
+                result_count = len(items)
+                kafka_producer.send(
+                    event_type="search_keyword",
+                    data={
+                        "keyword": keyword,
+                        "source": "tmdb",
+                        "result_count": result_count,
+                        "page": page,
+                    },
+                    key=keyword,
+                )
+        except Exception:
+            pass
+
         return payload
     except ValueError as exc:
         if "TMDB_API_KEY is not configured" in str(exc):

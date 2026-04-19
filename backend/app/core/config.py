@@ -44,6 +44,11 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/mediasync.db"
 
+    # Kafka Configuration
+    KAFKA_BOOTSTRAP_SERVERS: Optional[str] = (
+        None  # 例如: "localhost:9092" 或 "kafka1:9092,kafka2:9092"
+    )
+
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
     model_config = SettingsConfigDict(

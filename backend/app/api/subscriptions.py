@@ -27,7 +27,9 @@ from datetime import datetime
 
 router = APIRouter(prefix="/subscriptions", tags=["订阅"])
 
-_tmdb_poster_path_pattern = re.compile(r"(?:https?:)?//image\.tmdb\.org/t/p/[^/]+(/.+)$", re.IGNORECASE)
+_tmdb_poster_path_pattern = re.compile(
+    r"(?:https?:)?//image\.tmdb\.org/t/p/[^/]+(/.+)$", re.IGNORECASE
+)
 
 
 def normalize_tmdb_poster_path(raw_path: str | None) -> str | None:
@@ -49,7 +51,9 @@ def sanitize_poster_path(raw_path: str | None) -> str | None:
     return normalize_tmdb_poster_path(raw_path)
 
 
-async def resolve_tmdb_poster_path(tmdb_id: int | None, media_type: MediaType | None) -> str | None:
+async def resolve_tmdb_poster_path(
+    tmdb_id: int | None, media_type: MediaType | None
+) -> str | None:
     if tmdb_id is None:
         return None
     if media_type not in {MediaType.MOVIE, MediaType.TV}:
@@ -67,7 +71,9 @@ async def resolve_tmdb_poster_path(tmdb_id: int | None, media_type: MediaType | 
     return sanitize_poster_path(payload.get("poster_path"))
 
 
-def _build_subscription_status_payload(subscriptions: list[Subscription]) -> dict[str, Any]:
+def _build_subscription_status_payload(
+    subscriptions: list[Subscription],
+) -> dict[str, Any]:
     items = []
     douban_id_map = {}
     imdb_id_map = {}
@@ -234,9 +240,17 @@ async def _enrich_subscription_ids(
                 try:
                     tmdb_find_result = await tmdb_service.find_by_imdb_id(imdb_id)
                     if tmdb_find_result.get("found"):
-                        tmdb_item = tmdb_find_result.get("movie") if normalized_type == "movie" else tmdb_find_result.get("tv")
+                        tmdb_item = (
+                            tmdb_find_result.get("movie")
+                            if normalized_type == "movie"
+                            else tmdb_find_result.get("tv")
+                        )
                         if not tmdb_item:
-                            tmdb_item = tmdb_find_result.get("tv") if normalized_type == "movie" else tmdb_find_result.get("movie")
+                            tmdb_item = (
+                                tmdb_find_result.get("tv")
+                                if normalized_type == "movie"
+                                else tmdb_find_result.get("movie")
+                            )
                         if tmdb_item:
                             result["tmdb_id"] = tmdb_item.get("tmdb_id")
                 except Exception:
@@ -275,9 +289,13 @@ LIMIT 1
                         )
                         wikidata_response.raise_for_status()
                         wikidata_payload = wikidata_response.json()
-                        bindings = (((wikidata_payload or {}).get("results") or {}).get("bindings") or [])
+                        bindings = ((wikidata_payload or {}).get("results") or {}).get(
+                            "bindings"
+                        ) or []
                         if bindings:
-                            douban_id_from_wiki = ((bindings[0].get("doubanId") or {}).get("value"))
+                            douban_id_from_wiki = (
+                                bindings[0].get("doubanId") or {}
+                            ).get("value")
                             if douban_id_from_wiki:
                                 result["douban_id"] = douban_id_from_wiki
                 except Exception:
@@ -290,8 +308,7 @@ LIMIT 1
 
 @router.post("")
 async def create_subscription(
-    subscription: SubscriptionCreate,
-    db: AsyncSession = Depends(get_db)
+    subscription: SubscriptionCreate, db: AsyncSession = Depends(get_db)
 ):
     dedupe_conditions = []
     if subscription.douban_id:
@@ -337,11 +354,39 @@ async def create_subscription(
     await db.refresh(new_subscription)
     media_label = "电影" if subscription.media_type == MediaType.MOVIE else "电视剧"
     await operation_log_service.log_background_event(
-        source_type="api", module="subscriptions",
-        action="subscription.create", status="success",
+        source_type="api",
+        module="subscriptions",
+        action="subscription.create",
+        status="success",
         message=f"新增{media_label}订阅：{new_subscription.title}（TMDB: {new_subscription.tmdb_id or '无'}）",
-        extra={"subscription_id": new_subscription.id, "title": new_subscription.title, "media_type": media_label, "tmdb_id": new_subscription.tmdb_id},
+        extra={
+            "subscription_id": new_subscription.id,
+            "title": new_subscription.title,
+            "media_type": media_label,
+            "tmdb_id": new_subscription.tmdb_id,
+        },
     )
+
+    # 发送订阅创建事件到 Kafka
+    try:
+        from app.analytics import kafka_producer
+
+        if kafka_producer._enabled:
+            kafka_producer.send(
+                event_type="subscription_create",
+                data={
+                    "subscription_id": new_subscription.id,
+                    "title": new_subscription.title,
+                    "media_type": str(subscription.media_type),
+                    "tmdb_id": new_subscription.tmdb_id,
+                    "year": new_subscription.year,
+                    "rating": new_subscription.rating,
+                },
+                key=str(new_subscription.id),
+            )
+    except Exception:
+        pass
+
     return new_subscription
 
 
@@ -349,7 +394,7 @@ async def create_subscription(
 async def list_subscriptions(
     is_active: Optional[bool] = None,
     media_type: Optional[MediaType] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     query = select(Subscription)
     if is_active is not None:
@@ -382,7 +427,9 @@ async def list_subscriptions(
 
         async def enrich_one(sub: Subscription) -> tuple[Subscription, str | None]:
             async with semaphore:
-                poster_path = await resolve_tmdb_poster_path(sub.tmdb_id, sub.media_type)
+                poster_path = await resolve_tmdb_poster_path(
+                    sub.tmdb_id, sub.media_type
+                )
                 return sub, poster_path
 
         enrich_results = await asyncio.gather(*(enrich_one(sub) for sub in need_enrich))
@@ -403,7 +450,7 @@ async def list_subscriptions(
 async def get_subscription_status_map(
     is_active: Optional[bool] = True,
     media_type: Optional[MediaType] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     query = select(Subscription)
     if is_active is not None:
@@ -486,7 +533,9 @@ async def list_tv_missing_status(
                     ),
                     timeout=20.0,
                 )
-            counts = status.get("counts") if isinstance(status.get("counts"), dict) else {}
+            counts = (
+                status.get("counts") if isinstance(status.get("counts"), dict) else {}
+            )
             return {
                 "subscription_id": sub.id,
                 "tmdb_id": sub.tmdb_id,
@@ -600,7 +649,7 @@ async def get_tv_missing_status(
 async def update_subscription(
     subscription_id: int,
     update_data: SubscriptionUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Subscription).where(Subscription.id == subscription_id)
@@ -621,7 +670,9 @@ async def update_subscription(
 
 
 @router.delete("/batch/{media_type}")
-async def delete_subscriptions_by_type(media_type: str, db: AsyncSession = Depends(get_db)):
+async def delete_subscriptions_by_type(
+    media_type: str, db: AsyncSession = Depends(get_db)
+):
     if media_type not in ("movie", "tv"):
         raise HTTPException(status_code=400, detail="media_type 必须为 movie 或 tv")
 
@@ -635,14 +686,14 @@ async def delete_subscriptions_by_type(media_type: str, db: AsyncSession = Depen
     await db.execute(
         sa_delete(DownloadRecord).where(DownloadRecord.subscription_id.in_(sub_ids))
     )
-    await db.execute(
-        sa_delete(Subscription).where(Subscription.id.in_(sub_ids))
-    )
+    await db.execute(sa_delete(Subscription).where(Subscription.id.in_(sub_ids)))
     await db.commit()
     label = "电影" if media_type == "movie" else "电视剧"
     await operation_log_service.log_background_event(
-        source_type="api", module="subscriptions",
-        action="subscription.batch_delete", status="success",
+        source_type="api",
+        module="subscriptions",
+        action="subscription.batch_delete",
+        status="success",
         message=f"批量清空{label}订阅：共删除 {len(sub_ids)} 条",
         extra={"media_type": media_type, "deleted_count": len(sub_ids)},
     )
@@ -671,29 +722,54 @@ async def delete_subscription(subscription_id: int, db: AsyncSession = Depends(g
     await db.delete(subscription)
     await db.commit()
     await operation_log_service.log_background_event(
-        source_type="api", module="subscriptions",
-        action="subscription.delete", status="success",
+        source_type="api",
+        module="subscriptions",
+        action="subscription.delete",
+        status="success",
         message=f"删除{media_label}订阅：{sub_title}",
-        extra={"subscription_id": subscription_id, "title": sub_title, "media_type": media_label},
+        extra={
+            "subscription_id": subscription_id,
+            "title": sub_title,
+            "media_type": media_label,
+        },
     )
+
+    # 发送订阅删除事件到 Kafka
+    try:
+        from app.analytics import kafka_producer
+
+        if kafka_producer._enabled:
+            kafka_producer.send(
+                event_type="subscription_delete",
+                data={
+                    "subscription_id": subscription_id,
+                    "title": sub_title,
+                    "media_type": str(subscription.media_type),
+                },
+                key=str(subscription_id),
+            )
+    except Exception:
+        pass
+
     return {"message": "Subscription deleted"}
 
 
 # ==================== 下载记录相关 ====================
 
+
 @router.get("/{subscription_id}/downloads")
 async def get_subscription_downloads(
     subscription_id: int,
     status: Optional[MediaStatus] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     获取订阅的下载记录列表
-    
+
     Args:
         subscription_id: 订阅ID
         status: 可选的状态过滤
-        
+
     Returns:
         下载记录列表
     """
@@ -703,14 +779,14 @@ async def get_subscription_downloads(
     )
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Subscription not found")
-    
+
     # 查询下载记录
     query = select(DownloadRecord).where(
         DownloadRecord.subscription_id == subscription_id
     )
     if status:
         query = query.where(DownloadRecord.status == status)
-    
+
     result = await db.execute(query.order_by(DownloadRecord.created_at.desc()))
     return result.scalars().all()
 
@@ -719,15 +795,15 @@ async def get_subscription_downloads(
 async def create_download_record(
     subscription_id: int,
     record: DownloadRecordCreate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     创建下载记录
-    
+
     Args:
         subscription_id: 订阅ID
         record: 下载记录信息
-        
+
     Returns:
         新创建的下载记录
     """
@@ -738,7 +814,7 @@ async def create_download_record(
     subscription = result.scalar_one_or_none()
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
-    
+
     # 创建下载记录
     new_record = DownloadRecord(
         subscription_id=subscription_id,
@@ -750,30 +826,28 @@ async def create_download_record(
     db.add(new_record)
     await db.commit()
     await db.refresh(new_record)
-    
+
     return new_record
 
 
 @router.get("/{subscription_id}/downloads/{record_id}")
 async def get_download_record(
-    subscription_id: int,
-    record_id: int,
-    db: AsyncSession = Depends(get_db)
+    subscription_id: int, record_id: int, db: AsyncSession = Depends(get_db)
 ):
     """
     获取单个下载记录详情
-    
+
     Args:
         subscription_id: 订阅ID
         record_id: 下载记录ID
-        
+
     Returns:
         下载记录详情
     """
     result = await db.execute(
         select(DownloadRecord).where(
             DownloadRecord.id == record_id,
-            DownloadRecord.subscription_id == subscription_id
+            DownloadRecord.subscription_id == subscription_id,
         )
     )
     record = result.scalar_one_or_none()
@@ -787,29 +861,29 @@ async def update_download_record(
     subscription_id: int,
     record_id: int,
     update_data: DownloadRecordUpdate,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     更新下载记录状态
-    
+
     Args:
         subscription_id: 订阅ID
         record_id: 下载记录ID
         update_data: 更新数据
-        
+
     Returns:
         更新后的下载记录
     """
     result = await db.execute(
         select(DownloadRecord).where(
             DownloadRecord.id == record_id,
-            DownloadRecord.subscription_id == subscription_id
+            DownloadRecord.subscription_id == subscription_id,
         )
     )
     record = result.scalar_one_or_none()
     if not record:
         raise HTTPException(status_code=404, detail="Download record not found")
-    
+
     # 不再在数据库里维护多状态流转，仅保留成功时间和错误信息。
     if update_data.status == MediaStatus.COMPLETED:
         record.completed_at = datetime.utcnow()
@@ -821,7 +895,7 @@ async def update_download_record(
 
     if update_data.error_message is not None:
         record.error_message = update_data.error_message
-    
+
     await db.commit()
     await db.refresh(record)
     return record
@@ -829,30 +903,28 @@ async def update_download_record(
 
 @router.delete("/{subscription_id}/downloads/{record_id}")
 async def delete_download_record(
-    subscription_id: int,
-    record_id: int,
-    db: AsyncSession = Depends(get_db)
+    subscription_id: int, record_id: int, db: AsyncSession = Depends(get_db)
 ):
     """
     删除下载记录
-    
+
     Args:
         subscription_id: 订阅ID
         record_id: 下载记录ID
-        
+
     Returns:
         删除结果
     """
     result = await db.execute(
         select(DownloadRecord).where(
             DownloadRecord.id == record_id,
-            DownloadRecord.subscription_id == subscription_id
+            DownloadRecord.subscription_id == subscription_id,
         )
     )
     record = result.scalar_one_or_none()
     if not record:
         raise HTTPException(status_code=404, detail="Download record not found")
-    
+
     await db.delete(record)
     await db.commit()
     return {"message": "Download record deleted"}
@@ -860,17 +932,15 @@ async def delete_download_record(
 
 @router.post("/{subscription_id}/downloads/{record_id}/complete")
 async def mark_download_complete(
-    subscription_id: int,
-    record_id: int,
-    db: AsyncSession = Depends(get_db)
+    subscription_id: int, record_id: int, db: AsyncSession = Depends(get_db)
 ):
     """
     标记下载记录为已完成
-    
+
     Args:
         subscription_id: 订阅ID
         record_id: 下载记录ID
-        
+
     Returns:
         更新后的下载记录
     """
@@ -878,7 +948,7 @@ async def mark_download_complete(
         subscription_id,
         record_id,
         DownloadRecordUpdate(status=MediaStatus.COMPLETED),
-        db
+        db,
     )
 
 
@@ -887,16 +957,16 @@ async def mark_download_failed(
     subscription_id: int,
     record_id: int,
     error_message: Optional[str] = None,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """
     标记下载记录为失败
-    
+
     Args:
         subscription_id: 订阅ID
         record_id: 下载记录ID
         error_message: 错误信息
-        
+
     Returns:
         更新后的下载记录
     """
@@ -904,18 +974,25 @@ async def mark_download_failed(
         subscription_id,
         record_id,
         DownloadRecordUpdate(status=MediaStatus.FAILED, error_message=error_message),
-        db
+        db,
     )
 
 
 @router.post("/actions/run")
 @router.post("/system/run")
-async def run_subscription_check(payload: SubscriptionRunRequest, db: AsyncSession = Depends(get_db)):
+async def run_subscription_check(
+    payload: SubscriptionRunRequest, db: AsyncSession = Depends(get_db)
+):
     await operation_log_service.log_background_event(
-        source_type="api", module="subscriptions",
-        action="subscription.run.manual", status="info",
+        source_type="api",
+        module="subscriptions",
+        action="subscription.run.manual",
+        status="info",
         message=f"手动触发订阅检查（频道：{payload.channel}，强制转存：{'是' if payload.force_auto_download else '否'}）",
-        extra={"channel": payload.channel, "force_auto_download": payload.force_auto_download},
+        extra={
+            "channel": payload.channel,
+            "force_auto_download": payload.force_auto_download,
+        },
     )
     try:
         return await subscription_service.run_channel_check(
@@ -931,10 +1008,15 @@ async def run_subscription_check(payload: SubscriptionRunRequest, db: AsyncSessi
 @router.post("/system/run/background")
 async def start_subscription_check_background(payload: SubscriptionRunRequest):
     await operation_log_service.log_background_event(
-        source_type="api", module="subscriptions",
-        action="subscription.run.background", status="info",
+        source_type="api",
+        module="subscriptions",
+        action="subscription.run.background",
+        status="info",
         message=f"后台启动订阅检查（频道：{payload.channel}，强制转存：{'是' if payload.force_auto_download else '否'}）",
-        extra={"channel": payload.channel, "force_auto_download": payload.force_auto_download},
+        extra={
+            "channel": payload.channel,
+            "force_auto_download": payload.force_auto_download,
+        },
     )
     try:
         return await subscription_run_task_service.start(
@@ -1016,7 +1098,9 @@ async def list_subscription_step_logs(
         query = query.where(SubscriptionStepLog.subscription_id == subscription_id)
 
     result = await db.execute(
-        query.order_by(SubscriptionStepLog.created_at.desc(), SubscriptionStepLog.id.desc()).limit(limit)
+        query.order_by(
+            SubscriptionStepLog.created_at.desc(), SubscriptionStepLog.id.desc()
+        ).limit(limit)
     )
     rows = result.scalars().all()
 

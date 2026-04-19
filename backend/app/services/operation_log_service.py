@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -6,6 +7,8 @@ from sqlalchemy import delete
 
 from app.core.database import async_session_maker
 from app.models.models import OperationLog
+
+logger = logging.getLogger(__name__)
 
 SENSITIVE_KEYWORDS = (
     "cookie",
@@ -131,6 +134,105 @@ class OperationLogService:
             db.add(row)
             await db.commit()
         await self.maybe_prune()
+
+        # 发送到 Kafka（异步，不阻塞主线程）
+        self._send_to_kafka(
+            trace_id,
+            source_type,
+            module,
+            action,
+            status,
+            message,
+            http_method,
+            path,
+            status_code,
+            duration_ms,
+            extra,
+        )
+
+    def _send_to_kafka(
+        self,
+        trace_id: str,
+        source_type: str,
+        module: str,
+        action: str,
+        status: str,
+        message: str,
+        http_method: str | None = None,
+        path: str | None = None,
+        status_code: int | None = None,
+        duration_ms: int | None = None,
+        extra: Any = None,
+    ) -> None:
+        """发送日志到 Kafka"""
+        try:
+            from app.analytics import kafka_producer
+
+            if not kafka_producer._enabled:
+                return
+
+            # 构建事件数据
+            event_data = {
+                "trace_id": trace_id,
+                "source_type": source_type,
+                "module": module,
+                "action": action,
+                "status": status,
+                "message": message,
+                "http_method": http_method,
+                "path": path,
+                "status_code": status_code,
+                "duration_ms": duration_ms,
+            }
+
+            # 解析 extra 中的数据
+            if extra and isinstance(extra, dict):
+                # 提取查询关键词
+                if "keyword" in extra:
+                    event_data["keyword"] = extra["keyword"]
+                # 提取订阅信息
+                if "subscription_id" in extra:
+                    event_data["subscription_id"] = extra["subscription_id"]
+                if "title" in extra:
+                    event_data["title"] = extra["title"]
+                if "media_type" in extra:
+                    event_data["media_type"] = extra["media_type"]
+                # 提取来源信息
+                if "source" in extra:
+                    event_data["source"] = extra["source"]
+                if "source_attempt_summary" in extra:
+                    event_data["source_attempt_summary"] = extra[
+                        "source_attempt_summary"
+                    ]
+
+            # 确定事件类型
+            event_type = "api_request"
+            if source_type == "api":
+                if "search" in module.lower() or (path and "/search" in path):
+                    event_type = "search_keyword"
+                elif "subscription" in module.lower():
+                    if "create" in action.lower():
+                        event_type = "subscription_create"
+                    elif "delete" in action.lower():
+                        event_type = "subscription_delete"
+                    elif "run" in action.lower():
+                        event_type = "subscription_run"
+                    elif "transfer" in action.lower():
+                        event_type = "transfer_success"
+            elif source_type == "background_task":
+                if "subscription" in module.lower():
+                    if "fetch" in action.lower():
+                        event_type = "resource_fetch_success"
+                    elif "transfer" in action.lower():
+                        event_type = "transfer_success"
+
+            kafka_producer.send(
+                event_type=event_type,
+                data=event_data,
+                key=trace_id,
+            )
+        except Exception as e:
+            logger.debug(f"Kafka 发送失败（忽略）: {e}")
 
     async def log_api_request(
         self,

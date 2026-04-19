@@ -1142,6 +1142,25 @@ class SubscriptionService:
 
             source_attempts.append(attempt_info)
 
+            # 发送来源尝试事件到 Kafka
+            try:
+                from app.analytics import kafka_producer
+
+                if kafka_producer._enabled:
+                    kafka_producer.send(
+                        event_type="source_attempt",
+                        data={
+                            "subscription_id": sub.id,
+                            "title": sub.title,
+                            "source": source,
+                            "status": attempt_info.get("status", "empty"),
+                            "resource_count": attempt_info.get("count", 0),
+                        },
+                        key=str(sub.id),
+                    )
+            except Exception:
+                pass
+
         if not primary_resources:
             traces.append(
                 {
@@ -2164,6 +2183,25 @@ class SubscriptionService:
                             "source": source,
                         },
                     )
+                    # 发送转存成功事件到 Kafka
+                    try:
+                        from app.analytics import kafka_producer
+
+                        if kafka_producer._enabled:
+                            kafka_producer.send(
+                                event_type="transfer_success",
+                                data={
+                                    "subscription_id": sub.id,
+                                    "title": sub.title,
+                                    "source": source,
+                                    "resource_name": record.resource_name,
+                                    "transfer_type": "offline",
+                                    "status": "success",
+                                },
+                                key=str(sub.id),
+                            )
+                    except Exception:
+                        pass
                     await self._create_step_log(
                         db,
                         run_id=run_id,
@@ -2321,6 +2359,26 @@ class SubscriptionService:
                             "remaining_missing": len(missing_episodes),
                         },
                     )
+                    # 发送转存成功事件到 Kafka
+                    try:
+                        from app.analytics import kafka_producer
+
+                        if kafka_producer._enabled:
+                            kafka_producer.send(
+                                event_type="transfer_success",
+                                data={
+                                    "subscription_id": sub.id,
+                                    "title": sub.title,
+                                    "source": source,
+                                    "resource_name": record.resource_name,
+                                    "transfer_type": "precise",
+                                    "status": "success",
+                                    "selected_count": len(selected_file_ids),
+                                },
+                                key=str(sub.id),
+                            )
+                    except Exception:
+                        pass
                     if not missing_episodes:
                         subscription_completed = True
                         cleanup_step = (
@@ -2379,6 +2437,25 @@ class SubscriptionService:
                             "save_mode": "direct",
                         },
                     )
+                    # 发送转存成功事件到 Kafka
+                    try:
+                        from app.analytics import kafka_producer
+
+                        if kafka_producer._enabled:
+                            kafka_producer.send(
+                                event_type="transfer_success",
+                                data={
+                                    "subscription_id": sub.id,
+                                    "title": sub.title,
+                                    "source": source,
+                                    "resource_name": record.resource_name,
+                                    "transfer_type": "share",
+                                    "status": "success",
+                                },
+                                key=str(sub.id),
+                            )
+                    except Exception:
+                        pass
                     subscription_completed = True
                     cleanup_step = "subscription_cleanup_transferred"
                     cleanup_message = "转存成功，已自动删除订阅"
