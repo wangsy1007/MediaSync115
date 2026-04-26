@@ -7,7 +7,7 @@ RUN npm config set fetch-retries 5 \
     && npm config set fetch-retry-factor 2 \
     && npm config set fetch-retry-mintimeout 2000 \
     && npm config set fetch-retry-maxtimeout 120000 \
-    && npm ci
+    && for attempt in 1 2 3; do npm ci && break; if [ "$attempt" -eq 3 ]; then exit 1; fi; sleep $((attempt * 5)); done
 
 COPY frontend/ ./
 RUN npm run build
@@ -20,7 +20,7 @@ WORKDIR /backend
 ENV PYTHONUNBUFFERED=1
 
 COPY backend/requirements.txt ./
-RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
+RUN for attempt in 1 2 3; do pip install --prefix=/install --no-cache-dir --retries 5 --timeout 120 -r requirements.txt && break; if [ "$attempt" -eq 3 ]; then exit 1; fi; sleep $((attempt * 5)); done
 
 COPY backend/ ./
 
