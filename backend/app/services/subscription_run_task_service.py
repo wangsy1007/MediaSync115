@@ -15,6 +15,7 @@ class SubscriptionRunTaskService:
         self._tasks: dict[str, dict[str, Any]] = {}
         self._running_by_channel: dict[str, str] = {}
         self._lock = asyncio.Lock()
+        self._background_tasks: set[asyncio.Task] = set()
 
     async def start(
         self, channel: str, force_auto_download: bool = False
@@ -85,9 +86,11 @@ class SubscriptionRunTaskService:
             },
         )
 
-        asyncio.create_task(
+        task = asyncio.create_task(
             self._run_task(task_id, normalized_channel, bool(force_auto_download))
         )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
         return dict(task)
 
     async def get(self, task_id: str) -> dict[str, Any] | None:
@@ -96,6 +99,17 @@ class SubscriptionRunTaskService:
             if not task:
                 return None
             return dict(task)
+
+    async def get_running_channel(self, channel: str) -> dict[str, Any] | None:
+        async with self._lock:
+            for ch in (["all"] if channel != "all" else []) + [channel]:
+                task_id = self._running_by_channel.get(ch)
+                if task_id and task_id in self._tasks:
+                    task = dict(self._tasks[task_id])
+                    task["already_running"] = True
+                    task["running_via"] = "background_task"
+                    return task
+            return None
 
     async def _run_task(
         self, task_id: str, channel: str, force_auto_download: bool

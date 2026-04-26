@@ -23,6 +23,7 @@ from app.api.search import (
     _search_pansou_pan115_resources,
 )
 from app.services.butailing_service import butailing_service
+from app.services.media_postprocess_service import media_postprocess_service
 from app.services.operation_log_service import operation_log_service
 from app.services.emby_service import emby_service
 from app.services.hdhive_service import hdhive_service
@@ -2169,7 +2170,11 @@ class SubscriptionService:
                     record.file_id = offline_folder_id
                     saved += 1
                     await self._notify_transfer_success(
-                        sub.title, record.resource_name, source, "离线下载"
+                        sub.title,
+                        record.resource_name,
+                        source,
+                        "离线下载",
+                        getattr(sub, "poster_path", None),
                     )
                     await operation_log_service.log_background_event(
                         source_type="background_task",
@@ -2323,7 +2328,14 @@ class SubscriptionService:
                     record.file_id = parent_folder_id
                     saved += 1
                     await self._notify_transfer_success(
-                        sub.title, record.resource_name, source, "精准转存"
+                        sub.title,
+                        record.resource_name,
+                        source,
+                        "精准转存",
+                        getattr(sub, "poster_path", None),
+                    )
+                    await media_postprocess_service.trigger_archive_after_transfer(
+                        trigger="subscription_transfer"
                     )
                     await self._create_step_log(
                         db,
@@ -2405,7 +2417,14 @@ class SubscriptionService:
                     record.file_id = parent_folder_id
                     saved += 1
                     await self._notify_transfer_success(
-                        sub.title, record.resource_name, source, "分享转存"
+                        sub.title,
+                        record.resource_name,
+                        source,
+                        "分享转存",
+                        getattr(sub, "poster_path", None),
+                    )
+                    await media_postprocess_service.trigger_archive_after_transfer(
+                        trigger="subscription_transfer"
                     )
                     await self._create_step_log(
                         db,
@@ -2722,6 +2741,7 @@ class SubscriptionService:
         resource_name: str,
         source: str,
         method: str,
+        poster_path: str | None = None,
     ) -> None:
         """转存成功时通过 TG Bot 发送通知。"""
         try:
@@ -2734,7 +2754,7 @@ class SubscriptionService:
                 f"资源：{escape(resource_name)}",
                 f"来源：{escape(source)}　方式：{escape(method)}",
             ]
-            await tg_bot_notify("\n".join(lines))
+            await tg_bot_notify("\n".join(lines), poster_path=poster_path)
         except Exception:
             pass
 

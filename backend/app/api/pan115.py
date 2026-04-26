@@ -7,22 +7,12 @@ import asyncio
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from app.services.pan115_service import Pan115Service, pan115_service
+from app.services.media_postprocess_service import media_postprocess_service
 from app.services.runtime_settings_service import runtime_settings_service
 
 
 async def _trigger_archive_if_enabled(trigger: str = "transfer") -> None:
-    if not runtime_settings_service.get_archive_enabled():
-        return
-    if not runtime_settings_service.get_archive_auto_on_transfer():
-        return
-    if not runtime_settings_service.get_archive_watch_cid():
-        return
-    try:
-        from app.services.archive_service import archive_service
-
-        await archive_service.start_scan(trigger=trigger)
-    except Exception:
-        pass
+    await media_postprocess_service.trigger_archive_after_transfer(trigger=trigger)
 
 
 from pydantic import BaseModel

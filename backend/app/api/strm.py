@@ -34,13 +34,6 @@ def _raise_strm_error(exc: Exception) -> None:
 
 
 def _validate_strm_settings(payload: dict[str, object]) -> None:
-    enabled = bool(
-        payload.get("strm_enabled", runtime_settings_service.get_strm_enabled())
-    )
-    output_dir = str(
-        payload.get("strm_output_dir", runtime_settings_service.get_strm_output_dir())
-        or ""
-    ).strip()
     base_url = str(
         payload.get("strm_base_url", runtime_settings_service.get_strm_base_url()) or ""
     ).strip()
@@ -59,14 +52,8 @@ def _validate_strm_settings(payload: dict[str, object]) -> None:
         raise HTTPException(
             status_code=400, detail="STRM 播放模式仅支持 auto / redirect / proxy"
         )
-    if not enabled:
-        return
-    if not runtime_settings_service.get_archive_output_cid():
-        raise HTTPException(status_code=400, detail="启用 STRM 前请先配置归档输出目录")
-    if not output_dir:
-        raise HTTPException(status_code=400, detail="启用 STRM 前必须配置输出目录")
     if not base_url:
-        raise HTTPException(status_code=400, detail="启用 STRM 前必须配置播放根地址")
+        return
     parsed = urlparse(base_url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise HTTPException(

@@ -45,6 +45,8 @@ backend/.venv-linux3/
 backend/.venv*/
 backend/venv/
 .qoder/
+.codebuddy/
+.opencode/
 
 # Local reports
 api_test_report_*.txt
@@ -60,7 +62,9 @@ test-results/
 /api_test_report_20260315_071350.txt
 /backend.dev.pid
 /data/
+/strm/
 /deploy.sh
 /dev-linux.sh
 /frontend.dev.pid
+/frontend/test_login.cjs
 /QWEN.md

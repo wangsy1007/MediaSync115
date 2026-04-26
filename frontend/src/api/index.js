@@ -7,6 +7,58 @@ const api = axios.create({
   timeout: 30000
 })
 
+const BACKEND_UNAVAILABLE_CODE = 'backend_unavailable'
+const BACKEND_UNAVAILABLE_STATUSES = new Set([502, 503, 504])
+const BACKEND_UNAVAILABLE_MESSAGE = '后端正在启动，请稍后重试'
+
+let lastBackendUnavailableNoticeAt = 0
+
+const sleep = (ms) => new Promise(resolve => window.setTimeout(resolve, ms))
+
+export const isBackendUnavailableError = (error) => {
+  const status = Number(error?.response?.status || 0)
+  const code = String(error?.response?.data?.code || '').trim()
+  return code === BACKEND_UNAVAILABLE_CODE || BACKEND_UNAVAILABLE_STATUSES.has(status)
+}
+
+export const waitForBackendReady = async (maxWaitMs = 45000, intervalMs = 1500) => {
+  if (typeof window === 'undefined' || typeof fetch !== 'function') {
+    return false
+  }
+
+  const deadline = Date.now() + Math.max(1000, Number(maxWaitMs) || 45000)
+  const interval = Math.max(300, Number(intervalMs) || 1500)
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch('/healthz', {
+        method: 'GET',
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json, text/plain, */*'
+        }
+      })
+      if (response.ok) {
+        return true
+      }
+    } catch {
+      // ignore transient health probe failures while backend is warming up.
+    }
+    await sleep(interval)
+  }
+
+  return false
+}
+
+const showBackendUnavailableMessage = () => {
+  const now = Date.now()
+  if (now - lastBackendUnavailableNoticeAt < 4000) {
+    return
+  }
+  lastBackendUnavailableNoticeAt = now
+  ElMessage.warning(BACKEND_UNAVAILABLE_MESSAGE)
+}
+
 api.interceptors.request.use((config) => {
   const nextConfig = { ...config }
   nextConfig.headers = {
@@ -33,6 +85,11 @@ api.interceptors.response.use(
     }
 
     if (isAuthSessionRequest) {
+      return Promise.reject(error)
+    }
+
+    if (isBackendUnavailableError(error)) {
+      showBackendUnavailableMessage()
       return Promise.reject(error)
     }
 

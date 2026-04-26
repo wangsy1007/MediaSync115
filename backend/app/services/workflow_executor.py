@@ -2,6 +2,7 @@ import asyncio
 from collections import defaultdict, deque
 from typing import Any
 
+from app.services.media_postprocess_service import media_postprocess_service
 from app.services.operation_log_service import operation_log_service
 
 
@@ -204,6 +205,10 @@ class WorkflowExecutor:
         )
         if not success:
             return False, f"转存失败: {result}"
+
+        await media_postprocess_service.trigger_archive_after_transfer(
+            trigger="workflow_transfer"
+        )
         return True, "115 转存完成"
 
     async def _action_create_download_record(self, **kwargs) -> tuple[bool, str]:

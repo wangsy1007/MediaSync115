@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, select
 
 from app.core.database import async_session_maker
 from app.models.archive import ArchiveStatus, ArchiveTask
+from app.services.media_postprocess_service import media_postprocess_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pan115_service import Pan115Service
 from app.services.runtime_settings_service import runtime_settings_service
@@ -264,6 +265,7 @@ class ArchiveService:
                         message="监听目录中未发现视频文件，跳过归档",
                         extra={"trigger": trigger, **summary},
                     )
+                    await self._trigger_strm_after_archive(summary, trigger)
                     return summary
 
                 # 阶段二：并发 TMDB 识别（纯网络请求，不涉及 115 操作）
@@ -309,6 +311,7 @@ class ArchiveService:
                     )
                     summary["failed"] = len(video_items)
                     summary["total"] = len(video_items)
+                    await self._trigger_strm_after_archive(summary, trigger)
                     return summary
 
                 # 阶段三：串行处理每个文件（涉及 115 移动/重命名，必须走限速队列）
@@ -363,6 +366,7 @@ class ArchiveService:
                     ),
                     extra={"trigger": trigger, **summary},
                 )
+                await self._trigger_strm_after_archive(summary, trigger)
                 return summary
             except Exception as exc:
                 error_message = self._format_scan_error(exc)
@@ -380,6 +384,14 @@ class ArchiveService:
                     },
                 )
                 raise
+
+    async def _trigger_strm_after_archive(
+        self, summary: dict[str, Any], trigger: str
+    ) -> None:
+        await media_postprocess_service.trigger_strm_after_archive(
+            summary,
+            trigger=f"archive_{str(trigger or 'manual')}",
+        )
 
     # ================================================================
     #  阶段一：扫描源目录文件（参考 QMediaSync 两阶段扫描）

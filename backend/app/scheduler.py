@@ -70,7 +70,7 @@ class SchedulerManager:
         for workflow in workflows:
             await self.update_workflow_job(workflow)
 
-    async def start(self, job_id: str) -> dict[str, Any]:
+    async def start(self, job_id: str, *, force: bool = False) -> dict[str, Any]:
         meta = self._jobs.get(job_id)
         if not meta:
             await operation_log_service.log_background_event(
@@ -85,15 +85,19 @@ class SchedulerManager:
 
         with self._run_lock:
             if meta.get("running"):
-                await operation_log_service.log_background_event(
-                    source_type="scheduler",
-                    module="scheduler",
-                    action="scheduler.job.start",
-                    status="warning",
-                    message=f"调度任务已在运行: {job_id}",
-                    trace_id=job_id,
-                )
-                return {"success": False, "message": f"job is already running: {job_id}"}
+                if force:
+                    logger.warning("Force-resetting stuck running flag for job: %s", job_id)
+                    meta["running"] = False
+                else:
+                    await operation_log_service.log_background_event(
+                        source_type="scheduler",
+                        module="scheduler",
+                        action="scheduler.job.start",
+                        status="warning",
+                        message=f"调度任务已在运行: {job_id}",
+                        trace_id=job_id,
+                    )
+                    return {"success": False, "message": f"job is already running: {job_id}"}
             meta["running"] = True
         await operation_log_service.log_background_event(
             source_type="scheduler",
@@ -159,8 +163,17 @@ class SchedulerManager:
             return {"success": True, "result": result, "persist_error": persist_error or None}
         return {"success": False, "message": run_error, "persist_error": persist_error or None}
 
-    async def run_now(self, job_id: str) -> dict[str, Any]:
-        return await self.start(job_id)
+    async def run_now(self, job_id: str, *, force: bool = False) -> dict[str, Any]:
+        meta = self._jobs.get(job_id)
+        if meta and meta.get("kind") == "dynamic":
+            ref_id = meta.get("ref_id")
+            if ref_id:
+                async with async_session_maker() as db:
+                    task = await db.get(SchedulerTask, int(ref_id))
+                    if task and not task.enabled:
+                        if not force:
+                            return {"success": False, "message": f"task is disabled: {job_id}"}
+        return await self.start(job_id, force=force)
 
     async def trigger_event_workflows(self, event_type: str, payload: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         async with async_session_maker() as db:
@@ -230,7 +243,7 @@ class SchedulerManager:
                 id=job_id,
                 name=task.name,
                 coalesce=True,
-                misfire_grace_time=900,
+                misfire_grace_time=None,
                 max_instances=1,
                 replace_existing=True,
             )
@@ -243,7 +256,7 @@ class SchedulerManager:
                 id=job_id,
                 name=task.name,
                 coalesce=True,
-                misfire_grace_time=900,
+                misfire_grace_time=None,
                 max_instances=1,
                 replace_existing=True,
             )
@@ -274,7 +287,7 @@ class SchedulerManager:
             id=job_id,
             name=f"workflow:{workflow.name}",
             coalesce=True,
-            misfire_grace_time=900,
+            misfire_grace_time=None,
             max_instances=1,
             replace_existing=True,
         )

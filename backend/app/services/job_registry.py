@@ -17,6 +17,8 @@ from app.services.offline_monitor_service import offline_monitor_service
 
 class JobRegistry:
     def __init__(self):
+        self._subscription_lock = asyncio.Lock()
+        self._running_channels: dict[str, str] = {}
         self._registry: dict[str, Callable[..., Any]] = {
             "system.refresh_emby": self._refresh_emby,
             "system.sync_emby_index": self._sync_emby_index,
@@ -131,17 +133,40 @@ class JobRegistry:
         )
         return result
 
+    async def _check_subscription_channel(self, channel: str) -> dict[str, Any]:
+        from app.services.subscription_run_task_service import subscription_run_task_service
+
+        running_task = await subscription_run_task_service.get_running_channel(channel)
+        if running_task:
+            return {
+                "success": False,
+                "message": f"channel {channel} is already running via background task",
+                "already_running": True,
+                "running_task": running_task,
+            }
+        async with self._subscription_lock:
+            if channel in self._running_channels:
+                return {
+                    "success": False,
+                    "message": f"channel {channel} is already running via scheduler",
+                    "already_running": True,
+                }
+            self._running_channels[channel] = "running"
+        try:
+            async with async_session_maker() as db:
+                return await subscription_service.run_channel_check(db, channel)
+        finally:
+            async with self._subscription_lock:
+                self._running_channels.pop(channel, None)
+
     async def _check_subscription_pansou(self, **kwargs) -> dict[str, Any]:
-        async with async_session_maker() as db:
-            return await subscription_service.run_channel_check(db, "pansou")
+        return await self._check_subscription_channel("pansou")
 
     async def _check_subscription_hdhive(self, **kwargs) -> dict[str, Any]:
-        async with async_session_maker() as db:
-            return await subscription_service.run_channel_check(db, "hdhive")
+        return await self._check_subscription_channel("hdhive")
 
     async def _check_subscription_tg(self, **kwargs) -> dict[str, Any]:
-        async with async_session_maker() as db:
-            return await subscription_service.run_channel_check(db, "tg")
+        return await self._check_subscription_channel("tg")
 
     async def _chart_subscription_sync(self, **kwargs) -> dict[str, Any]:
         from app.services.chart_subscription_service import run_chart_subscription

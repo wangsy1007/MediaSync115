@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { authApi } from '@/api'
+import { authApi, isBackendUnavailableError, waitForBackendReady } from '@/api'
 
 const routes = [
   {
@@ -108,7 +108,19 @@ const getAuthSession = async (force = false) => {
       authSessionCache = data || { authenticated: false, username: '' }
       return authSessionCache
     })
-    .catch(() => {
+    .catch(async (error) => {
+      if (isBackendUnavailableError(error)) {
+        const ready = await waitForBackendReady()
+        if (ready) {
+          try {
+            const { data } = await authApi.getSession()
+            authSessionCache = data || { authenticated: false, username: '' }
+            return authSessionCache
+          } catch {
+            // Fall back to unauthenticated below.
+          }
+        }
+      }
       authSessionCache = { authenticated: false, username: '' }
       return authSessionCache
     })

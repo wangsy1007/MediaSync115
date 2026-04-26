@@ -13,6 +13,8 @@ from telegram.ext import (
     filters,
 )
 
+from .notifications import attach_poster_preview
+
 logger = logging.getLogger(__name__)
 
 ITEMS_PER_PAGE = 5
@@ -34,6 +36,21 @@ def _auth_check(allowed_users: list) -> callable:
         return wrapper
 
     return decorator
+
+
+def _current_poster_path(context: ContextTypes.DEFAULT_TYPE) -> str | None:
+    detail = context.user_data.get("current_detail") or {}
+    return detail.get("poster_path")
+
+
+def _with_current_poster(
+    context: ContextTypes.DEFAULT_TYPE, text: str, parse_mode: str = "HTML"
+) -> str:
+    return attach_poster_preview(
+        text,
+        parse_mode=parse_mode,
+        poster_path=_current_poster_path(context),
+    )
 
 
 def register_handlers(app: Application, allowed_users: list) -> None:
@@ -553,7 +570,7 @@ async def _show_detail(
     ]
 
     await query.edit_message_text(
-        "\n".join(lines),
+        _with_current_poster(context, "\n".join(lines)),
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
@@ -596,7 +613,7 @@ async def _show_resource_menu(
     ]
 
     await query.edit_message_text(
-        f"<b>{escape(title)}</b> - 选择资源类型",
+        _with_current_poster(context, f"<b>{escape(title)}</b> - 选择资源类型"),
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
@@ -615,7 +632,9 @@ async def _search_115_resources(
     detail = context.user_data.get("current_detail") or {}
     title = detail.get("title", "未知")
 
-    await query.edit_message_text(f"正在搜索 115 资源: {escape(title)} ...")
+    await query.edit_message_text(
+        _with_current_poster(context, f"正在搜索 115 资源: {escape(title)} ...")
+    )
 
     resources = []
 
@@ -696,7 +715,7 @@ async def _show_115_resource_page(
             ]
         ]
         await query.edit_message_text(
-            f"<b>{escape(title)}</b> - 未找到 115 资源",
+            _with_current_poster(context, f"<b>{escape(title)}</b> - 未找到 115 资源"),
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
@@ -736,7 +755,7 @@ async def _show_115_resource_page(
     )
 
     await query.edit_message_text(
-        "\n".join(lines),
+        _with_current_poster(context, "\n".join(lines)),
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
@@ -755,7 +774,9 @@ async def _search_magnet_resources(
     detail = context.user_data.get("current_detail") or {}
     title = detail.get("title", "未知")
 
-    await query.edit_message_text(f"正在搜索磁力资源: {escape(title)} ...")
+    await query.edit_message_text(
+        _with_current_poster(context, f"正在搜索磁力资源: {escape(title)} ...")
+    )
 
     resources = []
 
@@ -808,7 +829,7 @@ async def _show_magnet_resource_page(
             ]
         ]
         await query.edit_message_text(
-            f"<b>{escape(title)}</b> - 未找到磁力资源",
+            _with_current_poster(context, f"<b>{escape(title)}</b> - 未找到磁力资源"),
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
@@ -848,7 +869,7 @@ async def _show_magnet_resource_page(
     )
 
     await query.edit_message_text(
-        "\n".join(lines),
+        _with_current_poster(context, "\n".join(lines)),
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
@@ -877,9 +898,12 @@ async def _save_115_resource(
         await query.edit_message_text("该资源没有分享链接。")
         return
 
-    await query.edit_message_text(f"正在转存: {escape(title[:50])} ...")
+    await query.edit_message_text(
+        _with_current_poster(context, f"正在转存: {escape(title[:50])} ...")
+    )
 
     try:
+        from app.services.media_postprocess_service import media_postprocess_service
         from app.services.pan115_service import pan115_service
         from app.services.runtime_settings_service import runtime_settings_service
 
@@ -900,6 +924,9 @@ async def _save_115_resource(
 
         state = result.get("state", False) if isinstance(result, dict) else False
         if state or (isinstance(result, dict) and not result.get("error")):
+            await media_postprocess_service.trigger_archive_after_transfer(
+                trigger="tg_bot_transfer"
+            )
             text = f"转存成功: <b>{escape(title[:50])}</b>"
         else:
             error = (
@@ -922,7 +949,7 @@ async def _save_115_resource(
     ]
 
     await query.edit_message_text(
-        text,
+        _with_current_poster(context, text),
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
@@ -948,7 +975,9 @@ async def _add_offline_task(
         await query.edit_message_text("该资源没有磁力链接。")
         return
 
-    await query.edit_message_text(f"正在添加离线任务: {escape(name[:50])} ...")
+    await query.edit_message_text(
+        _with_current_poster(context, f"正在添加离线任务: {escape(name[:50])} ...")
+    )
 
     try:
         from app.services.pan115_service import pan115_service
@@ -984,7 +1013,7 @@ async def _add_offline_task(
     ]
 
     await query.edit_message_text(
-        text,
+        _with_current_poster(context, text),
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup(buttons),
     )
@@ -1043,7 +1072,8 @@ async def _add_subscription(
 
         await tg_bot_notify(
             f"<b>新增订阅</b>\n"
-            f"{'电影' if media_type == 'movie' else '电视剧'}: {escape(title)}"
+            f"{'电影' if media_type == 'movie' else '电视剧'}: {escape(title)}",
+            poster_path=detail.get("poster_path"),
         )
     except Exception as e:
         logger.exception("Failed to add subscription")

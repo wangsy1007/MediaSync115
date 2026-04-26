@@ -46,14 +46,14 @@ async def list_scheduler_jobs():
 
 
 @router.post("/run/{job_id}")
-async def run_scheduler_job(job_id: str):
+async def run_scheduler_job(job_id: str, force: bool = False):
     await operation_log_service.log_background_event(
         source_type="api", module="scheduler",
         action="scheduler.job.run_manual", status="info",
-        message=f"手动执行定时任务：{job_id}",
-        extra={"job_id": job_id},
+        message=f"手动执行定时任务：{job_id}（force={force}）",
+        extra={"job_id": job_id, "force": force},
     )
-    result = await scheduler_manager.run_now(job_id)
+    result = await scheduler_manager.run_now(job_id, force=force)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message") or "run failed")
     return result

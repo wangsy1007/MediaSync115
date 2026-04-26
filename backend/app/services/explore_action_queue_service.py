@@ -13,6 +13,7 @@ from app.core.database import async_session_maker
 from app.models.models import MediaType, Subscription
 from app.services.douban_explore_service import resolve_douban_explore_item
 from app.services.hdhive_service import hdhive_service
+from app.services.media_postprocess_service import media_postprocess_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pan115_service import pan115_service
 from app.services.pansou_service import pansou_service
@@ -1190,6 +1191,9 @@ class ExploreActionQueueService:
                 )
                 continue
 
+            await media_postprocess_service.trigger_archive_after_transfer(
+                trigger="explore_transfer"
+            )
             return {
                 "tmdb_id": tmdb_id,
                 "media_type": media_type,

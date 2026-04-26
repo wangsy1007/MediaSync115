@@ -115,21 +115,38 @@ class SubscriptionSchedulerService:
 
     @staticmethod
     def _build_cron_expr(interval_hours: int, run_time: str) -> str:
-        hours = max(1, min(24, int(interval_hours or 24)))
+        hours = max(1, min(48, int(interval_hours or 24)))
         parts = str(run_time or "03:00").split(":", 1)
         try:
-            hour = max(0, min(23, int(parts[0])))
+            start_hour = max(0, min(23, int(parts[0])))
         except Exception:
-            hour = 3
+            start_hour = 3
         try:
             minute = max(0, min(59, int(parts[1]))) if len(parts) > 1 else 0
         except Exception:
             minute = 0
 
         if hours >= 24:
-            hour_expr = str(hour)
+            hour_expr = str(start_hour)
         else:
-            hour_expr = f"{hour}-23/{hours}"
+            trigger_hours = []
+            h = start_hour
+            while h < 24:
+                trigger_hours.append(h)
+                h += hours
+            if len(trigger_hours) == 1:
+                if start_hour + hours >= 24:
+                    day_hours = [start_hour]
+                    h = hours - (24 - start_hour)
+                    while h < 24:
+                        day_hours.append(h)
+                        h += hours
+                    day_hours.sort()
+                    hour_expr = ",".join(str(h) for h in day_hours)
+                else:
+                    hour_expr = str(start_hour)
+            else:
+                hour_expr = ",".join(str(h) for h in trigger_hours)
         return f"{minute} {hour_expr} * * *"
 
 
