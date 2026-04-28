@@ -19,7 +19,7 @@
     </div>
 
     <div v-else-if="!loaded" class="skeleton-row">
-      <div v-for="index in 6" :key="`skeleton-${index}`" class="skeleton-card">
+      <div v-for="index in skeletonCardCount" :key="`skeleton-${index}`" class="skeleton-card">
         <div class="skeleton-poster" />
         <div class="skeleton-title" />
       </div>
@@ -109,7 +109,7 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, ArrowRight, Star, FolderAdd } from '@element-plus/icons-vue'
 import { searchApi } from '@/api'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
@@ -157,6 +157,9 @@ const emit = defineEmits(['item-click', 'subscribe', 'save', 'merge-emby-status'
 
 const HOME_SECTION_LIMIT = 12
 const PRIORITY_POSTER_COUNT = 6
+const DEFAULT_CARD_WIDTH = 188
+const DESKTOP_ROW_GAP = 16
+const MOBILE_ROW_GAP = 10
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
 const rowItems = ref([])
 const remoteTotal = ref(0)
@@ -165,8 +168,34 @@ const loading = ref(false)
 const loadError = ref('')
 const rowRef = ref(null)
 const containerRef = ref(null)
+const containerWidth = ref(0)
+const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
 const scrollState = ref({ hasLeft: false, hasRight: false })
 let intersectionObserver = null
+let resizeObserver = null
+
+const skeletonCardCount = computed(() => {
+  const width = Math.max(containerWidth.value, 0)
+  const gap = viewportWidth.value <= 768 ? MOBILE_ROW_GAP : DESKTOP_ROW_GAP
+  const cardWidth = getRecommendCardWidth()
+  if (!width || !cardWidth) return 6
+  const estimatedCount = Math.ceil((width + gap) / (cardWidth + gap))
+  return Math.max(2, Math.min(HOME_SECTION_LIMIT, estimatedCount))
+})
+
+const getRecommendCardWidth = () => {
+  if (typeof window === 'undefined' || !containerRef.value) return DEFAULT_CARD_WIDTH
+  const rawValue = window.getComputedStyle(containerRef.value).getPropertyValue('--recommend-card-width')
+  const numericValue = Number.parseFloat(rawValue)
+  return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : DEFAULT_CARD_WIDTH
+}
+
+const updateSkeletonMetrics = () => {
+  containerWidth.value = containerRef.value?.clientWidth || 0
+  if (typeof window !== 'undefined') {
+    viewportWidth.value = window.innerWidth
+  }
+}
 
 const toValidTmdbId = (rawId) => {
   const id = Number(rawId)
@@ -375,11 +404,28 @@ watch(
 )
 
 onMounted(() => {
+  updateSkeletonMetrics()
   fetchSection()
+  if (typeof ResizeObserver !== 'undefined' && containerRef.value) {
+    resizeObserver = new ResizeObserver(() => {
+      updateSkeletonMetrics()
+    })
+    resizeObserver.observe(containerRef.value)
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('resize', updateSkeletonMetrics)
+  }
 })
 
 onBeforeUnmount(() => {
   disconnectObserver()
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('resize', updateSkeletonMetrics)
+  }
 })
 </script>
 
