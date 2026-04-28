@@ -1,7 +1,8 @@
+# NAS 部署用 compose 文件
+# 使用 Docker Hub 镜像，NAS 镜像管理可自动检测更新
 services:
   mediasync115:
-    build: .
-    image: mediasync115:latest
+    image: wangsy1007/mediasync115:latest
     container_name: mediasync115
     restart: unless-stopped
     ports:
@@ -26,3 +27,9 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
+
+# 使用说明:
+# 1. 将本文件上传到 NAS 的 docker 项目目录，重命名为 docker-compose.yml 或 compose.yaml
+# 2. 在 NAS Docker 管理界面中，通过 "项目" 导入本文件部署
+# 3. 后续你推送新镜像到 Docker Hub 后，NAS 镜像管理会提示有可用更新
+# 4. 在 NAS 中点击"更新"即可拉取最新镜像并重建容器

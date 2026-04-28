@@ -8,7 +8,6 @@ const api = axios.create({
 })
 
 const BACKEND_UNAVAILABLE_CODE = 'backend_unavailable'
-const BACKEND_UNAVAILABLE_STATUSES = new Set([502, 503, 504])
 const BACKEND_UNAVAILABLE_MESSAGE = '后端正在启动，请稍后重试'
 
 let lastBackendUnavailableNoticeAt = 0
@@ -16,9 +15,8 @@ let lastBackendUnavailableNoticeAt = 0
 const sleep = (ms) => new Promise(resolve => window.setTimeout(resolve, ms))
 
 export const isBackendUnavailableError = (error) => {
-  const status = Number(error?.response?.status || 0)
   const code = String(error?.response?.data?.code || '').trim()
-  return code === BACKEND_UNAVAILABLE_CODE || BACKEND_UNAVAILABLE_STATUSES.has(status)
+  return code === BACKEND_UNAVAILABLE_CODE
 }
 
 export const waitForBackendReady = async (maxWaitMs = 45000, intervalMs = 1500) => {

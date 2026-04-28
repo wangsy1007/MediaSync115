@@ -237,7 +237,7 @@ const systemDark = ref(supportsMatchMedia ? window.matchMedia('(prefers-color-sc
 const beijingNow = ref(formatBeijingDateTime(new Date()))
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
 const mobileMenuOpen = ref(false)
-const appVersionLabel = ref('v1.1.1')
+const appVersionLabel = ref('v1.1.2')
 const isLoginRoute = computed(() => route.path === '/login')
 
 const activeMenu = computed(() => {

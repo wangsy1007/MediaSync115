@@ -40,7 +40,6 @@ from app.utils.proxy import proxy_manager
 router = APIRouter(prefix="/search", tags=["search"])
 logger = logging.getLogger(__name__)
 EXPLORE_HOME_SECTION_LIMIT = EXPLORE_HOME_WARMUP_LIMIT
-EXPLORE_DOUBAN_SECTION_SYNC_PRIME_LIMIT = 6
 DOUBAN_HOME_SYNC_PRIME_LIMIT = 0
 
 POPULAR_MOVIES_URL = "https://popular-movies-data.stevenlu.com/movies.json"
@@ -1766,13 +1765,13 @@ async def get_explore_section(
         )
 
     try:
-        sync_prime_limit = min(limit, EXPLORE_DOUBAN_SECTION_SYNC_PRIME_LIMIT)
+        # 首屏先返回豆瓣列表，TMDB 匹配交给后台异步回填，避免外网抖动拖慢整页。
         payload = await fetch_douban_section(
             section,
             limit,
             refresh,
             start=start,
-            sync_prime_limit=sync_prime_limit,
+            sync_prime_limit=0,
             async_backfill_limit=limit,
         )
     except Exception as exc:
@@ -1821,13 +1820,12 @@ async def get_explore_douban_section(
         )
 
     try:
-        sync_prime_limit = min(limit, EXPLORE_DOUBAN_SECTION_SYNC_PRIME_LIMIT)
         payload = await fetch_douban_section(
             source,
             limit,
             refresh,
             start=start,
-            sync_prime_limit=sync_prime_limit,
+            sync_prime_limit=0,
             async_backfill_limit=limit,
         )
     except Exception as exc:
