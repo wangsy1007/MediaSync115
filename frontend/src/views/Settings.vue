@@ -4218,8 +4218,9 @@ const createSettingsFolderPickerFolder = async () => {
 
 const confirmSettingsFolderPicker = () => {
   const targetForm = getSettingsFolderForm()
+  const newName = getSettingsFolderPickerCurrentName()
   targetForm.folderId = settingsFolderPickerCurrentCid.value
-  targetForm.folderName = getSettingsFolderPickerCurrentName()
+  targetForm.folderName = newName
   settingsFolderPickerVisible.value = false
   ElMessage.success('目录已选择，点击保存设置生效')
 }
@@ -4252,6 +4253,7 @@ const handleSaveDefaultFolder = async () => {
     const folderId = defaultFolderForm.value.folderId || '0'
     const folderName = defaultFolderForm.value.folderName || (folderId === '0' ? '根目录' : '')
     await pan115Api.setDefaultFolder(folderId, folderName)
+    await fetchDefaultFolder()
     ElMessage.success('默认保存位置设置成功')
   } catch (error) {
     ElMessage.error('设置失败')
@@ -4266,6 +4268,7 @@ const handleSaveOfflineDefaultFolder = async () => {
     const folderId = offlineDefaultFolderForm.value.folderId || '0'
     const folderName = offlineDefaultFolderForm.value.folderName || (folderId === '0' ? '根目录' : '')
     await pan115Api.setOfflineDefaultFolder(folderId, folderName)
+    await fetchOfflineDefaultFolder()
     ElMessage.success('默认离线目录设置成功')
   } catch (error) {
     ElMessage.error('设置失败')
