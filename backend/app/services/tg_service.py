@@ -602,6 +602,12 @@ class TgService:
     async def start_qr_login(self) -> dict[str, Any]:
         self._ensure_login_config()
         await self._clear_expired_qr_pending()
+        proxy = self._resolve_proxy()
+        if proxy and not self._telethon_proxy_supported():
+            raise RuntimeError(
+                "已配置代理但缺少 python-socks 依赖，Telegram 无法使用代理连接。"
+                "请在容器中安装 python-socks[asyncio] 或关闭代理重试。"
+            )
         client = self._build_client("")
         try:
             await client.connect()
