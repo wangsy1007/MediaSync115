@@ -20,7 +20,9 @@ WORKDIR /backend
 ENV PYTHONUNBUFFERED=1
 
 COPY backend/requirements.txt ./
-RUN for attempt in 1 2 3; do pip install --prefix=/install --no-cache-dir --retries 5 --timeout 120 -r requirements.txt && break; if [ "$attempt" -eq 3 ]; then exit 1; fi; sleep $((attempt * 5)); done
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    && pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn \
+    && for attempt in 1 2 3; do pip install --prefix=/install --no-cache-dir --retries 5 --timeout 120 -r requirements.txt && break; if [ "$attempt" -eq 3 ]; then exit 1; fi; sleep $((attempt * 5)); done
 
 COPY backend/ ./
 
