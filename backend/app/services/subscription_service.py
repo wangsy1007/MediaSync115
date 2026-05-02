@@ -2249,8 +2249,7 @@ class SubscriptionService:
                     all_files = await pan_service.get_share_all_files_recursive(
                         share_code, receive_code
                     )
-                    matched_fids: list[str] = []
-                    matched_pairs: set[tuple[int, int]] = set()
+                    matched_candidates: dict[tuple[int, int], list[dict[str, Any]]] = {}
                     parsed_count = 0
                     unparsed_video_count = 0
 
@@ -2261,16 +2260,17 @@ class SubscriptionService:
                         filename = str(item.get("name") or "").strip()
                         if not fid or not filename:
                             continue
+                        is_video_file = self._is_video_filename(filename)
+                        if not is_video_file:
+                            continue
                         parsed = name_parser.parse_episode(filename)
                         if parsed:
                             parsed_count += 1
                             pair = (int(parsed[0]), int(parsed[1]))
                             if pair in missing_episodes:
-                                matched_fids.append(fid)
-                                matched_pairs.add(pair)
+                                matched_candidates.setdefault(pair, []).append(item)
                             continue
-                        if self._is_video_filename(filename):
-                            unparsed_video_count += 1
+                        unparsed_video_count += 1
 
                     await self._create_step_log(
                         db,
@@ -2285,13 +2285,32 @@ class SubscriptionService:
                             "record_id": record.id,
                             "total_files": len(all_files),
                             "parsed_count": parsed_count,
-                            "matched_missing_count": len(matched_fids),
+                            "matched_missing_count": sum(
+                                len(items) for items in matched_candidates.values()
+                            ),
                             "unparsed_video_count": unparsed_video_count,
                             "remaining_missing_count": len(missing_episodes),
                         },
                     )
 
-                    selected_file_ids = list(dict.fromkeys(matched_fids))
+                    selected_items: list[dict[str, Any]] = []
+                    for items in matched_candidates.values():
+                        if len(items) > 1:
+                            selected_items.append(
+                                pan_service.pick_best_video_file(items) or items[0]
+                            )
+                        else:
+                            selected_items.extend(items)
+                    selected_file_ids = list(
+                        dict.fromkeys(
+                            [
+                                str(item.get("fid"))
+                                for item in selected_items
+                                if item.get("fid")
+                            ]
+                        )
+                    )
+                    matched_pairs = set(matched_candidates.keys())
                     selected_mode = "missing"
 
                     if not selected_file_ids:

@@ -15,6 +15,18 @@ from app.core.config import settings
 P115Client = None
 _P115CLIENT_IMPORT_ERROR = ""
 
+VIDEO_FILE_EXTENSIONS = (
+    ".mp4",
+    ".mkv",
+    ".avi",
+    ".ts",
+    ".rmvb",
+    ".flv",
+    ".mov",
+    ".wmv",
+    ".m4v",
+)
+
 
 def _load_p115client() -> None:
     global P115Client
@@ -1063,8 +1075,9 @@ class Pan115Service:
             file_list = []
 
         if file_list:
+            selected_files = self._select_files_for_best_quality_transfer(file_list)
             file_ids = []
-            for f in file_list:
+            for f in selected_files:
                 if isinstance(f, dict):
                     fid = f.get("fid") or f.get("id", "")
                     if fid:
@@ -1074,6 +1087,124 @@ class Pan115Service:
         return {"state": False, "error": "分享内容为空或无法获取"}
 
     # ==================== Cookie管理 ====================
+
+    @staticmethod
+    def _is_video_file_name(filename: str) -> bool:
+        """判断文件名是否为常见视频文件"""
+
+        value = str(filename or "").strip().lower()
+        return bool(value) and value.endswith(VIDEO_FILE_EXTENSIONS)
+
+    @staticmethod
+    def _extract_share_file_size(item: dict[str, Any]) -> int:
+        """从 115 分享文件项中提取字节大小"""
+
+        for key in ("size", "s", "file_size"):
+            raw = item.get(key)
+            if raw is None:
+                continue
+            try:
+                return max(int(float(raw)), 0)
+            except (TypeError, ValueError):
+                continue
+        return 0
+
+    @classmethod
+    def _score_video_file(cls, item: dict[str, Any]) -> tuple[int, int, int, int, int]:
+        """给视频文件打分，分数越高表示画质越优"""
+
+        name = str(item.get("name") or item.get("n") or "")
+        lowered = name.lower()
+
+        resolution_score = 0
+        for score, pattern in (
+            (8000, r"\b(?:8k|4320p)\b"),
+            (4000, r"\b(?:4k|2160p|uhd)\b"),
+            (3000, r"\b(?:1440p|2k|qhd)\b"),
+            (2000, r"\b(?:1080p|fhd|full\s*hd)\b"),
+            (1000, r"\b720p\b"),
+            (500, r"\b480p\b"),
+        ):
+            if re.search(pattern, lowered, re.IGNORECASE):
+                resolution_score = score
+                break
+
+        source_score = 0
+        for score, pattern in (
+            (500, r"\b(?:remux|bdremux)\b"),
+            (400, r"\b(?:bluray|blu-ray|bdrip|bd)\b"),
+            (300, r"\b(?:web[-.\s]?dl|webdl)\b"),
+            (200, r"\bwebrip\b"),
+            (100, r"\bhdtv\b"),
+        ):
+            if re.search(pattern, lowered, re.IGNORECASE):
+                source_score = score
+                break
+
+        dynamic_range_score = 0
+        for score, pattern in (
+            (300, r"\b(?:dolby\s*vision|dovi|dv)\b"),
+            (250, r"\bhdr10\+\b"),
+            (200, r"\bhdr10\b"),
+            (150, r"\bhdr\b"),
+        ):
+            if re.search(pattern, lowered, re.IGNORECASE):
+                dynamic_range_score = score
+                break
+
+        codec_score = 0
+        for score, pattern in (
+            (300, r"\b(?:hevc|h\.?265|x265)\b"),
+            (200, r"\b(?:avc|h\.?264|x264)\b"),
+        ):
+            if re.search(pattern, lowered, re.IGNORECASE):
+                codec_score = score
+                break
+
+        # 明确的 sample/trailer 不应因为体积或标签误判为正片。
+        if re.search(r"\b(?:sample|trailer|preview|预告|样片|片段)\b", lowered):
+            resolution_score -= 10000
+
+        return (
+            resolution_score,
+            source_score,
+            dynamic_range_score,
+            codec_score,
+            cls._extract_share_file_size(item),
+        )
+
+    @classmethod
+    def pick_best_video_file(
+        cls, files: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
+        """从文件列表中选出画质最好的一个视频文件"""
+
+        video_files = [
+            item
+            for item in files
+            if isinstance(item, dict)
+            and cls._is_video_file_name(str(item.get("name") or item.get("n") or ""))
+        ]
+        if not video_files:
+            return None
+        return max(video_files, key=cls._score_video_file)
+
+    @classmethod
+    def _select_files_for_best_quality_transfer(
+        cls, files: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """多视频分享只转存画质最好的一个视频文件"""
+
+        video_files = [
+            item
+            for item in files
+            if isinstance(item, dict)
+            and cls._is_video_file_name(str(item.get("name") or item.get("n") or ""))
+        ]
+        if len(video_files) <= 1:
+            return files
+        best = cls.pick_best_video_file(video_files)
+        return [best] if best else files
 
     async def start_qr_login(self, app: str = "alipaymini") -> Dict[str, Any]:
         """
@@ -1827,9 +1958,11 @@ class Pan115Service:
         if not all_files:
             raise ValueError("分享中没有可转存的文件")
 
+        selected_files = self._select_files_for_best_quality_transfer(all_files)
+
         # 批量转存所有文件（去重）
         file_ids = list(
-            dict.fromkeys([str(f["fid"]) for f in all_files if f.get("fid")])
+            dict.fromkeys([str(f["fid"]) for f in selected_files if f.get("fid")])
         )
         result = await self.save_share_files(
             share_code, file_ids, target_folder_id, receive_code
@@ -1857,12 +1990,16 @@ class Pan115Service:
             raise ValueError(error_msg or "115转存失败，接口未返回成功状态")
 
         # 返回结果包含文件数量
+        selected_best = len(selected_files) != len(all_files)
         return {
             "success": transfer_success,
-            "message": f"成功转存 {len(file_ids)} 个文件",
+            "message": f"成功转存 {len(file_ids)} 个文件"
+            + ("（已自动选择最高画质视频）" if selected_best else ""),
             "folder_id": target_folder_id,
             "folder_name": folder_name,
             "file_count": len(file_ids),
+            "original_file_count": len(all_files),
+            "selected_best_video": selected_best,
             "result": result,
         }
 
@@ -1878,8 +2015,9 @@ class Pan115Service:
         if not all_files:
             raise ValueError("分享中没有可转存的文件")
 
+        selected_files = self._select_files_for_best_quality_transfer(all_files)
         file_ids = list(
-            dict.fromkeys([str(f["fid"]) for f in all_files if f.get("fid")])
+            dict.fromkeys([str(f["fid"]) for f in selected_files if f.get("fid")])
         )
         result = await self.save_share_files(
             share_code, file_ids, str(parent_id or "0"), receive_code
@@ -1906,11 +2044,15 @@ class Pan115Service:
                 )
             raise ValueError(error_msg or "115转存失败，接口未返回成功状态")
 
+        selected_best = len(selected_files) != len(all_files)
         return {
             "success": transfer_success,
-            "message": f"成功直存 {len(file_ids)} 个文件",
+            "message": f"成功直存 {len(file_ids)} 个文件"
+            + ("（已自动选择最高画质视频）" if selected_best else ""),
             "target_parent_id": str(parent_id or "0"),
             "file_count": len(file_ids),
+            "original_file_count": len(all_files),
+            "selected_best_video": selected_best,
             "save_mode": "direct",
             "result": result,
         }

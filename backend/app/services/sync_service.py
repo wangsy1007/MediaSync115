@@ -108,14 +108,16 @@ class SyncService:
             if not all_files:
                 return {"success": False, "message": "分享链接中没有找到文件", "saved_count": 0}
 
-            missing_fids = []
-            matched_files = []
+            candidates_by_episode: dict[tuple[int, int], list[dict[str, Any]]] = {}
+            unparsed_video_candidates: list[dict[str, Any]] = []
 
             # 4. 文件名解析与过滤
             for f in all_files:
                 filename = f.get("name", "")
                 fid = f.get("fid")
                 if not fid or not filename:
+                    continue
+                if not pan115_service._is_video_file_name(filename):
                     continue
                     
                 # 尝试解析季号和集号
@@ -128,11 +130,28 @@ class SyncService:
                     if (season, episode) in existing_episodes:
                         logger.info("跳过已存在剧集: %s (S%02dE%02d)", filename, season, episode)
                         continue
+                    candidates_by_episode.setdefault((season, episode), []).append(f)
                 else:
-                    logger.info("未能解析出集数的视频，默认加入转存队列: %s", filename)
+                    logger.info("未能解析出集数的视频，加入候选队列: %s", filename)
+                    unparsed_video_candidates.append(f)
 
-                missing_fids.append(str(fid))
-                matched_files.append(filename)
+            selected_files: list[dict[str, Any]] = []
+            for candidates in candidates_by_episode.values():
+                if len(candidates) > 1:
+                    best = pan115_service.pick_best_video_file(candidates)
+                    selected_files.append(best or candidates[0])
+                else:
+                    selected_files.extend(candidates)
+
+            if unparsed_video_candidates:
+                if len(unparsed_video_candidates) > 1:
+                    best = pan115_service.pick_best_video_file(unparsed_video_candidates)
+                    selected_files.append(best or unparsed_video_candidates[0])
+                else:
+                    selected_files.extend(unparsed_video_candidates)
+
+            missing_fids = [str(f.get("fid")) for f in selected_files if f.get("fid")]
+            matched_files = [str(f.get("name") or "") for f in selected_files]
 
             # 5. 精准转存
             if not missing_fids:
