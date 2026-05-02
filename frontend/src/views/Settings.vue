@@ -3998,15 +3998,12 @@ const pollSubscriptionTask = async (taskId) => {
     const { data } = await subscriptionApi.getRunTask(taskId)
     runningTaskMessage.value = data?.message || ''
     const status = String(data?.status || '')
-    if (status === 'success') {
-      return { ok: true, task: data }
-    }
-    if (status === 'failed') {
-      return { ok: false, task: data }
+    if (['success', 'partial', 'failed'].includes(status)) {
+      return { ok: status !== 'failed', status, task: data }
     }
     await wait(2000)
   }
-  return { ok: false, task: { error: '任务执行超时，请稍后查看日志' } }
+  return { ok: false, status: 'timeout', task: { error: '任务执行超时，请稍后查看日志' } }
 }
 
 const handleRunSubscriptionChannel = async (channel) => {
@@ -4028,7 +4025,11 @@ const handleRunSubscriptionChannel = async (channel) => {
     const taskResult = await pollSubscriptionTask(runningTaskId.value)
     if (taskResult.ok) {
       const message = taskResult.task?.result?.message || taskResult.task?.message || `${channel} 执行完成`
-      ElMessage.success(message)
+      if (taskResult.status === 'partial') {
+        ElMessage.warning(message)
+      } else {
+        ElMessage.success(message)
+      }
     } else {
       const errorMessage = taskResult.task?.error || taskResult.task?.message || `${channel} 执行失败`
       ElMessage.error(errorMessage)
@@ -4069,10 +4070,12 @@ const handleRunAllChannels = async () => {
     const taskResult = await pollSubscriptionTask(runningTaskId.value)
     if (taskResult.ok) {
       const result = taskResult.task?.result || {}
-      const successCount = result.success_count || 0
-      const failedCount = result.failed_count || 0
+      const successCount = Number(result.success_count ?? result.auto_saved_count ?? 0)
+      const failedCount = Number(result.failed_count ?? result.auto_failed_count ?? 0)
       const message = taskResult.task?.message || `全部渠道执行完成: ${successCount} 成功, ${failedCount} 失败`
-      if (failedCount === 0) {
+      if (taskResult.status === 'partial') {
+        ElMessage.warning(message)
+      } else if (failedCount === 0) {
         ElMessage.success(message)
       } else if (successCount > 0) {
         ElMessage.warning(message)
