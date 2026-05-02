@@ -2,6 +2,8 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { BEIJING_TIMEZONE } from '@/utils/timezone'
 
+const SAVE_OPERATION_TIMEOUT = 180000
+
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000
@@ -433,14 +435,22 @@ export const pan115Api = {
   saveShareAll: (shareCode, pid = '0', receiveCode = '') => 
     api.post('/pan115/share/save-all', null, { params: { share_code: shareCode, pid, receive_code: receiveCode } }),
   
-  saveShareToFolder: (shareUrl, folderName, parentId = '0', receiveCode = '', tmdbId = null) => 
-    api.post('/pan115/share/save-to-folder', { share_url: shareUrl, folder_name: folderName, parent_id: parentId, receive_code: receiveCode, tmdb_id: tmdbId }),
+  saveShareToFolder: (shareUrl, folderName, parentId = '0', receiveCode = '', tmdbId = null) =>
+    api.post(
+      '/pan115/share/save-to-folder',
+      { share_url: shareUrl, folder_name: folderName, parent_id: parentId, receive_code: receiveCode, tmdb_id: tmdbId },
+      { timeout: SAVE_OPERATION_TIMEOUT }
+    ),
 
   extractShareFiles: (shareUrl, receiveCode = '') => 
     api.post('/pan115/share/extract-files', { share_url: shareUrl, receive_code: receiveCode }),
 
-  saveShareFilesToFolder: (shareUrl, fileIds, folderName, parentId = '0', receiveCode = '') => 
-    api.post('/pan115/share/save-files-to-folder', { share_url: shareUrl, file_ids: fileIds, folder_name: folderName, parent_id: parentId, receive_code: receiveCode }),
+  saveShareFilesToFolder: (shareUrl, fileIds, folderName, parentId = '0', receiveCode = '') =>
+    api.post(
+      '/pan115/share/save-files-to-folder',
+      { share_url: shareUrl, file_ids: fileIds, folder_name: folderName, parent_id: parentId, receive_code: receiveCode },
+      { timeout: SAVE_OPERATION_TIMEOUT }
+    ),
 
   // ==================== 默认转存文件夹 ====================
   getDefaultFolder: () => api.get('/pan115/default-folder'),
