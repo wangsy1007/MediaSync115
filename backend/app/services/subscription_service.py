@@ -32,6 +32,7 @@ from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.seedhub_service import seedhub_service
 from app.services.tg_service import tg_service
+from app.services.transfer_guard_service import transfer_guard_service
 from app.services.tv_missing_service import tv_missing_service
 from app.utils.resource_tags import sort_by_preference
 from app.utils.name_parser import name_parser
@@ -2160,10 +2161,11 @@ class SubscriptionService:
                         )
                         or "0"
                     )
-                    await pan_service.offline_task_add(
-                        url=record.resource_url,
-                        wp_path_id=offline_folder_id,
-                    )
+                    async with transfer_guard_service.acquire("订阅离线下载提交"):
+                        await pan_service.offline_task_add(
+                            url=record.resource_url,
+                            wp_path_id=offline_folder_id,
+                        )
                     record.status = MediaStatus.COMPLETED
                     record.completed_at = datetime.utcnow()
                     record.error_message = None
@@ -2312,12 +2314,13 @@ class SubscriptionService:
                         )
                         continue
 
-                    result = await pan_service.save_share_files_directly(
-                        share_url=share_link,
-                        file_ids=selected_file_ids,
-                        parent_id=parent_folder_id,
-                        receive_code=receive_code,
-                    )
+                    async with transfer_guard_service.acquire("订阅剧集精准转存"):
+                        result = await pan_service.save_share_files_directly(
+                            share_url=share_link,
+                            file_ids=selected_file_ids,
+                            parent_id=parent_folder_id,
+                            receive_code=receive_code,
+                        )
 
                     if selected_mode == "missing":
                         for pair in matched_pairs:
@@ -2406,11 +2409,12 @@ class SubscriptionService:
                         }
                         break
                 else:
-                    result = await pan_service.save_share_directly(
-                        share_url=share_link,
-                        parent_id=parent_folder_id,
-                        receive_code=receive_code,
-                    )
+                    async with transfer_guard_service.acquire("订阅分享转存"):
+                        result = await pan_service.save_share_directly(
+                            share_url=share_link,
+                            parent_id=parent_folder_id,
+                            receive_code=receive_code,
+                        )
                     record.status = MediaStatus.COMPLETED
                     record.completed_at = datetime.utcnow()
                     record.error_message = None
@@ -2832,6 +2836,7 @@ class SubscriptionService:
             "timeout",
             "频繁",
             "受限",
+            "已有转存任务",
         )
         return any(token in text for token in tokens)
 

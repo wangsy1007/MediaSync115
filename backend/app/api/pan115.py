@@ -4,22 +4,27 @@
 """
 
 import asyncio
+from typing import Awaitable, Callable, List, Optional, TypeVar
 
 from fastapi import APIRouter, HTTPException, Query, Response
-from app.services.pan115_service import Pan115Service, pan115_service
+from pydantic import BaseModel
+
 from app.services.media_postprocess_service import media_postprocess_service
+from app.services.pan115_service import Pan115Service, pan115_service
 from app.services.runtime_settings_service import runtime_settings_service
+from app.services.sync_service import sync_service
+from app.services.transfer_guard_service import (
+    TransferInProgressError,
+    transfer_guard_service,
+)
 
 
 async def _trigger_archive_if_enabled(trigger: str = "transfer") -> None:
     await media_postprocess_service.trigger_archive_after_transfer(trigger=trigger)
 
 
-from pydantic import BaseModel
-from typing import Optional, List
-from app.services.sync_service import sync_service
-
 router = APIRouter(prefix="/pan115", tags=["115网盘"])
+T = TypeVar("T")
 
 
 def is_retryable_115_error(error_msg: str) -> bool:
@@ -75,6 +80,18 @@ def _get_transfer_default_folder_id() -> str:
     folder = runtime_settings_service.get_pan115_default_folder()
     folder_id = str(folder.get("folder_id") or "0").strip()
     return folder_id or "0"
+
+
+async def _run_exclusive_transfer(
+    operation: str, func: Callable[[], Awaitable[T]]
+) -> T:
+    """在互斥保护下执行 115 转存，避免并发转存互相冲突"""
+
+    try:
+        async with transfer_guard_service.acquire(operation):
+            return await func()
+    except TransferInProgressError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 class OfflineTaskCreate(BaseModel):
@@ -179,6 +196,9 @@ class DefaultFolderRequest(BaseModel):
 
 def handle_115_error(e: Exception) -> None:
     """统一处理115 API错误"""
+    if isinstance(e, HTTPException):
+        raise e
+
     error_msg = str(e)
     lowered_error_msg = error_msg.lower()
 
@@ -844,10 +864,13 @@ async def save_share_file(request: SaveShareRequest):
     """
     service = get_service()
     try:
-        target_pid = _get_transfer_default_folder_id()
-        result = await service.save_share_file(
-            request.share_code, request.file_id, target_pid, request.receive_code
-        )
+        async def operation() -> dict:
+            target_pid = _get_transfer_default_folder_id()
+            return await service.save_share_file(
+                request.share_code, request.file_id, target_pid, request.receive_code
+            )
+
+        result = await _run_exclusive_transfer("分享单文件转存", operation)
         asyncio.create_task(_trigger_archive_if_enabled("transfer"))
         return result
     except Exception as e:
@@ -863,10 +886,13 @@ async def save_share_files(request: SaveShareFilesRequest):
     """
     service = get_service()
     try:
-        target_pid = _get_transfer_default_folder_id()
-        result = await service.save_share_files(
-            request.share_code, request.file_ids, target_pid, request.receive_code
-        )
+        async def operation() -> dict:
+            target_pid = _get_transfer_default_folder_id()
+            return await service.save_share_files(
+                request.share_code, request.file_ids, target_pid, request.receive_code
+            )
+
+        result = await _run_exclusive_transfer("分享批量转存", operation)
         asyncio.create_task(_trigger_archive_if_enabled("transfer"))
         return result
     except Exception as e:
@@ -886,8 +912,11 @@ async def save_share_all(
     """
     service = get_service()
     try:
-        target_pid = _get_transfer_default_folder_id()
-        result = await service.save_share_all(share_code, target_pid, receive_code)
+        async def operation() -> dict:
+            target_pid = _get_transfer_default_folder_id()
+            return await service.save_share_all(share_code, target_pid, receive_code)
+
+        result = await _run_exclusive_transfer("分享全量转存", operation)
         asyncio.create_task(_trigger_archive_if_enabled("transfer"))
         return result
     except Exception as e:
@@ -903,51 +932,58 @@ async def save_share_to_folder(request: SaveShareToFolderRequest):
     如果提供了 tmdb_id，则会使用 Emby 差集比对进行追更转存
     """
     service = get_service()
-    transfer_parent_id = _get_transfer_default_folder_id()
-    last_error: Exception | None = None
-    for attempt in range(4):
-        try:
-            # 1. 首先确保目标文件夹存在
-            target_folder_id = await service.get_or_create_folder(
-                transfer_parent_id, request.folder_name
-            )
+    try:
+        async def operation() -> dict:
+            transfer_parent_id = _get_transfer_default_folder_id()
+            last_error: Exception | None = None
+            for attempt in range(4):
+                try:
+                    # 1. 首先确保目标文件夹存在
+                    target_folder_id = await service.get_or_create_folder(
+                        transfer_parent_id, request.folder_name
+                    )
 
-            # 2. 如果提供了 tmdb_id，说明这是一个剧集，进行查漏补缺式的转存
-            if request.tmdb_id:
-                result = await sync_service.sync_tv_show(
-                    tmdb_id=request.tmdb_id,
-                    share_url=request.share_url,
-                    target_folder_id=target_folder_id,
-                    receive_code=request.receive_code,
-                )
-                asyncio.create_task(_trigger_archive_if_enabled("transfer"))
-                return result
+                    # 2. 如果提供了 tmdb_id，说明这是一个剧集，进行查漏补缺式的转存
+                    if request.tmdb_id:
+                        result = await sync_service.sync_tv_show(
+                            tmdb_id=request.tmdb_id,
+                            share_url=request.share_url,
+                            target_folder_id=target_folder_id,
+                            receive_code=request.receive_code,
+                        )
+                        asyncio.create_task(_trigger_archive_if_enabled("transfer"))
+                        return result
 
-            # 3. 如果没有 tmdb_id，走默认的全量转存逻辑
-            result = await service.save_share_to_folder(
-                request.share_url,
-                request.folder_name,
-                transfer_parent_id,
-                request.receive_code,
-            )
-            asyncio.create_task(_trigger_archive_if_enabled("transfer"))
-            return result
-        except Exception as e:
-            last_error = e
-            if attempt < 3 and is_retryable_115_error(str(e)):
-                await asyncio.sleep(build_retry_delay(attempt))
-                continue
-            if is_retryable_115_error(str(e)):
-                return {
-                    "success": False,
-                    "message": "115接口临时受限，已自动重试多次，请稍后再试",
-                    "retryable": True,
-                    "saved_count": 0,
-                }
-            handle_115_error(e)
+                    # 3. 如果没有 tmdb_id，走默认的全量转存逻辑
+                    result = await service.save_share_to_folder(
+                        request.share_url,
+                        request.folder_name,
+                        transfer_parent_id,
+                        request.receive_code,
+                    )
+                    asyncio.create_task(_trigger_archive_if_enabled("transfer"))
+                    return result
+                except Exception as e:
+                    last_error = e
+                    if attempt < 3 and is_retryable_115_error(str(e)):
+                        await asyncio.sleep(build_retry_delay(attempt))
+                        continue
+                    if is_retryable_115_error(str(e)):
+                        return {
+                            "success": False,
+                            "message": "115接口临时受限，已自动重试多次，请稍后再试",
+                            "retryable": True,
+                            "saved_count": 0,
+                        }
+                    raise e
 
-    if last_error:
-        handle_115_error(last_error)
+            if last_error:
+                raise last_error
+            raise ValueError("转存失败")
+
+        return await _run_exclusive_transfer("分享到文件夹转存", operation)
+    except Exception as e:
+        handle_115_error(e)
 
 
 @router.post("/share/extract-files")
@@ -1014,35 +1050,42 @@ async def save_share_files_to_folder(request: SaveShareFilesToFolderRequest):
     将用户勾选的部分文件转存到指定名称的文件夹中
     """
     service = get_service()
-    transfer_parent_id = _get_transfer_default_folder_id()
-    last_error: Exception | None = None
-    for attempt in range(4):
-        try:
-            result = await service.save_share_files_to_folder(
-                request.share_url,
-                request.file_ids,
-                request.folder_name,
-                transfer_parent_id,
-                request.receive_code,
-            )
-            asyncio.create_task(_trigger_archive_if_enabled("transfer"))
-            return result
-        except Exception as e:
-            last_error = e
-            if attempt < 3 and is_retryable_115_error(str(e)):
-                await asyncio.sleep(build_retry_delay(attempt))
-                continue
-            if is_retryable_115_error(str(e)):
-                return {
-                    "success": False,
-                    "message": "115接口临时受限，已自动重试多次，请稍后再试",
-                    "retryable": True,
-                    "saved_count": 0,
-                }
-            handle_115_error(e)
+    try:
+        async def operation() -> dict:
+            transfer_parent_id = _get_transfer_default_folder_id()
+            last_error: Exception | None = None
+            for attempt in range(4):
+                try:
+                    result = await service.save_share_files_to_folder(
+                        request.share_url,
+                        request.file_ids,
+                        request.folder_name,
+                        transfer_parent_id,
+                        request.receive_code,
+                    )
+                    asyncio.create_task(_trigger_archive_if_enabled("transfer"))
+                    return result
+                except Exception as e:
+                    last_error = e
+                    if attempt < 3 and is_retryable_115_error(str(e)):
+                        await asyncio.sleep(build_retry_delay(attempt))
+                        continue
+                    if is_retryable_115_error(str(e)):
+                        return {
+                            "success": False,
+                            "message": "115接口临时受限，已自动重试多次，请稍后再试",
+                            "retryable": True,
+                            "saved_count": 0,
+                        }
+                    raise e
 
-    if last_error:
-        handle_115_error(last_error)
+            if last_error:
+                raise last_error
+            raise ValueError("转存失败")
+
+        return await _run_exclusive_transfer("选集转存", operation)
+    except Exception as e:
+        handle_115_error(e)
 
 
 # ==================== 默认转存文件夹设置 ====================

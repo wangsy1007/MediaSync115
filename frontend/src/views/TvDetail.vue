@@ -548,12 +548,12 @@
       </div>
       
       <template #footer>
-        <el-button @click="selectSaveDialogVisible = false">取消</el-button>
+        <el-button :disabled="saving" @click="selectSaveDialogVisible = false">取消</el-button>
         <el-button 
           type="primary" 
           @click="confirmSelectSave" 
           :loading="saving"
-          :disabled="selectedFiles.length === 0 || extractingFiles"
+          :disabled="saving || selectedFiles.length === 0 || extractingFiles"
         >
           确认转存
         </el-button>
@@ -834,7 +834,7 @@ const isHdhiveResourceSuspectedInvalid = (row) => {
 }
 
 const isPan115ActionDisabled = (row) => {
-  if (Boolean(row?.saving) || Boolean(row?.extracting) || isHdhiveUnlocking(row)) return true
+  if (saving.value || Boolean(row?.saving) || Boolean(row?.extracting) || isHdhiveUnlocking(row)) return true
   if (isHdhiveResourceLocked(row)) return false
   return row?.pan115_savable === false
 }
@@ -1286,8 +1286,11 @@ const checkSubscribed = async () => {
 }
 
 const handleSaveToPan115 = async (item) => {
-  if (item?.saving || item?.extracting || isHdhiveUnlocking(item)) return
+  if (saving.value || item?.saving || item?.extracting || isHdhiveUnlocking(item)) return
+  let defaultFolderId = '0'
+  let folderName = ''
   item.saving = true
+  saving.value = true
   try {
     let shareLink = resolvePanShareLink(item)
     if (item?.source_service === 'hdhive') {
@@ -1298,7 +1301,6 @@ const handleSaveToPan115 = async (item) => {
       return
     }
 
-    let defaultFolderId = '0'
     try {
       const { data } = await pan115Api.getDefaultFolder()
       defaultFolderId = data.folder_id || '0'
@@ -1307,7 +1309,7 @@ const handleSaveToPan115 = async (item) => {
     }
 
     const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
-    const folderName = tv.value.name + ' (' + tv.value.first_air_date?.split('-')[0] + ')' + seasonSuffix
+    folderName = tv.value.name + ' (' + tv.value.first_air_date?.split('-')[0] + ')' + seasonSuffix
     const receiveCode = resolvePanReceiveCode(item, shareLink)
 
     // 由后端统一解析分享链接并执行转存
@@ -1367,12 +1369,13 @@ const handleSaveToPan115 = async (item) => {
     ElMessage.error(detail || error.message || '转存失败')
   } finally {
     item.saving = false
+    saving.value = false
   }
 }
 
 // 选集转存相关方法
 const handleSelectSave = async (item) => {
-  if (item?.saving || item?.extracting || isHdhiveUnlocking(item)) return
+  if (saving.value || item?.saving || item?.extracting || isHdhiveUnlocking(item)) return
   item.extracting = true
   extractingFiles.value = true
   try {
@@ -1475,6 +1478,7 @@ const setFileNameSortOrder = (order) => {
 }
 
 const confirmSelectSave = async () => {
+  if (saving.value) return
   if (selectedFiles.value.length === 0) {
     ElMessage.warning('请先选择要转存的文件')
     return
