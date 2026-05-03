@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., 1.1.5)'
+        description: 'Version tag (e.g., 1.1.6)'
         required: true
         default: 'latest'
 
