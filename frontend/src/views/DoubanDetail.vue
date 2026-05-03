@@ -667,17 +667,31 @@ const copyMagnet = async (text) => {
 const parseReceiveCodeFromShareLink = (shareLink) => {
   const rawLink = String(shareLink || '').trim()
   if (!rawLink) return ''
-  const passwordMatch = rawLink.match(/[?&](?:password|pwd)=([^&#]+)/i)
-  if (!passwordMatch) return ''
-  try {
-    return decodeURIComponent(passwordMatch[1])
-  } catch {
-    return passwordMatch[1]
+
+  const shortMatch = rawLink.match(/^[A-Za-z0-9]+-([A-Za-z0-9]{4})$/)
+  if (shortMatch) return shortMatch[1]
+
+  const passwordMatch = rawLink.match(/[?&](?:password|pwd|receive_code|pickcode|code)=([^&#]+)/i)
+  if (passwordMatch) {
+    try {
+      return decodeURIComponent(passwordMatch[1])
+    } catch {
+      return passwordMatch[1]
+    }
   }
+
+  return ''
+}
+
+const resolvePanReceiveCode = (row, shareLink = '') => {
+  const resolvedLink = String(shareLink || resolvePan115ShareLink(row)).trim()
+  const linkCode = parseReceiveCodeFromShareLink(resolvedLink)
+  if (linkCode) return linkCode
+  return String(row?.access_code || row?.hdhive_access_code || '').trim()
 }
 
 const resolvePan115ShareLink = (row) => {
-  return String(row?.share_link || row?.share_url || row?.pan115_share_link || row?.url || '').trim()
+  return String(row?.share_link || row?.share_url || row?.pan115_share_link || '').trim()
 }
 
 const normalizeKeywordFingerprint = (value) => {
@@ -1117,7 +1131,7 @@ const savePan115Resource = async (row) => {
     }
     const folderId = await getDefaultTransferFolderId()
     const folderName = detail.value?.title || '豆瓣资源'
-    const receiveCode = parseReceiveCodeFromShareLink(shareLink)
+    const receiveCode = resolvePanReceiveCode(row, shareLink)
     const { data } = await pan115Api.saveShareToFolder(
       shareLink,
       folderName,
@@ -1127,29 +1141,37 @@ const savePan115Resource = async (row) => {
     )
     const success = data?.success === true || data?.state === true || data?.result?.success === true || data?.result?.state === true
     if (!success) throw new Error(data?.message || data?.error || data?.result?.error || '转存失败')
-    ElMessage.success(data?.message || '转存成功')
-  } catch (error) {
-    const detail = String(error.response?.data?.detail || error.message || '').trim()
-    if (row?.source_service === 'hdhive' && (detail.includes('4100012') || detail.includes('请输入访问码'))) {
+    if (data?.saved_count === 0) {
+      ElMessage.warning(data?.message || '所有剧集均已存在，无需转存')
+    } else {
+      ElMessage.success(data?.message || '转存成功')
+    }
+} catch (error) {
+    const errorDetail = String(error.response?.data?.detail || error.message || '').trim()
+    if (row?.source_service === 'hdhive' && (errorDetail.includes('4100012') || errorDetail.includes('请输入访问码'))) {
       const unlockedLink = await ensureHdhiveShareLink(row, '转存', {
         forceUnlock: true,
-        reason: '115 返回“请输入访问码”，需要先进行 HDHive 积分解锁。'
+        reason: '115 返回"请输入访问码"，需要先进行 HDHive 积分解锁。'
       })
       if (unlockedLink) {
         try {
           const folderId = await getDefaultTransferFolderId()
           const folderName = detail.value?.title || '豆瓣资源'
-          const receiveCode = parseReceiveCodeFromShareLink(unlockedLink)
-          const { data } = await pan115Api.saveShareToFolder(
-            unlockedLink,
-            folderName,
-            folderId,
-            receiveCode,
-            mappedTmdbId.value && mediaType.value === 'tv' ? mappedTmdbId.value : null
-          )
-          const retrySuccess = data?.success === true || data?.state === true || data?.result?.success === true || data?.result?.state === true
-          if (!retrySuccess) throw new Error(data?.message || data?.error || data?.result?.error || '转存失败')
-          ElMessage.success(data?.message || '转存成功')
+const receiveCode = resolvePanReceiveCode(row, unlockedLink)
+            const { data } = await pan115Api.saveShareToFolder(
+              unlockedLink,
+              folderName,
+              folderId,
+              receiveCode,
+              mappedTmdbId.value && mediaType.value === 'tv' ? mappedTmdbId.value : null
+            )
+            const retrySuccess = data?.success === true || data?.state === true || data?.result?.success === true || data?.result?.state === true
+            if (!retrySuccess) throw new Error(data?.message || data?.error || data?.result?.error || '转存失败')
+            if (data?.saved_count === 0) {
+              ElMessage.warning(data?.message || '所有剧集均已存在，无需转存')
+            } else {
+              ElMessage.success(data?.message || '转存成功')
+            }
           return
         } catch (retryError) {
           const retryDetail = String(retryError.response?.data?.detail || retryError.message || '').trim()
@@ -1159,7 +1181,7 @@ const savePan115Resource = async (row) => {
       }
       return
     }
-    ElMessage.error(detail || '转存失败')
+    ElMessage.error(errorDetail || '转存失败')
   } finally {
     row.saving = false
   }
@@ -1192,7 +1214,7 @@ const openSelectSaveDialog = async (row) => {
 
     const folderId = await getDefaultTransferFolderId()
     const folderName = detail.value?.title || '豆瓣剧集'
-    const receiveCode = parseReceiveCodeFromShareLink(shareLink)
+    const receiveCode = resolvePanReceiveCode(row, shareLink)
     selectSaveForm.value = {
       shareLink,
       receiveCode,
@@ -1207,18 +1229,18 @@ const openSelectSaveDialog = async (row) => {
     if (shareFilesList.value.length === 0) {
       ElMessage.info('未找到可选的视频文件')
     }
-  } catch (error) {
-    const detail = String(error.response?.data?.detail || error.message || '').trim()
-    if (row?.source_service === 'hdhive' && (detail.includes('4100012') || detail.includes('请输入访问码'))) {
+} catch (error) {
+    const errorDetail = String(error.response?.data?.detail || error.message || '').trim()
+    if (row?.source_service === 'hdhive' && (errorDetail.includes('4100012') || errorDetail.includes('请输入访问码'))) {
       const unlockedLink = await ensureHdhiveShareLink(row, '选集转存', {
         forceUnlock: true,
-        reason: '115 返回“请输入访问码”，需要先进行 HDHive 积分解锁。'
+        reason: '115 返回"请输入访问码"，需要先进行 HDHive 积分解锁。'
       })
       if (unlockedLink) {
         try {
           const folderId = await getDefaultTransferFolderId()
           const folderName = detail.value?.title || '豆瓣剧集'
-          const receiveCode = parseReceiveCodeFromShareLink(unlockedLink)
+          const receiveCode = resolvePanReceiveCode(row, unlockedLink)
           selectSaveForm.value = {
             shareLink: unlockedLink,
             receiveCode,
@@ -1241,7 +1263,7 @@ const openSelectSaveDialog = async (row) => {
       }
       return
     }
-    ElMessage.error(detail || '提取文件列表失败')
+    ElMessage.error(errorDetail || '提取文件列表失败')
   } finally {
     row.extracting = false
     extractingFiles.value = false
