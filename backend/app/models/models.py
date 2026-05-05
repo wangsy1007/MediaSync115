@@ -23,7 +23,12 @@ class MediaType(str, enum.Enum):
 
 class MediaStatus(str, enum.Enum):
     PENDING = "pending"
+    MATCHED = "matched"
     DOWNLOADING = "downloading"
+    TRANSFERRING = "transferring"
+    OFFLINE_SUBMITTED = "offline_submitted"
+    OFFLINE_COMPLETED = "offline_completed"
+    ARCHIVING = "archiving"
     COMPLETED = "completed"
     FAILED = "failed"
 
@@ -51,6 +56,20 @@ class Subscription(Base):
     overview: Mapped[str | None] = mapped_column(Text, nullable=True)
     year: Mapped[str | None] = mapped_column(String(10), nullable=True)
     rating: Mapped[float | None] = mapped_column(nullable=True)
+    tv_scope: Mapped[str] = mapped_column(String(20), nullable=False, default="all")
+    tv_season_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tv_episode_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tv_episode_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tv_follow_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="missing")
+    tv_include_specials: Mapped[bool] = mapped_column(Boolean, default=False)
+    preferred_resolutions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preferred_codecs: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preferred_hdr: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preferred_audio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    preferred_subtitles: Mapped[str | None] = mapped_column(Text, nullable=True)
+    exclude_tags: Mapped[str | None] = mapped_column(Text, nullable=True)
+    min_size_gb: Mapped[float | None] = mapped_column(nullable=True)
+    max_size_gb: Mapped[float | None] = mapped_column(nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_download: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -74,6 +93,11 @@ class DownloadRecord(Base):
     resource_url: Mapped[str] = mapped_column(Text, nullable=False)
     resource_type: Mapped[str] = mapped_column(String(20), nullable=False)
     file_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    offline_info_hash: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    offline_task_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    offline_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    offline_submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    offline_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[MediaStatus] = mapped_column(
         SQLEnum(MediaStatus), default=MediaStatus.PENDING
     )

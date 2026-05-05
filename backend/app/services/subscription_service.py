@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,6 +27,8 @@ from app.services.butailing_service import butailing_service
 from app.services.media_postprocess_service import media_postprocess_service
 from app.services.operation_log_service import operation_log_service
 from app.services.emby_service import emby_service
+from app.services.feiniu_service import feiniu_service
+from app.services.feiniu_sync_index_service import feiniu_sync_index_service
 from app.services.hdhive_service import hdhive_service
 from app.services.pan115_service import Pan115Service
 from app.services.pansou_service import pansou_service
@@ -34,8 +37,10 @@ from app.services.seedhub_service import seedhub_service
 from app.services.tg_service import tg_service
 from app.services.transfer_guard_service import transfer_guard_service
 from app.services.tv_missing_service import tv_missing_service
-from app.utils.resource_tags import sort_by_preference
+from app.utils.resource_tags import sort_by_preference, filter_and_sort_by_quality
 from app.utils.name_parser import name_parser
+
+logger = logging.getLogger(__name__)
 
 
 class SubscriptionService:
@@ -97,8 +102,9 @@ class SubscriptionService:
                 DownloadRecord.subscription_id == Subscription.id,
                 or_(
                     DownloadRecord.completed_at.is_not(None),
-                    DownloadRecord.file_id.is_not(None),
-                    DownloadRecord.status == MediaStatus.COMPLETED,
+                    DownloadRecord.status.in_(
+                        (MediaStatus.COMPLETED, MediaStatus.OFFLINE_COMPLETED)
+                    ),
                 ),
             )
             .exists()
@@ -112,6 +118,20 @@ class SubscriptionService:
                 Subscription.media_type,
                 Subscription.year,
                 Subscription.auto_download,
+                Subscription.tv_scope,
+                Subscription.tv_season_number,
+                Subscription.tv_episode_start,
+                Subscription.tv_episode_end,
+                Subscription.tv_follow_mode,
+                Subscription.tv_include_specials,
+                Subscription.preferred_resolutions,
+                Subscription.preferred_codecs,
+                Subscription.preferred_hdr,
+                Subscription.preferred_audio,
+                Subscription.preferred_subtitles,
+                Subscription.exclude_tags,
+                Subscription.min_size_gb,
+                Subscription.max_size_gb,
                 has_successful_transfer,
             )
             .where(
@@ -127,6 +147,26 @@ class SubscriptionService:
                 media_type=row.media_type,
                 year=str(row.year) if row.year is not None else None,
                 auto_download=bool(row.auto_download),
+                tv_scope=str(row.tv_scope or "all"),
+                tv_season_number=int(row.tv_season_number)
+                if row.tv_season_number is not None
+                else None,
+                tv_episode_start=int(row.tv_episode_start)
+                if row.tv_episode_start is not None
+                else None,
+                tv_episode_end=int(row.tv_episode_end)
+                if row.tv_episode_end is not None
+                else None,
+                tv_follow_mode=str(row.tv_follow_mode or "missing"),
+                tv_include_specials=bool(row.tv_include_specials),
+                preferred_resolutions=str(row.preferred_resolutions) if row.preferred_resolutions is not None else None,
+                preferred_codecs=str(row.preferred_codecs) if row.preferred_codecs is not None else None,
+                preferred_hdr=str(row.preferred_hdr) if row.preferred_hdr is not None else None,
+                preferred_audio=str(row.preferred_audio) if row.preferred_audio is not None else None,
+                preferred_subtitles=str(row.preferred_subtitles) if row.preferred_subtitles is not None else None,
+                exclude_tags=str(row.exclude_tags) if row.exclude_tags is not None else None,
+                min_size_gb=float(row.min_size_gb) if row.min_size_gb is not None else None,
+                max_size_gb=float(row.max_size_gb) if row.max_size_gb is not None else None,
                 has_successful_transfer=bool(row.has_successful_transfer),
             )
             for row in subs_result.all()
@@ -138,7 +178,7 @@ class SubscriptionService:
             channel=normalized_channel,
             step="run_start",
             status="info",
-            message=f"任务启动，待处理订阅 {len(subscriptions)} 项",
+            message=f"开始本轮检查，共有 {len(subscriptions)} 个订阅需要处理",
             payload={
                 "checked_count": len(subscriptions),
                 "source_order": source_order,
@@ -180,7 +220,7 @@ class SubscriptionService:
                     subscription_title=sub_title,
                     step="subscription_start",
                     status="info",
-                    message="开始处理订阅",
+                    message=f"正在检查「{sub_title}」的资源和入库状态",
                 )
                 cleanup_before = await self._evaluate_pre_scan_cleanup(
                     db,
@@ -252,7 +292,7 @@ class SubscriptionService:
                     subscription_title=sub_title,
                     step="fetch_resources_summary",
                     status="success" if resources else "warning",
-                    message=f"资源抓取完成，候选 {len(resources)} 条 —— {source_summary}",
+                    message=f"搜索完成，找到 {len(resources)} 个可用资源" if resources else "本轮未找到新资源",
                     payload={
                         "resource_count": len(resources),
                         "source_order": source_attempt_info.get("source_order", []),
@@ -299,9 +339,9 @@ class SubscriptionService:
                     step="store_new_resources",
                     status="info",
                     message=(
-                        f"资源入库完成：新增 {len(created_records)} 条，"
-                        f"重复 {store_stats['duplicate_count']} 条，"
-                        f"无效 {store_stats['invalid_count']} 条"
+                        f"发现 {len(created_records)} 个新资源待处理"
+                        if created_records
+                        else "未发现新资源"
                     ),
                     payload={
                         "checked_count": store_stats["checked_count"],
@@ -358,7 +398,7 @@ class SubscriptionService:
                             subscription_title=sub_title,
                             step="auto_transfer_new_start",
                             status="info",
-                            message=f"开始自动转存新资源 {len(created_records)} 条",
+                            message=f"开始转存 {len(created_records)} 个新资源",
                         )
                         await operation_log_service.log_background_event(
                             source_type="background_task",
@@ -403,8 +443,8 @@ class SubscriptionService:
                             if new_auto_stats["failed"] == 0
                             else "partial",
                             message=(
-                                f"新资源转存完成，成功 {new_auto_stats['saved']} 条，"
-                                f"失败 {new_auto_stats['failed']} 条"
+                                f"新资源转存完成：成功 {new_auto_stats['saved']} 条"
+                                + (f"，失败 {new_auto_stats['failed']} 条" if new_auto_stats['failed'] else "")
                             ),
                         )
                         await operation_log_service.log_background_event(
@@ -435,7 +475,7 @@ class SubscriptionService:
                             subscription_title=sub_title,
                             step="auto_transfer_retry_start",
                             status="info",
-                            message=f"开始重试历史记录 {len(retry_records)} 条",
+                            message=f"开始重试之前失败的 {len(retry_records)} 个资源",
                         )
                         await operation_log_service.log_background_event(
                             source_type="background_task",
@@ -480,8 +520,8 @@ class SubscriptionService:
                             if retry_auto_stats["failed"] == 0
                             else "partial",
                             message=(
-                                f"历史重试完成，成功 {retry_auto_stats['saved']} 条，"
-                                f"失败 {retry_auto_stats['failed']} 条"
+                                f"重试完成：成功 {retry_auto_stats['saved']} 条"
+                                + (f"，失败 {retry_auto_stats['failed']} 条" if retry_auto_stats['failed'] else "")
                             ),
                         )
                         await operation_log_service.log_background_event(
@@ -514,8 +554,11 @@ class SubscriptionService:
                         if sub_failed_transfer_count == 0
                         else "partial",
                         message=(
-                            f"自动转存汇总：成功 {sub_saved_count} 条，失败 {sub_failed_transfer_count} 条，"
-                            f"新资源 {len(created_records)} 条，历史重试 {len(retry_records)} 条"
+                            f"本轮转存汇总：成功 {sub_saved_count} 条"
+                            + (f"，失败 {sub_failed_transfer_count} 条" if sub_failed_transfer_count else "")
+                            + f"（新资源 {len(created_records)} 个"
+                            + (f"，重试 {len(retry_records)} 个" if retry_records else "")
+                            + "）"
                         ),
                     )
                     if cleanup_after_auto is not None:
@@ -564,7 +607,7 @@ class SubscriptionService:
                         subscription_title=sub_title,
                         step="auto_transfer_skip",
                         status="info",
-                        message="该订阅未启用自动转存，本轮仅抓取并记录资源",
+                        message="未开启自动转存，已记录资源供手动处理",
                     )
 
                 await self._create_step_log(
@@ -626,7 +669,7 @@ class SubscriptionService:
                     subscription_title=sub_title,
                     step="subscription_failed",
                     status="failed",
-                    message=f"订阅处理失败: {str(exc)[:300]}",
+                    message=f"处理出错：{str(exc)[:200]}",
                 )
                 await operation_log_service.log_background_event(
                     source_type="background_task",
@@ -780,8 +823,8 @@ class SubscriptionService:
                     run_id=run_id,
                     channel=normalized_channel,
                     step="run_finalize_failed",
-                    status="failed",
-                    message=f"执行收尾失败: {finalize_error[:300]}",
+                    status="warning",
+                    message=f"写入执行日志失败：{finalize_error[:200]}",
                     payload={
                         "error": finalize_error[:500],
                         "status_before_finalize": status.value,
@@ -850,7 +893,7 @@ class SubscriptionService:
                     subscription_title=sub.title,
                     step="subscription_cleanup_movie_transferred",
                     status="success",
-                    message="电影订阅已有成功转存记录，已自动删除",
+                    message="电影已有转存记录，无需重复处理",
                     payload={"reason": "successful_transfer"},
                 )
                 await operation_log_service.log_background_event(
@@ -871,6 +914,7 @@ class SubscriptionService:
             if sub.tmdb_id is None:
                 return {"deleted": False, "tv_missing_snapshot": None}
 
+            # Emby 检查
             movie_status = await emby_service.get_movie_status_by_tmdb(sub.tmdb_id)
             status_text = str(movie_status.get("status") or "")
             if status_text == "ok":
@@ -882,7 +926,7 @@ class SubscriptionService:
                     subscription_title=sub.title,
                     step="movie_emby_check_done",
                     status="info",
-                    message="电影 Emby 状态查询完成",
+                    message="已检查媒体库中电影的入库状态",
                     payload={
                         "tmdb_id": sub.tmdb_id,
                         "exists": bool(movie_status.get("exists")),
@@ -897,9 +941,9 @@ class SubscriptionService:
                         channel=channel,
                         subscription_id=sub.id,
                         subscription_title=sub.title,
-                        step="subscription_cleanup_movie_emby_exists",
-                        status="success",
-                        message="电影已存在于 Emby，已自动删除订阅",
+                    step="subscription_cleanup_movie_emby_exists",
+                    status="success",
+                    message="电影已在媒体库中，无需继续订阅",
                         payload={
                             "tmdb_id": sub.tmdb_id,
                             "matched_item_ids": movie_status.get("item_ids") or [],
@@ -929,14 +973,50 @@ class SubscriptionService:
                     subscription_title=sub.title,
                     step="movie_emby_check_failed",
                     status="warning",
-                    message=f"电影 Emby 状态查询失败，跳过自动清理: {movie_status.get('message') or 'unknown'}",
+                    message=f"媒体库查询失败，暂跳过自动清理：{movie_status.get('message') or '未知错误'}",
                     payload={"tmdb_id": sub.tmdb_id, "status": status_text},
                 )
+
+            # 飞牛检查
+            feiniu_movie_status = await self._check_feiniu_movie_status(sub.tmdb_id)
+            if feiniu_movie_status.get("checked") and feiniu_movie_status.get("exists"):
+                await self._delete_subscription_with_records(db, sub.id)
+                await self._create_step_log(
+                    db,
+                    run_id=run_id,
+                    channel=channel,
+                    subscription_id=sub.id,
+                    subscription_title=sub.title,
+                    step="subscription_cleanup_movie_feiniu_exists",
+                    status="success",
+                    message="电影已在飞牛媒体库中，无需继续订阅",
+                    payload={
+                        "tmdb_id": sub.tmdb_id,
+                        "matched_item_ids": feiniu_movie_status.get("item_ids") or [],
+                    },
+                )
+                await operation_log_service.log_background_event(
+                    source_type="background_task",
+                    module="subscriptions",
+                    action="subscription.item.cleanup_pre_scan",
+                    status="success",
+                    message=f"[{sub.title}] 预扫描清理：电影已存在于飞牛，自动删除订阅",
+                    trace_id=run_id,
+                    extra={
+                        "subscription_id": sub.id,
+                        "title": sub.title,
+                        "reason": "feiniu_exists",
+                        "tmdb_id": sub.tmdb_id,
+                    },
+                )
+                return {"deleted": True}
+
             return {"deleted": False, "tv_missing_snapshot": None}
 
         if sub.media_type != MediaType.TV or sub.tmdb_id is None:
             return {"deleted": False, "tv_missing_snapshot": None}
 
+        # Emby 缺集检查
         await self._create_step_log(
             db,
             run_id=run_id,
@@ -945,11 +1025,22 @@ class SubscriptionService:
             subscription_title=sub.title,
             step="tv_missing_fetch_start",
             status="info",
-            message="开始查询 Emby 缺集状态",
+            message="正在检查剧集的缺集状态",
             payload={"tmdb_id": sub.tmdb_id},
         )
         tv_missing_result = await tv_missing_service.get_tv_missing_status(
-            sub.tmdb_id, include_specials=False
+            sub.tmdb_id,
+            include_specials=bool(sub.tv_include_specials),
+            season_number=sub.tv_season_number
+            if sub.tv_scope in {"season", "episode_range"}
+            else None,
+            episode_start=sub.tv_episode_start
+            if sub.tv_scope == "episode_range"
+            else None,
+            episode_end=sub.tv_episode_end
+            if sub.tv_scope == "episode_range"
+            else None,
+            aired_only=sub.tv_follow_mode == "new",
         )
         status_text = str(tv_missing_result.get("status") or "")
         if status_text == "ok":
@@ -967,7 +1058,7 @@ class SubscriptionService:
                 subscription_title=sub.title,
                 step="tv_missing_fetch_done",
                 status="success",
-                message="缺集状态查询完成",
+                message=f"缺集检查完成：共 {int(counts.get('aired') or 0)} 集，已有 {int(counts.get('existing') or 0)} 集，缺失 {missing_count} 集",
                 payload={
                     "aired_count": int(counts.get("aired") or 0),
                     "existing_count": int(counts.get("existing") or 0),
@@ -984,7 +1075,7 @@ class SubscriptionService:
                     subscription_title=sub.title,
                     step="subscription_cleanup_tv_no_missing",
                     status="success",
-                    message="剧集已不缺集，已自动删除订阅",
+                    message="剧集已全部入库，无需继续订阅",
                     payload={"tmdb_id": sub.tmdb_id, "missing_count": 0},
                 )
                 await operation_log_service.log_background_event(
@@ -1004,6 +1095,39 @@ class SubscriptionService:
                 return {"deleted": True, "tv_missing_snapshot": tv_missing_result}
             return {"deleted": False, "tv_missing_snapshot": tv_missing_result}
 
+        # Emby 缺集查询失败，尝试飞牛缺集检查
+        feiniu_missing_result = await self._check_feiniu_tv_missing_status(sub.tmdb_id)
+        if feiniu_missing_result.get("checked"):
+            feiniu_missing_count = int(feiniu_missing_result.get("missing_count") or -1)
+            if feiniu_missing_count == 0:
+                await self._delete_subscription_with_records(db, sub.id)
+                await self._create_step_log(
+                    db,
+                    run_id=run_id,
+                    channel=channel,
+                    subscription_id=sub.id,
+                    subscription_title=sub.title,
+                    step="subscription_cleanup_tv_no_missing_feiniu",
+                    status="success",
+                    message="剧集在飞牛媒体库中已全部入库，无需继续订阅",
+                    payload={"tmdb_id": sub.tmdb_id, "missing_count": 0, "source": "feiniu"},
+                )
+                await operation_log_service.log_background_event(
+                    source_type="background_task",
+                    module="subscriptions",
+                    action="subscription.item.cleanup_pre_scan",
+                    status="success",
+                    message=f"[{sub.title}] 预扫描清理：剧集在飞牛中已不缺集，自动删除订阅",
+                    trace_id=run_id,
+                    extra={
+                        "subscription_id": sub.id,
+                        "title": sub.title,
+                        "reason": "tv_no_missing_feiniu",
+                        "tmdb_id": sub.tmdb_id,
+                    },
+                )
+                return {"deleted": True, "tv_missing_snapshot": None}
+
         await self._create_step_log(
             db,
             run_id=run_id,
@@ -1012,7 +1136,7 @@ class SubscriptionService:
             subscription_title=sub.title,
             step="tv_missing_fetch_failed",
             status="warning",
-            message=f"缺集状态查询失败，跳过自动清理: {tv_missing_result.get('message') or 'unknown'}",
+            message=f"缺集检查失败，暂跳过自动清理：{tv_missing_result.get('message') or '未知错误'}",
             payload={"tmdb_id": sub.tmdb_id, "status": status_text or "unknown"},
         )
         return {"deleted": False, "tv_missing_snapshot": None}
@@ -1040,6 +1164,251 @@ class SubscriptionService:
             result["cleanup_movie_deleted_count"] = (
                 int(result.get("cleanup_movie_deleted_count") or 0) + 1
             )
+
+    async def cleanup_completed_subscriptions(
+        self, db: AsyncSession
+    ) -> dict[str, Any]:
+        """离线下载完成后检查并清理已完成的订阅（电影已转存或剧集不缺集）"""
+        result: dict[str, Any] = {"deleted_count": 0, "details": []}
+
+        has_successful_transfer = (
+            select(DownloadRecord.id)
+            .where(
+                DownloadRecord.subscription_id == Subscription.id,
+                or_(
+                    DownloadRecord.completed_at.is_not(None),
+                    DownloadRecord.status.in_(
+                        (MediaStatus.COMPLETED, MediaStatus.OFFLINE_COMPLETED)
+                    ),
+                ),
+            )
+            .exists()
+            .label("has_successful_transfer")
+        )
+
+        subs_result = await db.execute(
+            select(
+                Subscription.id,
+                Subscription.tmdb_id,
+                Subscription.title,
+                Subscription.media_type,
+                Subscription.tv_scope,
+                Subscription.tv_season_number,
+                Subscription.tv_episode_start,
+                Subscription.tv_episode_end,
+                Subscription.tv_follow_mode,
+                Subscription.tv_include_specials,
+                has_successful_transfer,
+            )
+            .where(Subscription.is_active == True)  # noqa: E712
+            .order_by(Subscription.id.asc())
+        )
+
+        for row in subs_result.all():
+            sub_id = int(row.id)
+            title = str(row.title or "")
+            media_type = row.media_type
+            tmdb_id = int(row.tmdb_id) if row.tmdb_id is not None else None
+            sub_has_transfer = bool(row.has_successful_transfer)
+
+            should_delete = False
+            reason = ""
+
+            if media_type == MediaType.MOVIE:
+                if sub_has_transfer:
+                    should_delete = True
+                    reason = "电影已有成功转存记录"
+                elif tmdb_id is not None:
+                    try:
+                        movie_status = await emby_service.get_movie_status_by_tmdb(
+                            tmdb_id
+                        )
+                        if str(movie_status.get("status") or "") == "ok" and bool(
+                            movie_status.get("exists")
+                        ):
+                            should_delete = True
+                            reason = "电影已存在于 Emby"
+                    except Exception:
+                        logger.exception(
+                            "离线完成后检查电影 Emby 状态失败: %s", title
+                        )
+                    if not should_delete:
+                        feiniu_movie = await self._check_feiniu_movie_status(tmdb_id)
+                        if feiniu_movie.get("checked") and feiniu_movie.get("exists"):
+                            should_delete = True
+                            reason = "电影已存在于飞牛"
+            elif media_type == MediaType.TV and tmdb_id is not None:
+                try:
+                    tv_missing_result = (
+                        await tv_missing_service.get_tv_missing_status(
+                            tmdb_id,
+                            include_specials=bool(row.tv_include_specials),
+                            season_number=row.tv_season_number
+                            if str(row.tv_scope or "all")
+                            in {"season", "episode_range"}
+                            else None,
+                            episode_start=row.tv_episode_start
+                            if str(row.tv_scope or "all") == "episode_range"
+                            else None,
+                            episode_end=row.tv_episode_end
+                            if str(row.tv_scope or "all") == "episode_range"
+                            else None,
+                            aired_only=str(row.tv_follow_mode or "missing") == "new",
+                        )
+                    )
+                    if str(tv_missing_result.get("status") or "") == "ok":
+                        counts = (
+                            tv_missing_result.get("counts")
+                            if isinstance(tv_missing_result.get("counts"), dict)
+                            else {}
+                        )
+                        missing_count = int(counts.get("missing") or 0)
+                        if missing_count <= 0:
+                            should_delete = True
+                            reason = "剧集已不缺集（Emby）"
+                    if not should_delete:
+                        feiniu_tv = await self._check_feiniu_tv_missing_status(tmdb_id)
+                        if feiniu_tv.get("checked") and feiniu_tv.get("missing_count", -1) == 0:
+                            should_delete = True
+                            reason = "剧集已不缺集（飞牛）"
+                except Exception:
+                    logger.exception("离线完成后检查剧集缺集状态失败: %s", title)
+
+            if should_delete:
+                await self._delete_subscription_with_records(db, sub_id)
+                result["deleted_count"] += 1
+                result["details"].append(
+                    {
+                        "subscription_id": sub_id,
+                        "title": title,
+                        "media_type": str(media_type.value)
+                        if hasattr(media_type, "value")
+                        else str(media_type),
+                        "reason": reason,
+                    }
+                )
+                await operation_log_service.log_background_event(
+                    source_type="background_task",
+                    module="subscriptions",
+                    action="subscription.item.cleanup_offline_completed",
+                    status="success",
+                    message=f"[{title}] 离线完成触发清理：{reason}，自动删除订阅",
+                    extra={
+                        "subscription_id": sub_id,
+                        "title": title,
+                        "reason": reason,
+                    },
+                )
+
+        if result["deleted_count"] > 0:
+            await db.commit()
+            logger.info(
+                "离线完成触发订阅清理，共删除 %d 项订阅",
+                result["deleted_count"],
+            )
+        return result
+
+    async def _check_feiniu_movie_status(
+        self, tmdb_id: int
+    ) -> dict[str, Any]:
+        """检查电影在飞牛中是否已存在，返回 {"checked": bool, "exists": bool, "item_ids": list}"""
+        if not runtime_settings_service.get_feiniu_url().strip():
+            return {"checked": False}
+        try:
+            indexed_result = await feiniu_sync_index_service.get_movie_status(tmdb_id)
+            if indexed_result is not None:
+                if str(indexed_result.get("status") or "") == "ok" and bool(
+                    indexed_result.get("exists")
+                ):
+                    return {
+                        "checked": True,
+                        "exists": True,
+                        "item_ids": indexed_result.get("item_ids") or [],
+                    }
+                return {
+                    "checked": True,
+                    "exists": False,
+                    "item_ids": [],
+                }
+            live_result = await feiniu_service.get_movie_status_by_tmdb(tmdb_id)
+            if str(live_result.get("status") or "") == "ok" and bool(
+                live_result.get("exists")
+            ):
+                return {
+                    "checked": True,
+                    "exists": True,
+                    "item_ids": live_result.get("item_ids") or [],
+                }
+            if str(live_result.get("status") or "") == "not_logged_in":
+                return {"checked": False}
+            return {
+                "checked": str(live_result.get("status") or "") == "ok",
+                "exists": False,
+                "item_ids": [],
+            }
+        except Exception:
+            logger.exception("飞牛电影状态查询失败: tmdb_id=%s", tmdb_id)
+            return {"checked": False}
+
+    async def _check_feiniu_tv_missing_status(
+        self, tmdb_id: int
+    ) -> dict[str, Any]:
+        """检查剧集在飞牛中的缺集状态，返回 {"checked": bool, "missing_count": int}"""
+        if not runtime_settings_service.get_feiniu_url().strip():
+            return {"checked": False}
+        try:
+            from app.services.tmdb_service import tmdb_service as _tmdb
+
+            indexed_result = (
+                await feiniu_sync_index_service.get_tv_existing_episodes(tmdb_id)
+            )
+            feiniu_result = (
+                indexed_result
+                if indexed_result is not None
+                else await feiniu_service.get_tv_episode_status_by_tmdb(tmdb_id)
+            )
+            status_text = str(feiniu_result.get("status") or "")
+            if status_text not in ("ok",):
+                return {"checked": False}
+
+            feiniu_existing = feiniu_result.get("existing_episodes") or set()
+            feiniu_existing_pairs = {
+                (int(p[0]), int(p[1]))
+                for p in feiniu_existing
+                if isinstance(p, (list, tuple)) and len(p) == 2
+            } if isinstance(feiniu_existing, (list, set)) else feiniu_existing
+
+            tmdb_detail = await _tmdb.get_tv_detail(tmdb_id)
+            seasons = (
+                tmdb_detail.get("seasons")
+                if isinstance(tmdb_detail, dict)
+                else []
+            )
+            if not isinstance(seasons, list):
+                seasons = []
+            tmdb_pairs: set[tuple[int, int]] = set()
+            for season in seasons:
+                if not isinstance(season, dict):
+                    continue
+                sn = season.get("season_number")
+                ec = season.get("episode_count")
+                if sn is None or ec is None:
+                    continue
+                sn = int(sn)
+                ec = int(ec)
+                if sn == 0:
+                    continue
+                for ep in range(1, ec + 1):
+                    tmdb_pairs.add((sn, ep))
+
+            if not tmdb_pairs:
+                return {"checked": False}
+
+            missing = tmdb_pairs - feiniu_existing_pairs
+            return {"checked": True, "missing_count": len(missing)}
+        except Exception:
+            logger.exception("飞牛剧集缺集状态查询失败: tmdb_id=%s", tmdb_id)
+            return {"checked": False}
 
     async def _fetch_resources(
         self,
@@ -1134,8 +1503,8 @@ class SubscriptionService:
                         traces,
                     )
                 # Sort by user's resolution/format preferences
-                pref_res = runtime_settings_service.get_resource_preferred_resolutions()
-                pref_fmt = runtime_settings_service.get_resource_preferred_formats()
+                pref_res = self._resolve_subscription_resolutions(sub)
+                pref_fmt = self._resolve_subscription_formats(sub)
                 if pref_res or pref_fmt:
                     source_resources = sort_by_preference(
                         source_resources, pref_res, pref_fmt
@@ -1176,8 +1545,8 @@ class SubscriptionService:
         offline_resources, offline_traces = await self._fetch_offline_magnets(sub)
         traces.extend(offline_traces)
         if offline_resources:
-            pref_res = runtime_settings_service.get_resource_preferred_resolutions()
-            pref_fmt = runtime_settings_service.get_resource_preferred_formats()
+            pref_res = self._resolve_subscription_resolutions(sub)
+            pref_fmt = self._resolve_subscription_formats(sub)
             if pref_res or pref_fmt:
                 offline_resources = sort_by_preference(
                     offline_resources, pref_res, pref_fmt
@@ -1193,6 +1562,22 @@ class SubscriptionService:
 
         # 生成来源尝试链路摘要
         summary = self._build_source_attempt_summary(source_attempts, active_order)
+
+        # 按订阅质量偏好过滤资源
+        quality_filter = self._resolve_subscription_quality_filter(sub)
+        if any(v for v in quality_filter.values() if v is not None):
+            before_count = len(primary_resources)
+            primary_resources = filter_and_sort_by_quality(primary_resources, **quality_filter)
+            filtered_count = before_count - len(primary_resources)
+            if filtered_count > 0:
+                traces.append(
+                    {
+                        "step": "quality_filter_applied",
+                        "status": "info",
+                        "message": f"质量筛选过滤掉 {filtered_count} 个不符合偏好的资源",
+                    }
+                )
+
         return (
             primary_resources,
             traces,
@@ -1904,7 +2289,7 @@ class SubscriptionService:
                 resource_name=self._extract_resource_name(item),
                 resource_url=resource_url,
                 resource_type=resource_type,
-                status=MediaStatus.PENDING,
+                status=MediaStatus.MATCHED,
             )
             db.add(record)
             existing_urls.add(resource_url)
@@ -1937,7 +2322,7 @@ class SubscriptionService:
                 select(DownloadRecord)
                 .where(
                     DownloadRecord.subscription_id == subscription_id,
-                    DownloadRecord.status == MediaStatus.PENDING,
+                    DownloadRecord.status.in_((MediaStatus.PENDING, MediaStatus.MATCHED)),
                 )
                 .order_by(DownloadRecord.created_at.desc())
                 .limit(5)
@@ -1990,7 +2375,7 @@ class SubscriptionService:
                     DownloadRecord.subscription_id == subscription_id,
                     DownloadRecord.resource_url.in_(url_values),
                     DownloadRecord.status.in_(
-                        (MediaStatus.FAILED, MediaStatus.PENDING)
+                        (MediaStatus.FAILED, MediaStatus.PENDING, MediaStatus.MATCHED)
                     ),
                 )
                 .order_by(DownloadRecord.created_at.desc())
@@ -2085,11 +2470,22 @@ class SubscriptionService:
                     subscription_title=sub.title,
                     step="tv_missing_fetch_start",
                     status="info",
-                    message="开始查询 Emby 缺集状态",
+                    message="正在检查剧集的缺集状态",
                     payload={"tmdb_id": sub.tmdb_id},
                 )
                 tv_missing_result = await tv_missing_service.get_tv_missing_status(
-                    sub.tmdb_id, include_specials=False
+                    sub.tmdb_id,
+                    include_specials=bool(sub.tv_include_specials),
+                    season_number=sub.tv_season_number
+                    if sub.tv_scope in {"season", "episode_range"}
+                    else None,
+                    episode_start=sub.tv_episode_start
+                    if sub.tv_scope == "episode_range"
+                    else None,
+                    episode_end=sub.tv_episode_end
+                    if sub.tv_scope == "episode_range"
+                    else None,
+                    aired_only=sub.tv_follow_mode == "new",
                 )
             if str(tv_missing_result.get("status") or "") == "ok":
                 tv_missing_enabled = True
@@ -2107,7 +2503,7 @@ class SubscriptionService:
                         subscription_title=sub.title,
                         step="tv_missing_fetch_done",
                         status="success",
-                        message="缺集状态查询完成",
+                        message=f"缺集检查完成：共 {int(counts.get('aired') or 0)} 集，已有 {int(counts.get('existing') or 0)} 集，缺失 {len(missing_episodes)} 集",
                         payload={
                             "aired_count": int(
                                 (tv_missing_result.get("counts") or {}).get("aired")
@@ -2127,9 +2523,9 @@ class SubscriptionService:
                     channel=channel,
                     subscription_id=sub.id,
                     subscription_title=sub.title,
-                    step="tv_missing_fetch_failed",
-                    status="warning",
-                    message=f"缺集状态查询失败，回退全量转存: {tv_missing_result.get('message') or 'unknown'}",
+                        step="tv_missing_fetch_failed",
+                        status="warning",
+                        message=f"缺集检查失败，将按全量转存处理：{tv_missing_result.get('message') or '未知错误'}",
                     payload={
                         "status": tv_missing_result.get("status"),
                         "message": tv_missing_result.get("message"),
@@ -2143,9 +2539,9 @@ class SubscriptionService:
                 channel=channel,
                 subscription_id=sub.id,
                 subscription_title=sub.title,
-                step="auto_transfer_item_start",
-                status="info",
-                message=f"[{source}] 开始转存：{record.resource_name}",
+                    step="auto_transfer_item_start",
+                    status="info",
+                    message=f"正在处理资源：{record.resource_name}",
                 payload={
                     "source": source,
                     "record_id": record.id,
@@ -2161,13 +2557,23 @@ class SubscriptionService:
                         )
                         or "0"
                     )
+                    record.status = MediaStatus.DOWNLOADING
                     async with transfer_guard_service.acquire("订阅离线下载提交"):
-                        await pan_service.offline_task_add(
+                        offline_result = await pan_service.offline_task_add(
                             url=record.resource_url,
                             wp_path_id=offline_folder_id,
                         )
-                    record.status = MediaStatus.COMPLETED
-                    record.completed_at = datetime.utcnow()
+                    record.status = MediaStatus.OFFLINE_SUBMITTED
+                    record.offline_submitted_at = datetime.utcnow()
+                    record.offline_status = "submitted"
+                    record.offline_info_hash = (
+                        self._extract_offline_info_hash(offline_result)
+                        or self._extract_hash_from_offline_url(record.resource_url)
+                    )
+                    record.offline_task_id = self._extract_offline_task_id(
+                        offline_result
+                    )
+                    record.completed_at = None
                     record.error_message = None
                     record.file_id = offline_folder_id
                     saved += 1
@@ -2188,6 +2594,9 @@ class SubscriptionService:
                             "subscription_id": sub.id,
                             "resource_type": record.resource_type,
                             "source": source,
+                            "record_id": record.id,
+                            "offline_info_hash": record.offline_info_hash,
+                            "offline_task_id": record.offline_task_id,
                         },
                     )
                     # 发送转存成功事件到 Kafka
@@ -2203,7 +2612,7 @@ class SubscriptionService:
                                     "source": source,
                                     "resource_name": record.resource_name,
                                     "transfer_type": "offline",
-                                    "status": "success",
+                                    "status": "offline_submitted",
                                 },
                                 key=str(sub.id),
                             )
@@ -2217,30 +2626,25 @@ class SubscriptionService:
                         subscription_title=sub.title,
                         step="auto_transfer_offline_done",
                         status="success",
-                        message=f"[{source}] 离线下载已提交：{record.resource_name}",
+                        message=f"已提交离线下载，等待完成后自动入库：{record.resource_name}",
                         payload={
                             "source": source,
                             "record_id": record.id,
                             "resource_type": record.resource_type,
                             "target_folder_id": offline_folder_id,
+                            "offline_info_hash": record.offline_info_hash,
+                            "offline_task_id": record.offline_task_id,
                         },
                     )
                     if sub.media_type != MediaType.TV:
-                        subscription_completed = True
-                        cleanup_step = "subscription_cleanup_movie_transferred"
-                        cleanup_message = "电影离线下载已提交，已自动删除订阅"
-                        cleanup_payload = {
-                            "source": source,
-                            "record_id": record.id,
-                            "resource_type": record.resource_type,
-                            "target_folder_id": offline_folder_id,
-                        }
+                        # 离线提交不再等同完成；等待 offline_monitor 绑定 hash 后确认完成。
                         break
                     continue
 
                 share_link, receive_code = self._split_share_link_and_receive_code(
                     record.resource_url
                 )
+                record.status = MediaStatus.TRANSFERRING
                 if tv_missing_enabled and is_tv_subscription:
                     share_code = pan_service._extract_share_code(share_link)
                     if not share_code:
@@ -2280,7 +2684,7 @@ class SubscriptionService:
                         subscription_title=sub.title,
                         step="tv_record_files_parsed",
                         status="info",
-                        message=f"[{source}] 文件解析完成：{record.resource_name}",
+                        message=f"已解析资源文件，找到 {sum(len(items) for items in matched_candidates.values())} 个匹配缺集的文件：{record.resource_name}",
                         payload={
                             "record_id": record.id,
                             "total_files": len(all_files),
@@ -2314,7 +2718,7 @@ class SubscriptionService:
                     selected_mode = "missing"
 
                     if not selected_file_ids:
-                        record.status = MediaStatus.PENDING
+                        record.status = MediaStatus.MATCHED
                         record.completed_at = None
                         record.error_message = None
                         await self._create_step_log(
@@ -2323,9 +2727,9 @@ class SubscriptionService:
                             channel=channel,
                             subscription_id=sub.id,
                             subscription_title=sub.title,
-                            step="tv_record_skip_no_missing",
-                            status="info",
-                            message=f"[{source}] 缺集已补齐，跳过该资源：{record.resource_name}",
+                        step="tv_record_skip_no_missing",
+                        status="info",
+                        message=f"该资源不包含需要的集数，已跳过：{record.resource_name}",
                             payload={
                                 "record_id": record.id,
                                 "remaining_missing_count": len(missing_episodes),
@@ -2344,7 +2748,7 @@ class SubscriptionService:
                     if selected_mode == "missing":
                         for pair in matched_pairs:
                             missing_episodes.discard(pair)
-                    record.status = MediaStatus.PENDING
+                    record.status = MediaStatus.ARCHIVING
                     record.completed_at = None
                     record.error_message = None
                     record.file_id = parent_folder_id
@@ -2367,7 +2771,7 @@ class SubscriptionService:
                         subscription_title=sub.title,
                         step="tv_transfer_selected_done",
                         status="success",
-                        message=f"[{source}] 精准转存成功：{record.resource_name}",
+                        message=f"已转存 {len(selected_file_ids)} 个文件到网盘（还剩 {len(missing_episodes)} 集待补）：{record.resource_name}",
                         payload={
                             "source": source,
                             "record_id": record.id,
@@ -2457,7 +2861,7 @@ class SubscriptionService:
                         subscription_title=sub.title,
                         step="auto_transfer_item_done",
                         status="success",
-                        message=f"[{source}] 转存成功：{record.resource_name}",
+                        message=f"转存成功：{record.resource_name}",
                         payload={
                             "source": source,
                             "record_id": record.id,
@@ -2512,7 +2916,7 @@ class SubscriptionService:
                 if self._is_already_received_error(str(exc)):
                     # 115 返回已接收时视为成功，避免重复任务被统计为失败。
                     if tv_missing_enabled and is_tv_subscription:
-                        record.status = MediaStatus.PENDING
+                        record.status = MediaStatus.ARCHIVING
                         record.completed_at = None
                     else:
                         record.status = MediaStatus.COMPLETED
@@ -2527,7 +2931,7 @@ class SubscriptionService:
                         subscription_title=sub.title,
                         step="auto_transfer_item_done",
                         status="success",
-                        message=f"[{source}] 资源已在网盘中，按成功处理：{record.resource_name}",
+                        message=f"资源已在网盘中，无需重复转存：{record.resource_name}",
                         payload={
                             "source": source,
                             "record_id": record.id,
@@ -2570,9 +2974,9 @@ class SubscriptionService:
                     channel=channel,
                     subscription_id=sub.id,
                     subscription_title=sub.title,
-                    step="auto_transfer_item_failed",
-                    status="failed",
-                    message=f"[{source}] 转存失败：{record.resource_name}",
+                        step="auto_transfer_item_failed",
+                        status="failed",
+                        message=f"转存失败：{record.resource_name}（{str(exc)[:100]}）",
                     payload={
                         "source": source,
                         "record_id": record.id,
@@ -2702,6 +3106,88 @@ class SubscriptionService:
             if val and val.lower().startswith("ed2k://"):
                 return val
         return ""
+
+    @staticmethod
+    def _extract_hash_from_offline_url(url: str) -> str:
+        raw = str(url or "").strip()
+        if not raw:
+            return ""
+        magnet_match = re.search(r"btih:([a-zA-Z0-9]{32,40})", raw, re.IGNORECASE)
+        if magnet_match:
+            return magnet_match.group(1).upper()
+        return ""
+
+    @classmethod
+    def _extract_offline_info_hash(cls, payload: Any) -> str:
+        return cls._extract_first_nested_value(
+            payload,
+            {
+                "info_hash",
+                "infoHash",
+                "hash",
+                "task_hash",
+                "taskHash",
+            },
+        )
+
+    @classmethod
+    def _extract_offline_task_id(cls, payload: Any) -> str:
+        return cls._extract_first_nested_value(
+            payload,
+            {
+                "task_id",
+                "taskId",
+                "taskid",
+                "id",
+            },
+        )
+
+    @classmethod
+    def _extract_first_nested_value(cls, payload: Any, keys: set[str]) -> str:
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                if key in keys and value not in (None, ""):
+                    return str(value).strip()
+            for value in payload.values():
+                found = cls._extract_first_nested_value(value, keys)
+                if found:
+                    return found
+        if isinstance(payload, list):
+            for item in payload:
+                found = cls._extract_first_nested_value(item, keys)
+                if found:
+                    return found
+        return ""
+
+    @staticmethod
+    def _parse_json_list_field(value: str | None) -> list[str]:
+        if not value:
+            return []
+        try:
+            import json as _json
+            parsed = _json.loads(value)
+            if isinstance(parsed, list):
+                return [str(v).strip() for v in parsed if v]
+        except Exception:
+            pass
+        return []
+
+    def _resolve_subscription_resolutions(self, sub: "SubscriptionSnapshot") -> list[str]:
+        return self._parse_json_list_field(getattr(sub, "preferred_resolutions", None)) or runtime_settings_service.get_resource_preferred_resolutions()
+
+    def _resolve_subscription_formats(self, sub: "SubscriptionSnapshot") -> list[str]:
+        return self._parse_json_list_field(getattr(sub, "preferred_codecs", None)) or runtime_settings_service.get_resource_preferred_formats()
+
+    def _resolve_subscription_quality_filter(self, sub: "SubscriptionSnapshot") -> dict[str, Any]:
+        return {
+            "preferred_resolutions": self._parse_json_list_field(getattr(sub, "preferred_resolutions", None)) or None,
+            "preferred_formats": self._parse_json_list_field(getattr(sub, "preferred_codecs", None)) or None,
+            "exclude_labels": self._parse_json_list_field(getattr(sub, "exclude_tags", None)) or None,
+            "preferred_languages": self._parse_json_list_field(getattr(sub, "preferred_audio", None)) or None,
+            "preferred_subtitles": self._parse_json_list_field(getattr(sub, "preferred_subtitles", None)) or None,
+            "min_size_gb": getattr(sub, "min_size_gb", None),
+            "max_size_gb": getattr(sub, "max_size_gb", None),
+        }
 
     @staticmethod
     def _determine_resource_type(url: str) -> str:
@@ -2892,21 +3378,22 @@ class SubscriptionService:
 
     @staticmethod
     def _build_message(result: dict[str, Any]) -> str:
-        new_resource_desc = (
-            f"新增资源 {result['new_resource_count']} 条"
-            if result["new_resource_count"] > 0
-            else "本轮未发现新资源"
-        )
-        return (
-            f"{result['channel']} 检查完成: 订阅 {result['checked_count']} 项, "
-            f"扫描资源 {result['resource_checked_count']} 条(重复 {result['resource_duplicate_count']}), "
-            f"{new_resource_desc}, "
-            f"自动清理订阅 {result['cleanup_deleted_count']} 项(电影 {result['cleanup_movie_deleted_count']} / 剧集 {result['cleanup_tv_deleted_count']}), "
-            f"HDHive 解锁 尝试 {result['hdhive_unlock_attempted_count']} 条(成功 {result['hdhive_unlock_success_count']} / 失败 {result['hdhive_unlock_failed_count']} / 跳过 {result['hdhive_unlock_skipped_count']} / 消耗 {result['hdhive_unlock_points_spent']} 积分), "
-            f"自动转存成功 {result['auto_saved_count']} 条(新资源 {result['auto_new_saved_count']} / 历史重试 {result['auto_retry_saved_count']}), "
-            f"自动转存失败 {result['auto_failed_count']} 条(新资源 {result['auto_new_failed_count']} / 历史重试 {result['auto_retry_failed_count']}), "
-            f"检查失败 {result['failed_count']} 项"
-        )
+        parts = [
+            f"共 {result['checked_count']} 个订阅",
+        ]
+        if result["new_resource_count"] > 0:
+            parts.append(f"发现 {result['new_resource_count']} 个新资源")
+        else:
+            parts.append("未发现新资源")
+        if result["auto_saved_count"] > 0:
+            parts.append(f"转存成功 {result['auto_saved_count']} 个")
+        if result["auto_failed_count"] > 0:
+            parts.append(f"转存失败 {result['auto_failed_count']} 个")
+        if result["cleanup_deleted_count"] > 0:
+            parts.append(f"自动完成 {result['cleanup_deleted_count']} 个订阅")
+        if result["failed_count"] > 0:
+            parts.append(f"处理出错 {result['failed_count']} 个")
+        return "，".join(parts)
 
 
 subscription_service = SubscriptionService()
@@ -2920,4 +3407,18 @@ class SubscriptionSnapshot:
     media_type: MediaType
     year: str | None
     auto_download: bool
+    tv_scope: str
+    tv_season_number: int | None
+    tv_episode_start: int | None
+    tv_episode_end: int | None
+    tv_follow_mode: str
+    tv_include_specials: bool
+    preferred_resolutions: str | None
+    preferred_codecs: str | None
+    preferred_hdr: str | None
+    preferred_audio: str | None
+    preferred_subtitles: str | None
+    exclude_tags: str | None
+    min_size_gb: float | None
+    max_size_gb: float | None
     has_successful_transfer: bool

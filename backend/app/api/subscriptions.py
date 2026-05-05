@@ -167,6 +167,51 @@ def summarize_failure_groups(details: Any) -> dict[str, int]:
     return summary
 
 
+def normalize_tv_subscription_options(payload: dict[str, Any], media_type: MediaType) -> None:
+    if media_type != MediaType.TV:
+        payload["tv_scope"] = "all"
+        payload["tv_season_number"] = None
+        payload["tv_episode_start"] = None
+        payload["tv_episode_end"] = None
+        payload["tv_follow_mode"] = "missing"
+        payload["tv_include_specials"] = False
+        return
+
+    scope = str(payload.get("tv_scope") or "all").strip().lower()
+    if scope not in {"all", "season", "episode_range"}:
+        raise HTTPException(status_code=400, detail="无效的剧集订阅范围")
+    follow_mode = str(payload.get("tv_follow_mode") or "missing").strip().lower()
+    if follow_mode not in {"missing", "new"}:
+        raise HTTPException(status_code=400, detail="无效的剧集追踪模式")
+
+    season_number = payload.get("tv_season_number")
+    episode_start = payload.get("tv_episode_start")
+    episode_end = payload.get("tv_episode_end")
+    if scope in {"season", "episode_range"}:
+        if season_number is None or int(season_number) < 0:
+            raise HTTPException(status_code=400, detail="指定季订阅需要有效季号")
+        payload["tv_season_number"] = int(season_number)
+    else:
+        payload["tv_season_number"] = None
+
+    if scope == "episode_range":
+        if episode_start is None or episode_end is None:
+            raise HTTPException(status_code=400, detail="指定集段订阅需要起止集号")
+        episode_start = int(episode_start)
+        episode_end = int(episode_end)
+        if episode_start <= 0 or episode_end <= 0 or episode_start > episode_end:
+            raise HTTPException(status_code=400, detail="无效的订阅集段范围")
+        payload["tv_episode_start"] = episode_start
+        payload["tv_episode_end"] = episode_end
+    else:
+        payload["tv_episode_start"] = None
+        payload["tv_episode_end"] = None
+
+    payload["tv_scope"] = scope
+    payload["tv_follow_mode"] = follow_mode
+    payload["tv_include_specials"] = bool(payload.get("tv_include_specials"))
+
+
 class SubscriptionCreate(BaseModel):
     douban_id: Optional[str] = None
     tmdb_id: Optional[int] = None
@@ -177,11 +222,39 @@ class SubscriptionCreate(BaseModel):
     year: Optional[str] = None
     rating: Optional[float] = None
     auto_download: bool = True
+    tv_scope: str = "all"
+    tv_season_number: Optional[int] = None
+    tv_episode_start: Optional[int] = None
+    tv_episode_end: Optional[int] = None
+    tv_follow_mode: str = "missing"
+    tv_include_specials: bool = False
+    preferred_resolutions: Optional[List[str]] = None
+    preferred_codecs: Optional[List[str]] = None
+    preferred_hdr: Optional[List[str]] = None
+    preferred_audio: Optional[List[str]] = None
+    preferred_subtitles: Optional[List[str]] = None
+    exclude_tags: Optional[List[str]] = None
+    min_size_gb: Optional[float] = None
+    max_size_gb: Optional[float] = None
 
 
 class SubscriptionUpdate(BaseModel):
     title: Optional[str] = None
     is_active: Optional[bool] = None
+    tv_scope: Optional[str] = None
+    tv_season_number: Optional[int] = None
+    tv_episode_start: Optional[int] = None
+    tv_episode_end: Optional[int] = None
+    tv_follow_mode: Optional[str] = None
+    tv_include_specials: Optional[bool] = None
+    preferred_resolutions: Optional[List[str]] = None
+    preferred_codecs: Optional[List[str]] = None
+    preferred_hdr: Optional[List[str]] = None
+    preferred_audio: Optional[List[str]] = None
+    preferred_subtitles: Optional[List[str]] = None
+    exclude_tags: Optional[List[str]] = None
+    min_size_gb: Optional[float] = None
+    max_size_gb: Optional[float] = None
 
 
 class DownloadRecordCreate(BaseModel):
@@ -199,6 +272,9 @@ class SubscriptionRunRequest(BaseModel):
 class DownloadRecordUpdate(BaseModel):
     status: Optional[MediaStatus] = None
     error_message: Optional[str] = None
+    offline_info_hash: Optional[str] = None
+    offline_task_id: Optional[str] = None
+    offline_status: Optional[str] = None
 
 
 async def _enrich_subscription_ids(
@@ -329,6 +405,7 @@ async def create_subscription(
         raise HTTPException(status_code=400, detail="Subscription already exists")
 
     payload = subscription.model_dump()
+    normalize_tv_subscription_options(payload, subscription.media_type)
 
     # 自动补全 ID 信息
     enriched_ids = await _enrich_subscription_ids(
@@ -487,8 +564,9 @@ async def list_tv_missing_status(
             DownloadRecord.subscription_id == Subscription.id,
             or_(
                 DownloadRecord.completed_at.is_not(None),
-                DownloadRecord.file_id.is_not(None),
-                DownloadRecord.status == MediaStatus.COMPLETED,
+                DownloadRecord.status.in_(
+                    (MediaStatus.COMPLETED, MediaStatus.OFFLINE_COMPLETED)
+                ),
             ),
         )
         .exists()
@@ -505,9 +583,26 @@ async def list_tv_missing_status(
     )
     rows = result.scalars().all()
 
-    semaphore = asyncio.Semaphore(5)
+    tmdb_ids = [int(sub.tmdb_id) for sub in rows if sub.tmdb_id is not None]
+    options_by_tmdb = {
+        int(sub.tmdb_id): {
+            "include_specials": bool(sub.tv_include_specials),
+            "season_number": sub.tv_season_number if sub.tv_scope in {"season", "episode_range"} else None,
+            "episode_start": sub.tv_episode_start if sub.tv_scope == "episode_range" else None,
+            "episode_end": sub.tv_episode_end if sub.tv_scope == "episode_range" else None,
+            "aired_only": sub.tv_follow_mode == "new",
+        }
+        for sub in rows
+        if sub.tmdb_id is not None
+    }
+    status_by_tmdb = await tv_missing_service.get_tv_missing_statuses(
+        tmdb_ids,
+        include_specials=False,
+        refresh=bool(refresh),
+        options_by_tmdb=options_by_tmdb,
+    )
 
-    async def build_one(sub: Subscription) -> dict[str, Any]:
+    def build_one(sub: Subscription) -> dict[str, Any]:
         if sub.tmdb_id is None:
             return {
                 "subscription_id": sub.id,
@@ -523,65 +618,24 @@ async def list_tv_missing_status(
                 "missing_by_season": {},
             }
 
-        try:
-            async with semaphore:
-                status = await asyncio.wait_for(
-                    tv_missing_service.get_tv_missing_status(
-                        int(sub.tmdb_id),
-                        include_specials=False,
-                        refresh=bool(refresh),
-                    ),
-                    timeout=20.0,
-                )
-            counts = (
-                status.get("counts") if isinstance(status.get("counts"), dict) else {}
-            )
-            return {
-                "subscription_id": sub.id,
-                "tmdb_id": sub.tmdb_id,
-                "title": sub.title,
-                "year": sub.year,
-                "poster_path": sub.poster_path,
-                "status": str(status.get("status") or "unknown"),
-                "message": str(status.get("message") or ""),
-                "total_count": int(counts.get("total") or counts.get("aired") or 0),
-                "aired_count": int(counts.get("aired") or 0),
-                "existing_count": int(counts.get("existing") or 0),
-                "missing_count": int(counts.get("missing") or 0),
-                "missing_by_season": status.get("missing_by_season") or {},
-            }
-        except asyncio.TimeoutError:
-            return {
-                "subscription_id": sub.id,
-                "tmdb_id": sub.tmdb_id,
-                "title": sub.title,
-                "year": sub.year,
-                "poster_path": sub.poster_path,
-                "status": "timeout",
-                "message": "缺集状态计算超时，请稍后重试",
-                "total_count": 0,
-                "aired_count": 0,
-                "existing_count": 0,
-                "missing_count": 0,
-                "missing_by_season": {},
-            }
-        except Exception as exc:
-            return {
-                "subscription_id": sub.id,
-                "tmdb_id": sub.tmdb_id,
-                "title": sub.title,
-                "year": sub.year,
-                "poster_path": sub.poster_path,
-                "status": "error",
-                "message": str(exc),
-                "total_count": 0,
-                "aired_count": 0,
-                "existing_count": 0,
-                "missing_count": 0,
-                "missing_by_season": {},
-            }
+        status = status_by_tmdb.get(int(sub.tmdb_id)) or {}
+        counts = status.get("counts") if isinstance(status.get("counts"), dict) else {}
+        return {
+            "subscription_id": sub.id,
+            "tmdb_id": sub.tmdb_id,
+            "title": sub.title,
+            "year": sub.year,
+            "poster_path": sub.poster_path,
+            "status": str(status.get("status") or "unknown"),
+            "message": str(status.get("message") or ""),
+            "total_count": int(counts.get("total") or counts.get("aired") or 0),
+            "aired_count": int(counts.get("aired") or 0),
+            "existing_count": int(counts.get("existing") or 0),
+            "missing_count": int(counts.get("missing") or 0),
+            "missing_by_season": status.get("missing_by_season") or {},
+        }
 
-    resolved = await asyncio.gather(*(build_one(sub) for sub in rows))
+    resolved = [build_one(sub) for sub in rows]
     items: list[dict[str, Any]] = []
     for payload in resolved:
         if only_missing and int(payload.get("missing_count") or 0) == 0:
@@ -626,8 +680,12 @@ async def get_tv_missing_status(
 
     status = await tv_missing_service.get_tv_missing_status(
         int(subscription.tmdb_id),
-        include_specials=False,
+        include_specials=bool(subscription.tv_include_specials),
         refresh=bool(refresh),
+        season_number=subscription.tv_season_number if subscription.tv_scope in {"season", "episode_range"} else None,
+        episode_start=subscription.tv_episode_start if subscription.tv_scope == "episode_range" else None,
+        episode_end=subscription.tv_episode_end if subscription.tv_scope == "episode_range" else None,
+        aired_only=subscription.tv_follow_mode == "new",
     )
     return {
         "subscription_id": subscription.id,
@@ -658,7 +716,23 @@ async def update_subscription(
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
 
-    for key, value in update_data.model_dump(exclude_unset=True).items():
+    update_payload = update_data.model_dump(exclude_unset=True)
+    if any(key.startswith("tv_") for key in update_payload):
+        merged_payload = {
+            "tv_scope": subscription.tv_scope,
+            "tv_season_number": subscription.tv_season_number,
+            "tv_episode_start": subscription.tv_episode_start,
+            "tv_episode_end": subscription.tv_episode_end,
+            "tv_follow_mode": subscription.tv_follow_mode,
+            "tv_include_specials": subscription.tv_include_specials,
+        }
+        merged_payload.update(
+            {key: value for key, value in update_payload.items() if key.startswith("tv_")}
+        )
+        normalize_tv_subscription_options(merged_payload, subscription.media_type)
+        update_payload.update(merged_payload)
+
+    for key, value in update_payload.items():
         setattr(subscription, key, value)
 
     # 订阅默认始终开启自动转存，避免前后端状态不一致。
@@ -884,17 +958,37 @@ async def update_download_record(
     if not record:
         raise HTTPException(status_code=404, detail="Download record not found")
 
-    # 不再在数据库里维护多状态流转，仅保留成功时间和错误信息。
-    if update_data.status == MediaStatus.COMPLETED:
-        record.completed_at = datetime.utcnow()
-        record.error_message = None
-    elif update_data.status == MediaStatus.FAILED:
-        record.completed_at = None
-    elif update_data.status in {MediaStatus.PENDING, MediaStatus.DOWNLOADING}:
-        record.completed_at = None
+    if update_data.status is not None:
+        record.status = update_data.status
+        if update_data.status in {MediaStatus.COMPLETED, MediaStatus.OFFLINE_COMPLETED}:
+            now = datetime.utcnow()
+            record.completed_at = now
+            if update_data.status == MediaStatus.OFFLINE_COMPLETED:
+                record.offline_completed_at = now
+            record.error_message = None
+        elif update_data.status == MediaStatus.OFFLINE_SUBMITTED:
+            record.completed_at = None
+            if record.offline_submitted_at is None:
+                record.offline_submitted_at = datetime.utcnow()
+        elif update_data.status == MediaStatus.FAILED:
+            record.completed_at = None
+        elif update_data.status in {
+            MediaStatus.PENDING,
+            MediaStatus.MATCHED,
+            MediaStatus.DOWNLOADING,
+            MediaStatus.TRANSFERRING,
+            MediaStatus.ARCHIVING,
+        }:
+            record.completed_at = None
 
     if update_data.error_message is not None:
         record.error_message = update_data.error_message
+    if update_data.offline_info_hash is not None:
+        record.offline_info_hash = update_data.offline_info_hash
+    if update_data.offline_task_id is not None:
+        record.offline_task_id = update_data.offline_task_id
+    if update_data.offline_status is not None:
+        record.offline_status = update_data.offline_status
 
     await db.commit()
     await db.refresh(record)

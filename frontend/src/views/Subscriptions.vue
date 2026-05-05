@@ -59,6 +59,9 @@
                       {{ sub.media_type === 'movie' ? '电影' : '电视剧' }}
                     </el-tag>
                   </div>
+                  <div v-if="sub.media_type === 'tv'" class="tv-scope">
+                    {{ formatTvScope(sub) }} · {{ sub.tv_follow_mode === 'new' ? '只追新集' : '补缺集' }}
+                  </div>
                   <div class="meta">
                     <span v-if="sub.year">{{ sub.year }}</span>
                     <span v-if="sub.rating">
@@ -67,6 +70,9 @@
                     </span>
                   </div>
                   <div class="actions" @click.stop>
+                    <el-button type="primary" size="small" plain @click="openTvOptions(sub)">
+                      订阅设置
+                    </el-button>
                     <el-button type="danger" size="small" plain @click="handleDelete(sub)">
                       取消订阅
                     </el-button>
@@ -129,6 +135,101 @@
         </div>
       </el-tab-pane>
     </el-tabs>
+
+    <el-dialog v-model="tvOptionsVisible" title="订阅设置" width="520px">
+      <el-scrollbar max-height="65vh">
+        <el-form :model="tvOptionsForm" label-width="100px">
+          <template v-if="editingTvSubscription?.media_type === 'tv'">
+            <el-divider content-position="left">剧集范围</el-divider>
+            <el-form-item label="订阅范围">
+              <el-radio-group v-model="tvOptionsForm.tv_scope">
+                <el-radio-button value="all">全剧</el-radio-button>
+                <el-radio-button value="season">指定季</el-radio-button>
+                <el-radio-button value="episode_range">指定集段</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item v-if="tvOptionsForm.tv_scope !== 'all'" label="季号">
+              <el-input-number v-model="tvOptionsForm.tv_season_number" :min="0" :precision="0" />
+            </el-form-item>
+            <template v-if="tvOptionsForm.tv_scope === 'episode_range'">
+              <el-form-item label="起始集">
+                <el-input-number v-model="tvOptionsForm.tv_episode_start" :min="1" :precision="0" />
+              </el-form-item>
+              <el-form-item label="结束集">
+                <el-input-number v-model="tvOptionsForm.tv_episode_end" :min="1" :precision="0" />
+              </el-form-item>
+            </template>
+            <el-form-item label="追踪模式">
+              <el-radio-group v-model="tvOptionsForm.tv_follow_mode">
+                <el-radio-button value="missing">补缺集</el-radio-button>
+                <el-radio-button value="new">只追新集</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="特别篇">
+              <el-switch v-model="tvOptionsForm.tv_include_specials" active-text="包含 S00" />
+            </el-form-item>
+          </template>
+          <el-divider content-position="left">画质偏好</el-divider>
+          <el-form-item label="分辨率">
+            <el-checkbox-group v-model="tvOptionsForm.preferred_resolutions">
+              <el-checkbox value="4K">4K</el-checkbox>
+              <el-checkbox value="1080p">1080p</el-checkbox>
+              <el-checkbox value="720p">720p</el-checkbox>
+            </el-checkbox-group>
+          </el-form-item>
+          <el-form-item label="编码">
+            <el-checkbox-group v-model="tvOptionsForm.preferred_codecs">
+              <el-checkbox value="HEVC">H.265/HEVC</el-checkbox>
+              <el-checkbox value="H.264">H.264</el-checkbox>
+              <el-checkbox value="AV1">AV1</el-checkbox>
+            </el-checkbox-group>
+          </el-form-item>
+          <el-form-item label="HDR">
+            <el-checkbox-group v-model="tvOptionsForm.preferred_hdr">
+              <el-checkbox value="Dolby Vision">杜比视界</el-checkbox>
+              <el-checkbox value="HDR10+">HDR10+</el-checkbox>
+              <el-checkbox value="HDR10">HDR10</el-checkbox>
+              <el-checkbox value="HDR">HDR</el-checkbox>
+            </el-checkbox-group>
+          </el-form-item>
+          <el-form-item label="音频">
+            <el-checkbox-group v-model="tvOptionsForm.preferred_audio">
+              <el-checkbox value="国语">国语</el-checkbox>
+              <el-checkbox value="粤语">粤语</el-checkbox>
+              <el-checkbox value="英语">英语</el-checkbox>
+              <el-checkbox value="日语">日语</el-checkbox>
+            </el-checkbox-group>
+          </el-form-item>
+          <el-form-item label="字幕">
+            <el-checkbox-group v-model="tvOptionsForm.preferred_subtitles">
+              <el-checkbox value="中字">中文字幕</el-checkbox>
+              <el-checkbox value="内封字幕">内封字幕</el-checkbox>
+            </el-checkbox-group>
+          </el-form-item>
+          <el-form-item label="排除标签">
+            <el-checkbox-group v-model="tvOptionsForm.exclude_tags">
+              <el-checkbox value="CAM">CAM 枪版</el-checkbox>
+              <el-checkbox value="TS">TS</el-checkbox>
+              <el-checkbox value="抢先版">抢先版</el-checkbox>
+              <el-checkbox value="TC">TC</el-checkbox>
+              <el-checkbox value="DVDScr">DVDScr</el-checkbox>
+            </el-checkbox-group>
+          </el-form-item>
+          <el-form-item label="体积范围">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <el-input-number v-model="tvOptionsForm.min_size_gb" :min="0" :step="0.5" :precision="1" placeholder="最小 GB" controls-position="right" style="width:120px" />
+              <span>~</span>
+              <el-input-number v-model="tvOptionsForm.max_size_gb" :min="0" :step="0.5" :precision="1" placeholder="最大 GB" controls-position="right" style="width:120px" />
+              <span>GB</span>
+            </div>
+          </el-form-item>
+        </el-form>
+      </el-scrollbar>
+      <template #footer>
+        <el-button @click="tvOptionsVisible = false">取消</el-button>
+        <el-button type="primary" :loading="tvOptionsSaving" @click="saveTvOptions">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -155,6 +256,25 @@ const missingRows = ref([])
 const missingLoading = ref(false)
 const missingOnly = ref(true)
 const router = useRouter()
+const tvOptionsVisible = ref(false)
+const tvOptionsSaving = ref(false)
+const editingTvSubscription = ref(null)
+const tvOptionsForm = ref({
+  tv_scope: 'all',
+  tv_season_number: 1,
+  tv_episode_start: 1,
+  tv_episode_end: 1,
+  tv_follow_mode: 'missing',
+  tv_include_specials: false,
+  preferred_resolutions: [],
+  preferred_codecs: [],
+  preferred_hdr: [],
+  preferred_audio: [],
+  preferred_subtitles: [],
+  exclude_tags: ['CAM', 'TS', '抢先版'],
+  min_size_gb: null,
+  max_size_gb: null
+})
 
 const tmdbImageBaseUrl = ref('https://image.tmdb.org/t/p/w342')
 let activeFetchToken = 0
@@ -260,6 +380,83 @@ const handleDelete = async (sub) => {
     ElMessage.success('已取消订阅')
   } catch (error) {
     ElMessage.error('操作失败')
+  }
+}
+
+const formatTvScope = (sub) => {
+  const scope = String(sub?.tv_scope || 'all')
+  if (scope === 'season') return `第 ${sub?.tv_season_number ?? '-'} 季`
+  if (scope === 'episode_range') {
+    return `第 ${sub?.tv_season_number ?? '-'} 季 E${sub?.tv_episode_start ?? '-'}-E${sub?.tv_episode_end ?? '-'}`
+  }
+  return '全剧'
+}
+
+const openTvOptions = (sub) => {
+  editingTvSubscription.value = sub
+  const parseJsonList = (val) => {
+    if (Array.isArray(val)) return val
+    if (typeof val === 'string' && val) {
+      try { return JSON.parse(val) } catch { return [] }
+    }
+    return []
+  }
+  tvOptionsForm.value = {
+    tv_scope: sub.tv_scope || 'all',
+    tv_season_number: Number(sub.tv_season_number ?? 1),
+    tv_episode_start: Number(sub.tv_episode_start ?? 1),
+    tv_episode_end: Number(sub.tv_episode_end ?? 1),
+    tv_follow_mode: sub.tv_follow_mode || 'missing',
+    tv_include_specials: Boolean(sub.tv_include_specials),
+    preferred_resolutions: parseJsonList(sub.preferred_resolutions),
+    preferred_codecs: parseJsonList(sub.preferred_codecs),
+    preferred_hdr: parseJsonList(sub.preferred_hdr),
+    preferred_audio: parseJsonList(sub.preferred_audio),
+    preferred_subtitles: parseJsonList(sub.preferred_subtitles),
+    exclude_tags: parseJsonList(sub.exclude_tags),
+    min_size_gb: sub.min_size_gb ?? null,
+    max_size_gb: sub.max_size_gb ?? null
+  }
+  tvOptionsVisible.value = true
+}
+
+const saveTvOptions = async () => {
+  const sub = editingTvSubscription.value
+  if (!sub?.id) return
+  const payload = { ...tvOptionsForm.value }
+  if (sub.media_type === 'tv') {
+    if (payload.tv_scope === 'all') {
+      payload.tv_season_number = null
+      payload.tv_episode_start = null
+      payload.tv_episode_end = null
+    } else if (payload.tv_scope === 'season') {
+      payload.tv_episode_start = null
+      payload.tv_episode_end = null
+    }
+    if (payload.tv_scope === 'episode_range' && Number(payload.tv_episode_start) > Number(payload.tv_episode_end)) {
+      ElMessage.warning('起始集不能大于结束集')
+      return
+    }
+  } else {
+    delete payload.tv_scope
+    delete payload.tv_season_number
+    delete payload.tv_episode_start
+    delete payload.tv_episode_end
+    delete payload.tv_follow_mode
+    delete payload.tv_include_specials
+  }
+  tvOptionsSaving.value = true
+  try {
+    const { data } = await subscriptionApi.update(sub.id, payload)
+    const index = allSubscriptions.value.findIndex(item => Number(item.id) === Number(sub.id))
+    if (index >= 0) allSubscriptions.value.splice(index, 1, data)
+    missingRows.value = missingRows.value.filter((row) => Number(row.subscription_id) !== Number(sub.id))
+    tvOptionsVisible.value = false
+    ElMessage.success('设置已保存')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '保存失败')
+  } finally {
+    tvOptionsSaving.value = false
   }
 }
 
@@ -587,6 +784,13 @@ onMounted(() => {
         .el-icon {
           color: var(--ms-accent-warning);
         }
+      }
+
+      .tv-scope {
+        margin: -2px 0 8px;
+        color: var(--ms-text-muted);
+        font-size: 12px;
+        line-height: 1.4;
       }
 
       .actions {
