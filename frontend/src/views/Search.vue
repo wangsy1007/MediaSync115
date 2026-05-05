@@ -2122,8 +2122,8 @@ onBeforeUnmount(() => {
     }
 
     .results-grid {
-      grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
-      gap: 14px;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 16px;
     }
   }
 }
@@ -2189,8 +2189,8 @@ onBeforeUnmount(() => {
 
       .results-skeleton-grid,
       .results-grid {
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 8px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
       }
 
       .results-header {
@@ -2212,21 +2212,21 @@ onBeforeUnmount(() => {
           .action-btn {
             flex: 1 1 0;
             min-width: 0;
-            padding-inline: 4px;
+            padding-inline: 6px;
             font-size: 10px;
           }
         }
       }
 
       .media-info {
-        padding: 8px;
+        padding: 10px;
 
         .title {
           white-space: normal;
           display: -webkit-box;
-          -webkit-line-clamp: 1;
+          -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
-          font-size: 12px;
+          font-size: 13px;
         }
 
         .year {
@@ -2264,10 +2264,84 @@ onBeforeUnmount(() => {
   }
 }
 
+@media (max-width: 480px) {
+  .explore-page {
+    .search-results {
+      padding: 10px;
+
+      .results-skeleton-grid,
+      .results-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+    }
+
+    .media-card {
+      border-radius: 12px;
+
+      .poster-wrapper {
+        .action-buttons {
+          opacity: 1;
+          gap: 4px;
+          padding: 8px;
+
+          .action-btn {
+            flex: 1 1 0;
+            min-width: 0;
+            padding-inline: 4px;
+            font-size: 11px;
+
+            .el-icon {
+              font-size: 13px;
+            }
+          }
+        }
+
+        .rating-badge {
+          font-size: 11px;
+          padding: 3px 7px;
+        }
+
+        .media-type-tag .el-tag {
+          font-size: 10px;
+          padding: 0 6px;
+          height: 20px;
+          line-height: 20px;
+        }
+      }
+
+      .media-info {
+        padding: 10px;
+
+        .title {
+          font-size: 13px;
+          -webkit-line-clamp: 2;
+          line-height: 1.3;
+          margin-bottom: 4px;
+        }
+
+        .year {
+          font-size: 11px;
+        }
+
+        .overview {
+          display: none;
+        }
+      }
+    }
+  }
+}
+
 @media (hover: none) {
-  .explore-page .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
-    opacity: 1;
-    transform: translate(-50%, 0);
+  .explore-page {
+    .media-card .poster-wrapper .action-buttons {
+      opacity: 1;
+    }
+
+    .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
   }
 }
 
