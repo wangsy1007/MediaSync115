@@ -7,7 +7,13 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import settings
 
-engine = create_async_engine(settings.DATABASE_URL, echo=settings.DEBUG)
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=settings.DEBUG,
+    connect_args={
+        "timeout": 30,
+    },
+)
 
 async_session_maker = async_sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
@@ -89,6 +95,9 @@ def is_missing_table_error(exc: Exception, *table_names: str) -> bool:
 
 async def init_db():
     await ensure_tables_exist()
+    # 启用 WAL 模式，允许读操作与写操作并发，避免写锁堵塞所有请求
+    async with engine.begin() as conn:
+        await conn.execute(text("PRAGMA journal_mode=WAL"))
     await ensure_subscription_columns()
     await ensure_download_record_columns()
 

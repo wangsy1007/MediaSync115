@@ -5,7 +5,7 @@ import asyncio
 from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete as sa_delete, select, or_, and_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from app.core.database import get_db
 from app.models.models import (
     DownloadRecord,
@@ -558,94 +558,100 @@ async def list_tv_missing_status(
     refresh: bool = Query(False, description="是否忽略缓存强制刷新"),
     db: AsyncSession = Depends(get_db),
 ):
-    has_successful_transfer = (
-        select(DownloadRecord.id)
-        .where(
-            DownloadRecord.subscription_id == Subscription.id,
-            or_(
-                DownloadRecord.completed_at.is_not(None),
-                DownloadRecord.status.in_(
-                    (MediaStatus.COMPLETED, MediaStatus.OFFLINE_COMPLETED)
+    try:
+        has_successful_transfer = (
+            select(DownloadRecord.id)
+            .where(
+                DownloadRecord.subscription_id == Subscription.id,
+                or_(
+                    DownloadRecord.completed_at.is_not(None),
+                    DownloadRecord.status.in_(
+                        (MediaStatus.COMPLETED, MediaStatus.OFFLINE_COMPLETED)
+                    ),
                 ),
-            ),
+            )
+            .exists()
         )
-        .exists()
-    )
-    result = await db.execute(
-        select(Subscription)
-        .where(
-            Subscription.media_type == MediaType.TV,
-            Subscription.is_active == True,  # noqa: E712
-            ~has_successful_transfer,
+        result = await db.execute(
+            select(Subscription)
+            .where(
+                Subscription.media_type == MediaType.TV,
+                Subscription.is_active == True,  # noqa: E712
+                ~has_successful_transfer,
+            )
+            .order_by(Subscription.created_at.desc())
+            .limit(limit)
         )
-        .order_by(Subscription.created_at.desc())
-        .limit(limit)
-    )
-    rows = result.scalars().all()
+        rows = result.scalars().all()
 
-    tmdb_ids = [int(sub.tmdb_id) for sub in rows if sub.tmdb_id is not None]
-    options_by_tmdb = {
-        int(sub.tmdb_id): {
-            "include_specials": bool(sub.tv_include_specials),
-            "season_number": sub.tv_season_number if sub.tv_scope in {"season", "episode_range"} else None,
-            "episode_start": sub.tv_episode_start if sub.tv_scope == "episode_range" else None,
-            "episode_end": sub.tv_episode_end if sub.tv_scope == "episode_range" else None,
-            "aired_only": sub.tv_follow_mode == "new",
+        tmdb_ids = [int(sub.tmdb_id) for sub in rows if sub.tmdb_id is not None]
+        options_by_tmdb = {
+            int(sub.tmdb_id): {
+                "include_specials": bool(sub.tv_include_specials),
+                "season_number": sub.tv_season_number if sub.tv_scope in {"season", "episode_range"} else None,
+                "episode_start": sub.tv_episode_start if sub.tv_scope == "episode_range" else None,
+                "episode_end": sub.tv_episode_end if sub.tv_scope == "episode_range" else None,
+                "aired_only": sub.tv_follow_mode == "new",
+            }
+            for sub in rows
+            if sub.tmdb_id is not None
         }
-        for sub in rows
-        if sub.tmdb_id is not None
-    }
-    status_by_tmdb = await tv_missing_service.get_tv_missing_statuses(
-        tmdb_ids,
-        include_specials=False,
-        refresh=bool(refresh),
-        options_by_tmdb=options_by_tmdb,
-    )
+        status_by_tmdb = await tv_missing_service.get_tv_missing_statuses(
+            tmdb_ids,
+            include_specials=False,
+            refresh=bool(refresh),
+            options_by_tmdb=options_by_tmdb,
+        )
 
-    def build_one(sub: Subscription) -> dict[str, Any]:
-        if sub.tmdb_id is None:
+        def build_one(sub: Subscription) -> dict[str, Any]:
+            if sub.tmdb_id is None:
+                return {
+                    "subscription_id": sub.id,
+                    "tmdb_id": None,
+                    "title": sub.title,
+                    "year": sub.year,
+                    "poster_path": sub.poster_path,
+                    "status": "no_tmdb",
+                    "message": "缺少 TMDB ID，无法进行缺集比对",
+                    "aired_count": 0,
+                    "existing_count": 0,
+                    "missing_count": 0,
+                    "missing_by_season": {},
+                }
+
+            status = status_by_tmdb.get(int(sub.tmdb_id)) or {}
+            counts = status.get("counts") if isinstance(status.get("counts"), dict) else {}
             return {
                 "subscription_id": sub.id,
-                "tmdb_id": None,
+                "tmdb_id": sub.tmdb_id,
                 "title": sub.title,
                 "year": sub.year,
                 "poster_path": sub.poster_path,
-                "status": "no_tmdb",
-                "message": "缺少 TMDB ID，无法进行缺集比对",
-                "aired_count": 0,
-                "existing_count": 0,
-                "missing_count": 0,
-                "missing_by_season": {},
+                "status": str(status.get("status") or "unknown"),
+                "message": str(status.get("message") or ""),
+                "total_count": int(counts.get("total") or counts.get("aired") or 0),
+                "aired_count": int(counts.get("aired") or 0),
+                "existing_count": int(counts.get("existing") or 0),
+                "missing_count": int(counts.get("missing") or 0),
+                "missing_by_season": status.get("missing_by_season") or {},
             }
 
-        status = status_by_tmdb.get(int(sub.tmdb_id)) or {}
-        counts = status.get("counts") if isinstance(status.get("counts"), dict) else {}
+        resolved = [build_one(sub) for sub in rows]
+        items: list[dict[str, Any]] = []
+        for payload in resolved:
+            if only_missing and int(payload.get("missing_count") or 0) == 0:
+                continue
+            items.append(payload)
+
         return {
-            "subscription_id": sub.id,
-            "tmdb_id": sub.tmdb_id,
-            "title": sub.title,
-            "year": sub.year,
-            "poster_path": sub.poster_path,
-            "status": str(status.get("status") or "unknown"),
-            "message": str(status.get("message") or ""),
-            "total_count": int(counts.get("total") or counts.get("aired") or 0),
-            "aired_count": int(counts.get("aired") or 0),
-            "existing_count": int(counts.get("existing") or 0),
-            "missing_count": int(counts.get("missing") or 0),
-            "missing_by_season": status.get("missing_by_season") or {},
+            "items": items,
+            "count": len(items),
         }
-
-    resolved = [build_one(sub) for sub in rows]
-    items: list[dict[str, Any]] = []
-    for payload in resolved:
-        if only_missing and int(payload.get("missing_count") or 0) == 0:
-            continue
-        items.append(payload)
-
-    return {
-        "items": items,
-        "count": len(items),
-    }
+    except OperationalError:
+        raise HTTPException(
+            status_code=503,
+            detail="数据库繁忙，请稍后重试（后台任务正在写入，访问量较大时建议调整订阅间隔）",
+        )
 
 
 @router.get("/{subscription_id}/tv/missing-status")
