@@ -1668,12 +1668,10 @@ import { ref, onMounted, onBeforeUnmount, reactive, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { authApi, pan115Api, pansouApi, settingsApi, subscriptionApi, licenseApi, archiveApi } from '@/api'
 import { resetAuthSessionCache } from '@/router'
-import { useRouter } from 'vue-router'
-import { formatBeijingDateTime, formatBeijingTableCell } from '@/utils/timezone'
-import { ALL_TABS, saveVisibleTabs } from '@/utils/detailTabs'
-import { ALL_RESOLUTIONS, ALL_FORMATS } from '@/utils/resourceTags'
+import { useRouter, useRoute } from 'vue-router'
 
 const router = useRouter()
+const route = useRoute()
 const activeSettingsTab = ref('pan115')
 const officialUpdateRepository = 'wangsy1007/mediasync115'
 const TMDB_DEFAULT_BASE_URL = 'https://api.themoviedb.org/3'
@@ -4330,6 +4328,10 @@ const handleSaveOfflineDefaultFolder = async () => {
 }
 
 onMounted(() => {
+  const tabParam = String(route.query.tab || '').trim()
+  if (tabParam) {
+    activeSettingsTab.value = tabParam
+  }
   fetchAuthSession()
   fetchRuntimeSettings().then(() => {
     fetchAppInfo()

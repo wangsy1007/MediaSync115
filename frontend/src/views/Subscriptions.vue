@@ -173,7 +173,7 @@
           <el-form-item>
             <el-alert type="info" :closable="false" show-icon>
               画质偏好已统一为全局设置，请在
-              <el-button type="primary" @click="$router.push('/settings')" size="default" style="margin: 0 4px;">设置页面 → 订阅任务</el-button>
+              <el-button type="primary" @click="$router.push({ path: '/settings', query: { tab: 'scheduler' } })" size="default" style="margin: 0 4px;">设置页面 → 订阅任务</el-button>
               中配置，所有订阅将使用相同的规则。
             </el-alert>
           </el-form-item>
