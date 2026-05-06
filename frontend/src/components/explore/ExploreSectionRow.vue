@@ -230,15 +230,16 @@ const applySubscribedFlag = (item) => {
   const imdbId = item.imdb_id
   const itemKey = buildExploreQueueItemKeyFromItem(item)
   const isActiveSubscribeTask = Boolean(itemKey) && props.queueActiveSubscribeKeys?.has?.(itemKey)
-  item.isSubscribed = (
+  const isConfirmedSubscribed = (
     Boolean(key) && props.subscribedIdMap?.has?.(key)
   ) || (
     doubanId && props.subscribedDoubanIds?.has?.(String(doubanId))
   ) || (
     imdbId && props.subscribedImdbIds?.has?.(String(imdbId).toLowerCase())
-  ) || isActiveSubscribeTask
+  )
+  item.isSubscribed = isConfirmedSubscribed || isActiveSubscribeTask
   markEmbyOnItem(item)
-  item.subscribing = isActiveSubscribeTask
+  item.subscribing = isActiveSubscribeTask && !isConfirmedSubscribed
   item.saving = Boolean(itemKey) && props.queueActiveSaveKeys?.has?.(itemKey)
 }
 

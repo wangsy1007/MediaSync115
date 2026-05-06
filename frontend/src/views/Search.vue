@@ -299,10 +299,13 @@ const markSubscribedOnItem = (item) => {
   const imdbId = item.imdb_id
   const itemKey = buildExploreQueueItemKeyFromItem(item)
   const isActiveSubscribeTask = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
-  item.isSubscribed = isSubscribedMedia(mediaType, tmdbId) ||
+  const isConfirmedSubscribed = isSubscribedMedia(mediaType, tmdbId) ||
                       isSubscribedByDoubanId(doubanId) ||
-                      isSubscribedByImdbId(imdbId) ||
-                      isActiveSubscribeTask
+                      isSubscribedByImdbId(imdbId)
+  item.isSubscribed = isConfirmedSubscribed || isActiveSubscribeTask
+  if (isConfirmedSubscribed && item.subscribing) {
+    item.subscribing = false
+  }
 }
 
 const mergeEmbyStatusMap = (rawMap = {}) => {
@@ -379,7 +382,7 @@ const syncExploreQueueItemStates = () => {
     for (const item of section.items || []) {
       const itemKey = buildExploreQueueItemKeyFromItem(item)
       const isActiveSubscribeTask = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
-      item.subscribing = isActiveSubscribeTask
+      item.subscribing = isActiveSubscribeTask && !item.isSubscribed
       item.saving = Boolean(itemKey) && queueActiveSaveKeys.value.has(itemKey)
       if (isActiveSubscribeTask) item.isSubscribed = true
     }

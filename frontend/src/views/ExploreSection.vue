@@ -176,10 +176,11 @@ const applySubscribedFlag = (item) => {
   const imdbId = item.imdb_id
   const itemKey = buildExploreQueueItemKeyFromItem(item)
   const isActiveSubscribeTask = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
-  item.isSubscribed = (Boolean(key) && subscribedIdMap.value.has(key)) ||
+  const isConfirmedSubscribed = (Boolean(key) && subscribedIdMap.value.has(key)) ||
                        (doubanId && subscribedDoubanIds.value.has(String(doubanId))) ||
-                       (imdbId && subscribedImdbIds.value.has(String(imdbId).toLowerCase())) ||
-                       isActiveSubscribeTask
+                       (imdbId && subscribedImdbIds.value.has(String(imdbId).toLowerCase()))
+  item.isSubscribed = isConfirmedSubscribed || isActiveSubscribeTask
+  item.subscribing = isActiveSubscribeTask && !isConfirmedSubscribed
   markEmbyOnItem(item)
 }
 
@@ -263,7 +264,7 @@ const syncExploreQueueItemStates = () => {
   for (const item of allItems.value) {
     const itemKey = buildExploreQueueItemKeyFromItem(item)
     const isActiveSubscribeTask = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
-    item.subscribing = isActiveSubscribeTask
+    item.subscribing = isActiveSubscribeTask && !item.isSubscribed
     item.saving = Boolean(itemKey) && queueActiveSaveKeys.value.has(itemKey)
     if (isActiveSubscribeTask) item.isSubscribed = true
   }
