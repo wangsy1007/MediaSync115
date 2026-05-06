@@ -174,10 +174,12 @@ const applySubscribedFlag = (item) => {
   const key = buildSubscribedKey(item.media_type, item.tmdb_id)
   const doubanId = item.douban_id || item.id
   const imdbId = item.imdb_id
-  // 优先使用 tmdb_id 匹配，其次使用 douban_id 或 imdb_id
+  const itemKey = buildExploreQueueItemKeyFromItem(item)
+  const isActiveSubscribeTask = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
   item.isSubscribed = (Boolean(key) && subscribedIdMap.value.has(key)) ||
-                      (doubanId && subscribedDoubanIds.value.has(String(doubanId))) ||
-                      (imdbId && subscribedImdbIds.value.has(String(imdbId).toLowerCase()))
+                       (doubanId && subscribedDoubanIds.value.has(String(doubanId))) ||
+                       (imdbId && subscribedImdbIds.value.has(String(imdbId).toLowerCase())) ||
+                       isActiveSubscribeTask
   markEmbyOnItem(item)
 }
 
@@ -260,8 +262,10 @@ const buildExploreQueuePayload = (item) => {
 const syncExploreQueueItemStates = () => {
   for (const item of allItems.value) {
     const itemKey = buildExploreQueueItemKeyFromItem(item)
-    item.subscribing = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
+    const isActiveSubscribeTask = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
+    item.subscribing = isActiveSubscribeTask
     item.saving = Boolean(itemKey) && queueActiveSaveKeys.value.has(itemKey)
+    if (isActiveSubscribeTask) item.isSubscribed = true
   }
 }
 
@@ -303,7 +307,7 @@ const markExploreQueueTaskActive = (task) => {
 const fetchExploreQueueActiveTasks = async () => {
   if (exploreQueuePolling) return
   exploreQueuePolling = true
-  const hadActiveSubscribeTasks = queueActiveSubscribeKeys.value.size > 0
+  const prevSubscribeSize = queueActiveSubscribeKeys.value.size
   try {
     const { data } = await searchApi.getExploreActiveQueueTasks('all')
     const tasks = Array.isArray(data?.tasks) ? data.tasks : []
@@ -312,7 +316,7 @@ const fetchExploreQueueActiveTasks = async () => {
     // ignore queue polling errors
   } finally {
     exploreQueuePolling = false
-    if (hadActiveSubscribeTasks && queueActiveSubscribeKeys.value.size === 0) {
+    if (prevSubscribeSize > 0 && queueActiveSubscribeKeys.value.size < prevSubscribeSize) {
       await refreshSubscribedMap()
     }
   }

@@ -297,11 +297,12 @@ const markSubscribedOnItem = (item) => {
   const tmdbId = toValidTmdbId(item.tmdb_id || item.tmdbid)
   const doubanId = item.douban_id || item.id
   const imdbId = item.imdb_id
-
-  // 优先使用 tmdb_id 匹配，其次使用 douban_id 或 imdb_id
+  const itemKey = buildExploreQueueItemKeyFromItem(item)
+  const isActiveSubscribeTask = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
   item.isSubscribed = isSubscribedMedia(mediaType, tmdbId) ||
                       isSubscribedByDoubanId(doubanId) ||
-                      isSubscribedByImdbId(imdbId)
+                      isSubscribedByImdbId(imdbId) ||
+                      isActiveSubscribeTask
 }
 
 const mergeEmbyStatusMap = (rawMap = {}) => {
@@ -377,8 +378,10 @@ const syncExploreQueueItemStates = () => {
   for (const section of exploreSections.value) {
     for (const item of section.items || []) {
       const itemKey = buildExploreQueueItemKeyFromItem(item)
-      item.subscribing = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
+      const isActiveSubscribeTask = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
+      item.subscribing = isActiveSubscribeTask
       item.saving = Boolean(itemKey) && queueActiveSaveKeys.value.has(itemKey)
+      if (isActiveSubscribeTask) item.isSubscribed = true
     }
   }
 }
@@ -421,7 +424,7 @@ const markExploreQueueTaskActive = (task) => {
 const fetchExploreQueueActiveTasks = async () => {
   if (exploreQueuePolling) return
   exploreQueuePolling = true
-  const hadActiveSubscribeTasks = queueActiveSubscribeKeys.value.size > 0
+  const prevSubscribeSize = queueActiveSubscribeKeys.value.size
   try {
     const { data } = await searchApi.getExploreActiveQueueTasks('all')
     const tasks = Array.isArray(data?.tasks) ? data.tasks : []
@@ -430,7 +433,7 @@ const fetchExploreQueueActiveTasks = async () => {
     console.error('Failed to poll explore queue tasks:', error)
   } finally {
     exploreQueuePolling = false
-    if (hadActiveSubscribeTasks && queueActiveSubscribeKeys.value.size === 0) {
+    if (prevSubscribeSize > 0 && queueActiveSubscribeKeys.value.size < prevSubscribeSize) {
       await refreshSubscribedKeys()
     }
   }

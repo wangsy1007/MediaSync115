@@ -228,16 +228,17 @@ const applySubscribedFlag = (item) => {
   const key = buildSubscribedKey(item.media_type, item.tmdb_id || item.tmdbid)
   const doubanId = item.douban_id || item.id
   const imdbId = item.imdb_id
+  const itemKey = buildExploreQueueItemKeyFromItem(item)
+  const isActiveSubscribeTask = Boolean(itemKey) && props.queueActiveSubscribeKeys?.has?.(itemKey)
   item.isSubscribed = (
     Boolean(key) && props.subscribedIdMap?.has?.(key)
   ) || (
     doubanId && props.subscribedDoubanIds?.has?.(String(doubanId))
   ) || (
     imdbId && props.subscribedImdbIds?.has?.(String(imdbId).toLowerCase())
-  )
+  ) || isActiveSubscribeTask
   markEmbyOnItem(item)
-  const itemKey = buildExploreQueueItemKeyFromItem(item)
-  item.subscribing = Boolean(itemKey) && props.queueActiveSubscribeKeys?.has?.(itemKey)
+  item.subscribing = isActiveSubscribeTask
   item.saving = Boolean(itemKey) && props.queueActiveSaveKeys?.has?.(itemKey)
 }
 
