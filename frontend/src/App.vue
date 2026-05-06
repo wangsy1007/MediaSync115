@@ -413,7 +413,7 @@ html, body, #app {
     height: 72px;
     display: flex;
     align-items: center;
-    padding: 0 20px;
+    padding: 0 16px;
     gap: 12px;
     border-bottom: 1px solid var(--ms-glass-border);
     position: relative;
@@ -489,8 +489,9 @@ html, body, #app {
         font-size: 11px;
         font-weight: 600;
         color: var(--ms-text-muted);
-        letter-spacing: 0.08em;
+        letter-spacing: 0.04em;
         text-transform: uppercase;
+        white-space: nowrap;
       }
     }
   }
