@@ -105,6 +105,12 @@ class RuntimeSettingsRequest(BaseModel):
     subscription_hdhive_prefer_free: Optional[bool] = None
     resource_preferred_resolutions: Optional[list[str]] = None
     resource_preferred_formats: Optional[list[str]] = None
+    resource_preferred_hdr: Optional[list[str]] = None
+    resource_preferred_audio: Optional[list[str]] = None
+    resource_preferred_subtitles: Optional[list[str]] = None
+    resource_exclude_tags: Optional[list[str]] = None
+    resource_min_size_gb: Optional[float] = None
+    resource_max_size_gb: Optional[float] = None
     update_source_type: Optional[str] = None
     update_repository: Optional[str] = None
     tg_bot_token: Optional[str] = None

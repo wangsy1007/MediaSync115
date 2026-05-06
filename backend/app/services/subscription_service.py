@@ -124,14 +124,6 @@ class SubscriptionService:
                 Subscription.tv_episode_end,
                 Subscription.tv_follow_mode,
                 Subscription.tv_include_specials,
-                Subscription.preferred_resolutions,
-                Subscription.preferred_codecs,
-                Subscription.preferred_hdr,
-                Subscription.preferred_audio,
-                Subscription.preferred_subtitles,
-                Subscription.exclude_tags,
-                Subscription.min_size_gb,
-                Subscription.max_size_gb,
                 has_successful_transfer,
             )
             .where(
@@ -159,14 +151,6 @@ class SubscriptionService:
                 else None,
                 tv_follow_mode=str(row.tv_follow_mode or "missing"),
                 tv_include_specials=bool(row.tv_include_specials),
-                preferred_resolutions=str(row.preferred_resolutions) if row.preferred_resolutions is not None else None,
-                preferred_codecs=str(row.preferred_codecs) if row.preferred_codecs is not None else None,
-                preferred_hdr=str(row.preferred_hdr) if row.preferred_hdr is not None else None,
-                preferred_audio=str(row.preferred_audio) if row.preferred_audio is not None else None,
-                preferred_subtitles=str(row.preferred_subtitles) if row.preferred_subtitles is not None else None,
-                exclude_tags=str(row.exclude_tags) if row.exclude_tags is not None else None,
-                min_size_gb=float(row.min_size_gb) if row.min_size_gb is not None else None,
-                max_size_gb=float(row.max_size_gb) if row.max_size_gb is not None else None,
                 has_successful_transfer=bool(row.has_successful_transfer),
             )
             for row in subs_result.all()
@@ -3173,20 +3157,20 @@ class SubscriptionService:
         return []
 
     def _resolve_subscription_resolutions(self, sub: "SubscriptionSnapshot") -> list[str]:
-        return self._parse_json_list_field(getattr(sub, "preferred_resolutions", None)) or runtime_settings_service.get_resource_preferred_resolutions()
+        return runtime_settings_service.get_resource_preferred_resolutions()
 
     def _resolve_subscription_formats(self, sub: "SubscriptionSnapshot") -> list[str]:
-        return self._parse_json_list_field(getattr(sub, "preferred_codecs", None)) or runtime_settings_service.get_resource_preferred_formats()
+        return runtime_settings_service.get_resource_preferred_formats()
 
     def _resolve_subscription_quality_filter(self, sub: "SubscriptionSnapshot") -> dict[str, Any]:
         return {
-            "preferred_resolutions": self._parse_json_list_field(getattr(sub, "preferred_resolutions", None)) or None,
-            "preferred_formats": self._parse_json_list_field(getattr(sub, "preferred_codecs", None)) or None,
-            "exclude_labels": self._parse_json_list_field(getattr(sub, "exclude_tags", None)) or None,
-            "preferred_languages": self._parse_json_list_field(getattr(sub, "preferred_audio", None)) or None,
-            "preferred_subtitles": self._parse_json_list_field(getattr(sub, "preferred_subtitles", None)) or None,
-            "min_size_gb": getattr(sub, "min_size_gb", None),
-            "max_size_gb": getattr(sub, "max_size_gb", None),
+            "preferred_resolutions": runtime_settings_service.get_resource_preferred_resolutions() or None,
+            "preferred_formats": runtime_settings_service.get_resource_preferred_formats() or None,
+            "exclude_labels": runtime_settings_service.get_resource_exclude_tags() or None,
+            "preferred_languages": runtime_settings_service.get_resource_preferred_audio() or None,
+            "preferred_subtitles": runtime_settings_service.get_resource_preferred_subtitles() or None,
+            "min_size_gb": runtime_settings_service.get_resource_min_size_gb(),
+            "max_size_gb": runtime_settings_service.get_resource_max_size_gb(),
         }
 
     @staticmethod
@@ -3413,12 +3397,4 @@ class SubscriptionSnapshot:
     tv_episode_end: int | None
     tv_follow_mode: str
     tv_include_specials: bool
-    preferred_resolutions: str | None
-    preferred_codecs: str | None
-    preferred_hdr: str | None
-    preferred_audio: str | None
-    preferred_subtitles: str | None
-    exclude_tags: str | None
-    min_size_gb: float | None
-    max_size_gb: float | None
     has_successful_transfer: bool

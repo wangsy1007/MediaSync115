@@ -170,58 +170,10 @@
             </el-form-item>
           </template>
           <el-divider content-position="left">画质偏好</el-divider>
-          <el-form-item label="分辨率">
-            <el-checkbox-group v-model="tvOptionsForm.preferred_resolutions">
-              <el-checkbox value="4K">4K</el-checkbox>
-              <el-checkbox value="1080p">1080p</el-checkbox>
-              <el-checkbox value="720p">720p</el-checkbox>
-            </el-checkbox-group>
-          </el-form-item>
-          <el-form-item label="编码">
-            <el-checkbox-group v-model="tvOptionsForm.preferred_codecs">
-              <el-checkbox value="HEVC">H.265/HEVC</el-checkbox>
-              <el-checkbox value="H.264">H.264</el-checkbox>
-              <el-checkbox value="AV1">AV1</el-checkbox>
-            </el-checkbox-group>
-          </el-form-item>
-          <el-form-item label="HDR">
-            <el-checkbox-group v-model="tvOptionsForm.preferred_hdr">
-              <el-checkbox value="Dolby Vision">杜比视界</el-checkbox>
-              <el-checkbox value="HDR10+">HDR10+</el-checkbox>
-              <el-checkbox value="HDR10">HDR10</el-checkbox>
-              <el-checkbox value="HDR">HDR</el-checkbox>
-            </el-checkbox-group>
-          </el-form-item>
-          <el-form-item label="音频">
-            <el-checkbox-group v-model="tvOptionsForm.preferred_audio">
-              <el-checkbox value="国语">国语</el-checkbox>
-              <el-checkbox value="粤语">粤语</el-checkbox>
-              <el-checkbox value="英语">英语</el-checkbox>
-              <el-checkbox value="日语">日语</el-checkbox>
-            </el-checkbox-group>
-          </el-form-item>
-          <el-form-item label="字幕">
-            <el-checkbox-group v-model="tvOptionsForm.preferred_subtitles">
-              <el-checkbox value="中字">中文字幕</el-checkbox>
-              <el-checkbox value="内封字幕">内封字幕</el-checkbox>
-            </el-checkbox-group>
-          </el-form-item>
-          <el-form-item label="排除标签">
-            <el-checkbox-group v-model="tvOptionsForm.exclude_tags">
-              <el-checkbox value="CAM">CAM 枪版</el-checkbox>
-              <el-checkbox value="TS">TS</el-checkbox>
-              <el-checkbox value="抢先版">抢先版</el-checkbox>
-              <el-checkbox value="TC">TC</el-checkbox>
-              <el-checkbox value="DVDScr">DVDScr</el-checkbox>
-            </el-checkbox-group>
-          </el-form-item>
-          <el-form-item label="体积范围">
-            <div style="display:flex;align-items:center;gap:8px;">
-              <el-input-number v-model="tvOptionsForm.min_size_gb" :min="0" :step="0.5" :precision="1" placeholder="最小 GB" controls-position="right" style="width:120px" />
-              <span>~</span>
-              <el-input-number v-model="tvOptionsForm.max_size_gb" :min="0" :step="0.5" :precision="1" placeholder="最大 GB" controls-position="right" style="width:120px" />
-              <span>GB</span>
-            </div>
+          <el-form-item>
+            <el-alert type="info" :closable="false" show-icon>
+              画质偏好已统一为全局设置，请在<el-button type="primary" link size="small" @click="$router.push('/settings')">设置页面 → 订阅任务</el-button>中配置，所有订阅将使用相同的规则。
+            </el-alert>
           </el-form-item>
         </el-form>
       </el-scrollbar>
@@ -265,15 +217,7 @@ const tvOptionsForm = ref({
   tv_episode_start: 1,
   tv_episode_end: 1,
   tv_follow_mode: 'missing',
-  tv_include_specials: false,
-  preferred_resolutions: [],
-  preferred_codecs: [],
-  preferred_hdr: [],
-  preferred_audio: [],
-  preferred_subtitles: [],
-  exclude_tags: ['CAM', 'TS', '抢先版'],
-  min_size_gb: null,
-  max_size_gb: null
+  tv_include_specials: false
 })
 
 const tmdbImageBaseUrl = ref('https://image.tmdb.org/t/p/w342')
@@ -394,28 +338,13 @@ const formatTvScope = (sub) => {
 
 const openTvOptions = (sub) => {
   editingTvSubscription.value = sub
-  const parseJsonList = (val) => {
-    if (Array.isArray(val)) return val
-    if (typeof val === 'string' && val) {
-      try { return JSON.parse(val) } catch { return [] }
-    }
-    return []
-  }
   tvOptionsForm.value = {
     tv_scope: sub.tv_scope || 'all',
     tv_season_number: Number(sub.tv_season_number ?? 1),
     tv_episode_start: Number(sub.tv_episode_start ?? 1),
     tv_episode_end: Number(sub.tv_episode_end ?? 1),
     tv_follow_mode: sub.tv_follow_mode || 'missing',
-    tv_include_specials: Boolean(sub.tv_include_specials),
-    preferred_resolutions: parseJsonList(sub.preferred_resolutions),
-    preferred_codecs: parseJsonList(sub.preferred_codecs),
-    preferred_hdr: parseJsonList(sub.preferred_hdr),
-    preferred_audio: parseJsonList(sub.preferred_audio),
-    preferred_subtitles: parseJsonList(sub.preferred_subtitles),
-    exclude_tags: parseJsonList(sub.exclude_tags),
-    min_size_gb: sub.min_size_gb ?? null,
-    max_size_gb: sub.max_size_gb ?? null
+    tv_include_specials: Boolean(sub.tv_include_specials)
   }
   tvOptionsVisible.value = true
 }

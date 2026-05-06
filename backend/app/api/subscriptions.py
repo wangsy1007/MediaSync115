@@ -228,14 +228,6 @@ class SubscriptionCreate(BaseModel):
     tv_episode_end: Optional[int] = None
     tv_follow_mode: str = "missing"
     tv_include_specials: bool = False
-    preferred_resolutions: Optional[List[str]] = None
-    preferred_codecs: Optional[List[str]] = None
-    preferred_hdr: Optional[List[str]] = None
-    preferred_audio: Optional[List[str]] = None
-    preferred_subtitles: Optional[List[str]] = None
-    exclude_tags: Optional[List[str]] = None
-    min_size_gb: Optional[float] = None
-    max_size_gb: Optional[float] = None
 
 
 class SubscriptionUpdate(BaseModel):
@@ -247,14 +239,6 @@ class SubscriptionUpdate(BaseModel):
     tv_episode_end: Optional[int] = None
     tv_follow_mode: Optional[str] = None
     tv_include_specials: Optional[bool] = None
-    preferred_resolutions: Optional[List[str]] = None
-    preferred_codecs: Optional[List[str]] = None
-    preferred_hdr: Optional[List[str]] = None
-    preferred_audio: Optional[List[str]] = None
-    preferred_subtitles: Optional[List[str]] = None
-    exclude_tags: Optional[List[str]] = None
-    min_size_gb: Optional[float] = None
-    max_size_gb: Optional[float] = None
 
 
 class DownloadRecordCreate(BaseModel):

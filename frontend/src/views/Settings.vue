@@ -1019,7 +1019,7 @@
 
             <el-divider content-position="left">资源画质偏好</el-divider>
             <el-alert type="info" :closable="false" style="margin-bottom: 12px">
-              设置后，订阅转存和首页探索转存会优先选择匹配的资源。勾选顺序即为优先级（从上到下）。不勾选则不做筛选。
+              设置后，订阅转存和首页探索转存会优先选择匹配的资源。勾选顺序即为优先级（从上到下）。不勾选则不做筛选。所有订阅统一应用此规则。
             </el-alert>
             <el-form-item label="分辨率偏好">
               <el-checkbox-group v-model="resourcePrefForm.resolutions" class="preference-inline-group">
@@ -1030,6 +1030,45 @@
               <el-checkbox-group v-model="resourcePrefForm.formats" class="preference-inline-group">
                 <el-checkbox v-for="f in allFormats" :key="f" :label="f" :value="f">{{ f }}</el-checkbox>
               </el-checkbox-group>
+            </el-form-item>
+            <el-form-item label="HDR偏好">
+              <el-checkbox-group v-model="resourcePrefForm.hdr" class="preference-inline-group">
+                <el-checkbox value="Dolby Vision">杜比视界</el-checkbox>
+                <el-checkbox value="HDR10+">HDR10+</el-checkbox>
+                <el-checkbox value="HDR10">HDR10</el-checkbox>
+                <el-checkbox value="HDR">HDR</el-checkbox>
+              </el-checkbox-group>
+            </el-form-item>
+            <el-form-item label="音频偏好">
+              <el-checkbox-group v-model="resourcePrefForm.audio" class="preference-inline-group">
+                <el-checkbox value="国语">国语</el-checkbox>
+                <el-checkbox value="粤语">粤语</el-checkbox>
+                <el-checkbox value="英语">英语</el-checkbox>
+                <el-checkbox value="日语">日语</el-checkbox>
+              </el-checkbox-group>
+            </el-form-item>
+            <el-form-item label="字幕偏好">
+              <el-checkbox-group v-model="resourcePrefForm.subtitles" class="preference-inline-group">
+                <el-checkbox value="中字">中文字幕</el-checkbox>
+                <el-checkbox value="内封字幕">内封字幕</el-checkbox>
+              </el-checkbox-group>
+            </el-form-item>
+            <el-form-item label="排除标签">
+              <el-checkbox-group v-model="resourcePrefForm.excludeTags" class="preference-inline-group">
+                <el-checkbox value="CAM">CAM 枪版</el-checkbox>
+                <el-checkbox value="TS">TS</el-checkbox>
+                <el-checkbox value="抢先版">抢先版</el-checkbox>
+                <el-checkbox value="TC">TC</el-checkbox>
+                <el-checkbox value="DVDScr">DVDScr</el-checkbox>
+              </el-checkbox-group>
+            </el-form-item>
+            <el-form-item label="体积范围">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <el-input-number v-model="resourcePrefForm.minSizeGb" :min="0" :step="0.5" :precision="1" placeholder="最小 GB" controls-position="right" style="width:120px" />
+                <span>~</span>
+                <el-input-number v-model="resourcePrefForm.maxSizeGb" :min="0" :step="0.5" :precision="1" placeholder="最大 GB" controls-position="right" style="width:120px" />
+                <span>GB</span>
+              </div>
             </el-form-item>
 
             <el-divider content-position="left">HDHive 积分解锁策略</el-divider>
@@ -1744,6 +1783,12 @@ const allFormats = ALL_FORMATS
 const resourcePrefForm = reactive({
   resolutions: [],
   formats: [],
+  hdr: [],
+  audio: [],
+  subtitles: [],
+  excludeTags: ['CAM', 'TS', '抢先版'],
+  minSizeGb: null,
+  maxSizeGb: null
 })
 const sourceLabelMap = {
   hdhive: 'HDHive',
@@ -3794,6 +3839,12 @@ const fetchRuntimeSettings = async () => {
     // Resource quality preferences
     resourcePrefForm.resolutions = Array.isArray(data.resource_preferred_resolutions) ? data.resource_preferred_resolutions : []
     resourcePrefForm.formats = Array.isArray(data.resource_preferred_formats) ? data.resource_preferred_formats : []
+    resourcePrefForm.hdr = Array.isArray(data.resource_preferred_hdr) ? data.resource_preferred_hdr : []
+    resourcePrefForm.audio = Array.isArray(data.resource_preferred_audio) ? data.resource_preferred_audio : []
+    resourcePrefForm.subtitles = Array.isArray(data.resource_preferred_subtitles) ? data.resource_preferred_subtitles : []
+    resourcePrefForm.excludeTags = Array.isArray(data.resource_exclude_tags) ? data.resource_exclude_tags : ['CAM', 'TS', '抢先版']
+    resourcePrefForm.minSizeGb = data.resource_min_size_gb ?? null
+    resourcePrefForm.maxSizeGb = data.resource_max_size_gb ?? null
 
     const priority = Array.isArray(data.subscription_resource_priority)
       ? data.subscription_resource_priority.map(item => String(item || '').trim().toLowerCase())
@@ -3956,7 +4007,13 @@ const handleSaveScheduler = async () => {
       subscription_hdhive_unlock_threshold_inclusive: schedulerForm.value.hdhiveUnlock.thresholdInclusive !== false,
       subscription_hdhive_prefer_free: schedulerForm.value.hdhiveUnlock.preferFree !== false,
       resource_preferred_resolutions: resourcePrefForm.resolutions,
-      resource_preferred_formats: resourcePrefForm.formats
+      resource_preferred_formats: resourcePrefForm.formats,
+      resource_preferred_hdr: resourcePrefForm.hdr,
+      resource_preferred_audio: resourcePrefForm.audio,
+      resource_preferred_subtitles: resourcePrefForm.subtitles,
+      resource_exclude_tags: resourcePrefForm.excludeTags,
+      resource_min_size_gb: resourcePrefForm.minSizeGb,
+      resource_max_size_gb: resourcePrefForm.maxSizeGb
     })
     resourcePriority.value = normalizedPriority
     ElMessage.success('订阅任务、资源优先级与 HDHive 解锁策略已保存')

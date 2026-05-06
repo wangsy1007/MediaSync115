@@ -130,6 +130,12 @@ class RuntimeSettingsService:
             "subscription_hdhive_prefer_free": True,
             "resource_preferred_resolutions": [],
             "resource_preferred_formats": [],
+            "resource_preferred_hdr": [],
+            "resource_preferred_audio": [],
+            "resource_preferred_subtitles": [],
+            "resource_exclude_tags": ["CAM", "TS", "抢先版"],
+            "resource_min_size_gb": None,
+            "resource_max_size_gb": None,
             "update_source_type": "official",
             "update_repository": "wangsy1007/mediasync115",
             "tg_bot_token": "",
@@ -659,6 +665,40 @@ class RuntimeSettingsService:
         val = self._data.get("resource_preferred_formats")
         return list(val) if isinstance(val, list) else []
 
+    def get_resource_preferred_hdr(self) -> list[str]:
+        val = self._data.get("resource_preferred_hdr")
+        return list(val) if isinstance(val, list) else []
+
+    def get_resource_preferred_audio(self) -> list[str]:
+        val = self._data.get("resource_preferred_audio")
+        return list(val) if isinstance(val, list) else []
+
+    def get_resource_preferred_subtitles(self) -> list[str]:
+        val = self._data.get("resource_preferred_subtitles")
+        return list(val) if isinstance(val, list) else []
+
+    def get_resource_exclude_tags(self) -> list[str]:
+        val = self._data.get("resource_exclude_tags")
+        return list(val) if isinstance(val, list) else []
+
+    def get_resource_min_size_gb(self) -> float | None:
+        val = self._data.get("resource_min_size_gb")
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+
+    def get_resource_max_size_gb(self) -> float | None:
+        val = self._data.get("resource_max_size_gb")
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+
     def get_update_source_type(self) -> str:
         value = str(self._data.get("update_source_type") or "official").strip().lower()
         if value == "custom_dockerhub":
@@ -926,6 +966,10 @@ class RuntimeSettingsService:
                     "detail_visible_tabs",
                     "resource_preferred_resolutions",
                     "resource_preferred_formats",
+                    "resource_preferred_hdr",
+                    "resource_preferred_audio",
+                    "resource_preferred_subtitles",
+                    "resource_exclude_tags",
                 ):
                     if isinstance(value, list):
                         normalized[key] = [
@@ -1132,6 +1176,12 @@ class RuntimeSettingsService:
             "subscription_hdhive_prefer_free": self.get_subscription_hdhive_prefer_free(),
             "resource_preferred_resolutions": self.get_resource_preferred_resolutions(),
             "resource_preferred_formats": self.get_resource_preferred_formats(),
+            "resource_preferred_hdr": self.get_resource_preferred_hdr(),
+            "resource_preferred_audio": self.get_resource_preferred_audio(),
+            "resource_preferred_subtitles": self.get_resource_preferred_subtitles(),
+            "resource_exclude_tags": self.get_resource_exclude_tags(),
+            "resource_min_size_gb": self.get_resource_min_size_gb(),
+            "resource_max_size_gb": self.get_resource_max_size_gb(),
             "update_source_type": self.get_update_source_type(),
             "update_repository": self.get_update_repository(),
             "tg_bot_token": str(self._data.get("tg_bot_token") or ""),
