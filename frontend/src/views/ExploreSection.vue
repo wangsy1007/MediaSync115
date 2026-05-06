@@ -141,7 +141,6 @@ const subscribedImdbIds = ref(new Set()) // 存储IMDB ID订阅集合
 const embyStatusMap = ref(new Map())
 const feiniuStatusMap = ref(new Map())
 const EXPLORE_QUEUE_POLL_INTERVAL_MS = 1800
-const queueActiveSubscribeKeys = ref(new Set())
 const queueActiveSaveKeys = ref(new Set())
 let exploreQueuePollTimer = null
 let exploreQueuePolling = false
@@ -174,13 +173,11 @@ const applySubscribedFlag = (item) => {
   const key = buildSubscribedKey(item.media_type, item.tmdb_id)
   const doubanId = item.douban_id || item.id
   const imdbId = item.imdb_id
-  const itemKey = buildExploreQueueItemKeyFromItem(item)
-  const isActiveSubscribeTask = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
   const isConfirmedSubscribed = (Boolean(key) && subscribedIdMap.value.has(key)) ||
                        (doubanId && subscribedDoubanIds.value.has(String(doubanId))) ||
                        (imdbId && subscribedImdbIds.value.has(String(imdbId).toLowerCase()))
-  item.isSubscribed = isConfirmedSubscribed || isActiveSubscribeTask
-  item.subscribing = isActiveSubscribeTask && !isConfirmedSubscribed
+  item.isSubscribed = isConfirmedSubscribed
+  item.subscribing = false
   markEmbyOnItem(item)
 }
 
@@ -263,29 +260,20 @@ const buildExploreQueuePayload = (item) => {
 const syncExploreQueueItemStates = () => {
   for (const item of allItems.value) {
     const itemKey = buildExploreQueueItemKeyFromItem(item)
-    const isActiveSubscribeTask = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
-    item.subscribing = isActiveSubscribeTask && !item.isSubscribed
     item.saving = Boolean(itemKey) && queueActiveSaveKeys.value.has(itemKey)
-    if (isActiveSubscribeTask) item.isSubscribed = true
   }
 }
 
 const applyExploreQueueTaskSnapshot = (tasks = []) => {
-  const nextSubscribe = new Set()
   const nextSave = new Set()
   for (const task of tasks) {
     if (!task || typeof task !== 'object') continue
     const itemKey = buildExploreQueueItemKeyFromTask(task)
     if (!itemKey) continue
-    if (task.queue_type === 'subscribe') {
-      nextSubscribe.add(itemKey)
-      continue
-    }
     if (task.queue_type === 'save') {
       nextSave.add(itemKey)
     }
   }
-  queueActiveSubscribeKeys.value = nextSubscribe
   queueActiveSaveKeys.value = nextSave
   syncExploreQueueItemStates()
 }
@@ -295,12 +283,8 @@ const markExploreQueueTaskActive = (task) => {
   const queueType = String(task.queue_type || '').trim().toLowerCase()
   const itemKey = buildExploreQueueItemKeyFromTask(task)
   if (!itemKey) return
-  if (queueType === 'subscribe') {
-    queueActiveSubscribeKeys.value = new Set([...queueActiveSubscribeKeys.value, itemKey])
-  } else if (queueType === 'save') {
+  if (queueType === 'save') {
     queueActiveSaveKeys.value = new Set([...queueActiveSaveKeys.value, itemKey])
-  } else {
-    return
   }
   syncExploreQueueItemStates()
 }
@@ -308,18 +292,14 @@ const markExploreQueueTaskActive = (task) => {
 const fetchExploreQueueActiveTasks = async () => {
   if (exploreQueuePolling) return
   exploreQueuePolling = true
-  const prevSubscribeSize = queueActiveSubscribeKeys.value.size
   try {
-    const { data } = await searchApi.getExploreActiveQueueTasks('all')
+    const { data } = await searchApi.getExploreActiveQueueTasks('save')
     const tasks = Array.isArray(data?.tasks) ? data.tasks : []
     applyExploreQueueTaskSnapshot(tasks)
   } catch {
     // ignore queue polling errors
   } finally {
     exploreQueuePolling = false
-    if (prevSubscribeSize > 0 && queueActiveSubscribeKeys.value.size < prevSubscribeSize) {
-      await refreshSubscribedMap()
-    }
   }
 }
 
@@ -609,29 +589,40 @@ const handleItemClick = async (item) => {
 
 const handleExploreSubscribe = async (item) => {
   if (!item) return
-  const payload = buildExploreQueuePayload(item)
-  if (!payload.tmdb_id && !payload.douban_id && !payload.id) {
-    ElMessage.warning(withTitleHint(item, '缺少可用条目标识，无法加入订阅队列'))
+  const mediaType = item.media_type === 'tv' ? 'tv' : 'movie'
+  const tmdbId = toValidTmdbId(item.tmdb_id)
+  const doubanId = String(item.douban_id || item.id || '').trim() || null
+  if (!tmdbId && !doubanId) {
+    ElMessage.warning(withTitleHint(item, '缺少可用条目标识，无法操作订阅'))
     return
   }
 
-  const intent = item.isSubscribed ? 'unsubscribe' : 'subscribe'
-  const previousSubscribed = Boolean(item.isSubscribed)
-  item.isSubscribed = intent === 'subscribe'
   item.subscribing = true
   try {
-    const { data } = await searchApi.enqueueExploreSubscribeTask({ ...payload, intent })
-    markExploreQueueTaskActive(data)
+    const { data } = await subscriptionApi.toggle({
+      tmdb_id: tmdbId,
+      douban_id: doubanId,
+      title: String(item.title || item.name || '').trim(),
+      media_type: mediaType,
+      poster_path: String(item.poster_path || item.poster_url || '').trim() || null,
+      overview: String(item.overview || item.intro || '').trim() || null,
+      year: String(item.year || '').trim() || null,
+      rating: item.rating ?? item.vote_average ?? null
+    })
     const message = String(data?.message || '').trim()
-    if (message.includes('最后一次操作意图') || message.includes('已在订阅队列')) {
-      ElMessage.info(withTitleHint(item, message))
+    if (data?.subscribed) {
+      item.isSubscribed = true
+      ElMessage.success(withTitleHint(item, message || '订阅成功'))
     } else {
-      ElMessage.success(withTitleHint(item, message || '已加入订阅队列'))
+      item.isSubscribed = false
+      ElMessage.info(withTitleHint(item, message || '已取消订阅'))
     }
+    await refreshSubscribedMap()
   } catch (error) {
+    item.isSubscribed = !item.isSubscribed
+    ElMessage.error(error.response?.data?.detail || error.message || '操作失败')
+  } finally {
     item.subscribing = false
-    item.isSubscribed = previousSubscribed
-    ElMessage.error(error.response?.data?.detail || error.message || '加入订阅队列失败')
   }
 }
 
@@ -740,7 +731,6 @@ const appendUniqueItems = (items) => {
     }
     applySubscribedFlag(normalizedItem)
     const itemKey = buildExploreQueueItemKeyFromItem(normalizedItem)
-    normalizedItem.subscribing = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
     normalizedItem.saving = Boolean(itemKey) && queueActiveSaveKeys.value.has(itemKey)
     const key = `${item.id}|${item.rank}|${item.title}`
     if (exists.has(key)) continue

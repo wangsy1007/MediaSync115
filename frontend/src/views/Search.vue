@@ -45,7 +45,6 @@
             :subscribed-id-map="subscribedIdMap"
             :subscribed-douban-ids="subscribedDoubanIds"
             :subscribed-imdb-ids="subscribedImdbIds"
-            :queue-active-subscribe-keys="queueActiveSubscribeKeys"
             :queue-active-save-keys="queueActiveSaveKeys"
             :emby-status-map="embyStatusMap"
             :feiniu-status-map="feiniuStatusMap"
@@ -254,7 +253,6 @@ const subscribedImdbIds = ref(new Set()) // 存储IMDB ID订阅集合
 const embyStatusMap = ref(new Map())
 const feiniuStatusMap = ref(new Map())
 const EXPLORE_QUEUE_POLL_INTERVAL_MS = 1800
-const queueActiveSubscribeKeys = ref(new Set())
 const queueActiveSaveKeys = ref(new Set())
 let exploreQueuePollTimer = null
 let exploreQueuePolling = false
@@ -297,15 +295,9 @@ const markSubscribedOnItem = (item) => {
   const tmdbId = toValidTmdbId(item.tmdb_id || item.tmdbid)
   const doubanId = item.douban_id || item.id
   const imdbId = item.imdb_id
-  const itemKey = buildExploreQueueItemKeyFromItem(item)
-  const isActiveSubscribeTask = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
-  const isConfirmedSubscribed = isSubscribedMedia(mediaType, tmdbId) ||
+  item.isSubscribed = isSubscribedMedia(mediaType, tmdbId) ||
                       isSubscribedByDoubanId(doubanId) ||
                       isSubscribedByImdbId(imdbId)
-  item.isSubscribed = isConfirmedSubscribed || isActiveSubscribeTask
-  if (isConfirmedSubscribed && item.subscribing) {
-    item.subscribing = false
-  }
 }
 
 const mergeEmbyStatusMap = (rawMap = {}) => {
@@ -381,30 +373,21 @@ const syncExploreQueueItemStates = () => {
   for (const section of exploreSections.value) {
     for (const item of section.items || []) {
       const itemKey = buildExploreQueueItemKeyFromItem(item)
-      const isActiveSubscribeTask = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
-      item.subscribing = isActiveSubscribeTask && !item.isSubscribed
       item.saving = Boolean(itemKey) && queueActiveSaveKeys.value.has(itemKey)
-      if (isActiveSubscribeTask) item.isSubscribed = true
     }
   }
 }
 
 const applyExploreQueueTaskSnapshot = (tasks = []) => {
-  const nextSubscribe = new Set()
   const nextSave = new Set()
   for (const task of tasks) {
     if (!task || typeof task !== 'object') continue
     const itemKey = buildExploreQueueItemKeyFromTask(task)
     if (!itemKey) continue
-    if (task.queue_type === 'subscribe') {
-      nextSubscribe.add(itemKey)
-      continue
-    }
     if (task.queue_type === 'save') {
       nextSave.add(itemKey)
     }
   }
-  queueActiveSubscribeKeys.value = nextSubscribe
   queueActiveSaveKeys.value = nextSave
   syncExploreQueueItemStates()
 }
@@ -414,12 +397,8 @@ const markExploreQueueTaskActive = (task) => {
   const queueType = String(task.queue_type || '').trim().toLowerCase()
   const itemKey = buildExploreQueueItemKeyFromTask(task)
   if (!itemKey) return
-  if (queueType === 'subscribe') {
-    queueActiveSubscribeKeys.value = new Set([...queueActiveSubscribeKeys.value, itemKey])
-  } else if (queueType === 'save') {
+  if (queueType === 'save') {
     queueActiveSaveKeys.value = new Set([...queueActiveSaveKeys.value, itemKey])
-  } else {
-    return
   }
   syncExploreQueueItemStates()
 }
@@ -427,18 +406,14 @@ const markExploreQueueTaskActive = (task) => {
 const fetchExploreQueueActiveTasks = async () => {
   if (exploreQueuePolling) return
   exploreQueuePolling = true
-  const prevSubscribeSize = queueActiveSubscribeKeys.value.size
   try {
-    const { data } = await searchApi.getExploreActiveQueueTasks('all')
+    const { data } = await searchApi.getExploreActiveQueueTasks('save')
     const tasks = Array.isArray(data?.tasks) ? data.tasks : []
     applyExploreQueueTaskSnapshot(tasks)
   } catch (error) {
     console.error('Failed to poll explore queue tasks:', error)
   } finally {
     exploreQueuePolling = false
-    if (prevSubscribeSize > 0 && queueActiveSubscribeKeys.value.size < prevSubscribeSize) {
-      await refreshSubscribedKeys()
-    }
   }
 }
 
@@ -695,7 +670,6 @@ const normalizeExploreSectionItems = (items = [], rankStart = 1) => {
     markSubscribedOnItem(normalized)
     markEmbyOnItem(normalized)
     const itemKey = buildExploreQueueItemKeyFromItem(normalized)
-    normalized.subscribing = Boolean(itemKey) && queueActiveSubscribeKeys.value.has(itemKey)
     normalized.saving = Boolean(itemKey) && queueActiveSaveKeys.value.has(itemKey)
     return normalized
   })
@@ -726,29 +700,40 @@ const getResolveFailureMessage = (reason) => {
 
 const handleExploreSubscribe = async (item) => {
   if (!item) return
-  const payload = buildExploreQueuePayload(item)
-  if (!payload.tmdb_id && !payload.douban_id && !payload.id) {
-    ElMessage.warning(withTitleHint(item, '缺少可用条目标识，无法加入订阅队列'))
+  const mediaType = item.media_type === 'tv' ? 'tv' : 'movie'
+  const tmdbId = toValidTmdbId(item.tmdb_id || item.tmdbid)
+  const doubanId = String(item.douban_id || item.id || '').trim() || null
+  if (!tmdbId && !doubanId) {
+    ElMessage.warning(withTitleHint(item, '缺少可用条目标识，无法操作订阅'))
     return
   }
 
-  const intent = item.isSubscribed ? 'unsubscribe' : 'subscribe'
-  const previousSubscribed = Boolean(item.isSubscribed)
-  item.isSubscribed = intent === 'subscribe'
   item.subscribing = true
   try {
-    const { data } = await searchApi.enqueueExploreSubscribeTask({ ...payload, intent })
-    markExploreQueueTaskActive(data)
+    const { data } = await subscriptionApi.toggle({
+      tmdb_id: tmdbId,
+      douban_id: doubanId,
+      title: String(item.title || item.name || '').trim(),
+      media_type: mediaType,
+      poster_path: String(item.poster_path || item.poster_url || '').trim() || null,
+      overview: String(item.overview || item.intro || '').trim() || null,
+      year: String(item.year || '').trim() || null,
+      rating: item.rating ?? item.vote_average ?? null
+    })
     const message = String(data?.message || '').trim()
-    if (message.includes('最后一次操作意图') || message.includes('已在订阅队列')) {
-      ElMessage.info(withTitleHint(item, message))
+    if (data?.subscribed) {
+      item.isSubscribed = true
+      ElMessage.success(withTitleHint(item, message || '订阅成功'))
     } else {
-      ElMessage.success(withTitleHint(item, message || '已加入订阅队列'))
+      item.isSubscribed = false
+      ElMessage.info(withTitleHint(item, message || '已取消订阅'))
     }
+    await refreshSubscribedKeys()
   } catch (error) {
+    item.isSubscribed = !item.isSubscribed
+    ElMessage.error(error.response?.data?.detail || error.message || '操作失败')
+  } finally {
     item.subscribing = false
-    item.isSubscribed = previousSubscribed
-    ElMessage.error(error.response?.data?.detail || error.message || '加入订阅队列失败')
   }
 }
 

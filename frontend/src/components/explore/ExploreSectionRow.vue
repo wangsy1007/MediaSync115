@@ -109,7 +109,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, ArrowRight, Star, FolderAdd } from '@element-plus/icons-vue'
-import { searchApi } from '@/api'
+import { searchApi, subscriptionApi } from '@/api'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 
 const props = defineProps({
@@ -130,10 +130,6 @@ const props = defineProps({
     default: () => new Set()
   },
   subscribedImdbIds: {
-    type: Object,
-    default: () => new Set()
-  },
-  queueActiveSubscribeKeys: {
     type: Object,
     default: () => new Set()
   },
@@ -228,8 +224,6 @@ const applySubscribedFlag = (item) => {
   const key = buildSubscribedKey(item.media_type, item.tmdb_id || item.tmdbid)
   const doubanId = item.douban_id || item.id
   const imdbId = item.imdb_id
-  const itemKey = buildExploreQueueItemKeyFromItem(item)
-  const isActiveSubscribeTask = Boolean(itemKey) && props.queueActiveSubscribeKeys?.has?.(itemKey)
   const isConfirmedSubscribed = (
     Boolean(key) && props.subscribedIdMap?.has?.(key)
   ) || (
@@ -237,9 +231,10 @@ const applySubscribedFlag = (item) => {
   ) || (
     imdbId && props.subscribedImdbIds?.has?.(String(imdbId).toLowerCase())
   )
-  item.isSubscribed = isConfirmedSubscribed || isActiveSubscribeTask
+  item.isSubscribed = isConfirmedSubscribed
   markEmbyOnItem(item)
-  item.subscribing = isActiveSubscribeTask && !isConfirmedSubscribed
+  item.subscribing = false
+  const itemKey = buildExploreQueueItemKeyFromItem(item)
   item.saving = Boolean(itemKey) && props.queueActiveSaveKeys?.has?.(itemKey)
 }
 
@@ -380,7 +375,6 @@ watch(
     props.subscribedIdMap,
     props.subscribedDoubanIds,
     props.subscribedImdbIds,
-    props.queueActiveSubscribeKeys,
     props.queueActiveSaveKeys,
     props.embyStatusMap,
     props.feiniuStatusMap

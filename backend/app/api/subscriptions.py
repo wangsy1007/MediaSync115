@@ -825,6 +825,116 @@ async def delete_subscriptions_by_type(
     return {"deleted_count": len(sub_ids)}
 
 
+class SubscriptionToggleRequest(BaseModel):
+    douban_id: Optional[str] = None
+    tmdb_id: Optional[int] = None
+    title: str = ""
+    media_type: MediaType
+    poster_path: Optional[str] = None
+    overview: Optional[str] = None
+    year: Optional[str] = None
+    rating: Optional[float] = None
+
+
+@router.post("/toggle")
+async def toggle_subscription(
+    request: SubscriptionToggleRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """直接切换订阅状态：已订阅则取消，未订阅则创建"""
+    dedupe_conditions = []
+    if request.douban_id:
+        dedupe_conditions.append(Subscription.douban_id == request.douban_id)
+    if request.tmdb_id is not None:
+        dedupe_conditions.append(
+            and_(
+                Subscription.tmdb_id == request.tmdb_id,
+                Subscription.media_type == request.media_type,
+            )
+        )
+
+    if not dedupe_conditions:
+        raise HTTPException(status_code=400, detail="至少需要提供 douban_id 或 tmdb_id")
+
+    existing = (await db.execute(select(Subscription).where(or_(*dedupe_conditions)))).scalar_one_or_none()
+
+    if existing:
+        # 取消订阅
+        sub_title = existing.title
+        media_label = "电影" if existing.media_type == MediaType.MOVIE else "电视剧"
+        sub_id = existing.id
+
+        downloads = await db.execute(
+            select(DownloadRecord).where(DownloadRecord.subscription_id == sub_id)
+        )
+        for record in downloads.scalars().all():
+            await db.delete(record)
+
+        await db.delete(existing)
+        await db.commit()
+
+        try:
+            from app.analytics import kafka_producer
+            if kafka_producer._enabled:
+                kafka_producer.send(
+                    event_type="subscription_delete",
+                    data={"subscription_id": sub_id, "title": sub_title, "media_type": str(existing.media_type)},
+                    key=str(sub_id),
+                )
+        except Exception:
+            pass
+
+        await operation_log_service.log_background_event(
+            source_type="api",
+            module="subscriptions",
+            action="subscription.toggle",
+            status="success",
+            message=f"取消{media_label}订阅：{sub_title}",
+            extra={"subscription_id": sub_id, "title": sub_title, "media_type": media_label},
+        )
+
+        return {"subscribed": False, "message": "已取消订阅"}
+    else:
+        # 创建订阅
+        title = request.title or f"TMDB {request.tmdb_id}"
+        new_subscription = Subscription(
+            douban_id=request.douban_id or None,
+            tmdb_id=request.tmdb_id,
+            title=title,
+            media_type=request.media_type,
+            poster_path=normalize_tmdb_poster_path(request.poster_path),
+            overview=request.overview,
+            year=request.year,
+            rating=request.rating,
+            is_active=True,
+            auto_download=True,
+        )
+        db.add(new_subscription)
+        try:
+            await db.commit()
+            await db.refresh(new_subscription)
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(status_code=400, detail="Subscription already exists")
+
+        media_label = "电影" if request.media_type == MediaType.MOVIE else "电视剧"
+        asyncio.create_task(
+            _enrich_and_log(
+                new_subscription.id,
+                request.douban_id,
+                request.tmdb_id,
+                request.media_type,
+                new_subscription.title,
+                new_subscription.poster_path,
+                media_label,
+                new_subscription.year,
+                new_subscription.rating,
+            )
+        )
+
+        return {"subscribed": True, "subscription_id": new_subscription.id, "message": "订阅成功"}
+
+
 @router.delete("/{subscription_id}")
 async def delete_subscription(subscription_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
