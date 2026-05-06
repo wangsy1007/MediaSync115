@@ -1668,10 +1668,9 @@ import { ref, onMounted, onBeforeUnmount, reactive, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { authApi, pan115Api, pansouApi, settingsApi, subscriptionApi, licenseApi, archiveApi } from '@/api'
 import { resetAuthSessionCache } from '@/router'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 
 const router = useRouter()
-const route = useRoute()
 const activeSettingsTab = ref('pan115')
 const officialUpdateRepository = 'wangsy1007/mediasync115'
 const TMDB_DEFAULT_BASE_URL = 'https://api.themoviedb.org/3'
@@ -4328,7 +4327,7 @@ const handleSaveOfflineDefaultFolder = async () => {
 }
 
 onMounted(() => {
-  const tabParam = String(route.query.tab || '').trim()
+  const tabParam = String(router.currentRoute.value.query.tab || '').trim()
   if (tabParam) {
     activeSettingsTab.value = tabParam
   }
