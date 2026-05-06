@@ -137,7 +137,6 @@ const sourceTypeLabels = {
 }
 
 const moduleLabels = {
-  scheduler: '调度器',
   subscriptions: '订阅',
   explore_queue: '探索队列',
   pan115: '115网盘',
@@ -145,9 +144,19 @@ const moduleLabels = {
   settings: '设置',
   archive: '归档',
   emby: 'Emby',
-  health: '健康检查',
-  logs: '日志',
   downloads: '下载',
+  scheduler: '调度器',
+  sync: '剧集同步',
+  feiniu_sync: '飞牛同步',
+  emby_sync: 'Emby同步',
+  tg_sync: 'Telegram同步',
+  chart_subscription: '榜单订阅',
+  workflow: '工作流',
+  hdhive: 'HDHive签到',
+  strm: 'STRM生成',
+  auth: '认证',
+  license: '许可证',
+  workflows: '工作流',
   unknown: '未知',
 }
 
@@ -164,11 +173,19 @@ const actionLabels = {
   'scheduler.job.finish': '调度任务完成',
   'scheduler.job.update': '调度任务更新',
   'scheduler.job.result_persist_failed': '调度结果持久化失败',
+  'subscription.check.start': '订阅检查任务开始',
   'subscription.run.background.start': '订阅后台任务开始',
   'subscription.run.background.running': '订阅后台任务执行中',
   'subscription.run.background.finish': '订阅后台任务完成',
-  'subscription.item.done': '单项订阅处理完成',
-  'subscription.item.failed': '单项订阅处理失败',
+  'subscription.item.done': '订阅项自动清理',
+  'subscription.item.failed': '订阅项处理失败',
+  'subscription.item.fetch_done': '资源抓取完成',
+  'subscription.item.store_done': '资源入库完成',
+  'subscription.item.transfer_new_start': '开始自动转存新资源',
+  'subscription.item.transfer_new_done': '新资源转存完成',
+  'subscription.item.transfer_retry_start': '开始重试历史资源',
+  'subscription.item.transfer_retry_done': '历史重试完成',
+  'subscription.item.cleanup_after_transfer': '转存完成后自动清理',
   'explore.queue.subscribe.start': '探索订阅开始',
   'explore.queue.subscribe.finish': '探索订阅完成',
   'explore.queue.save.start': '探索转存开始',
@@ -207,6 +224,11 @@ const apiActionPatterns = [
   [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/downloads/, '下载'],
   [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/scheduler/, '调度器'],
   [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/workflows/, '工作流'],
+  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/explore/, '探索'],
+  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/auth/, '认证'],
+  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/license/, '许可证'],
+  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/tg/, 'Telegram'],
+  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/charts/, '榜单'],
 ]
 
 const httpMethodLabels = { GET: '查询', POST: '提交', PUT: '更新', DELETE: '删除', PATCH: '修改' }
@@ -271,6 +293,8 @@ const endpointLabels = {
   check_hdhive_credentials: '检查 HDHive 连接',
   check_tg_credentials: '检查 Telegram 连接',
   check_tg_qr_login_status: '检查 Telegram 二维码登录状态',
+  create_subscription: '创建订阅',
+  delete_subscription: '删除订阅',
   enqueue_explore_subscribe_task: '加入探索订阅队列',
   get_app_info: '获取应用信息',
   get_auth_session: '获取登录会话',
@@ -322,6 +346,7 @@ const endpointLabels = {
   set_offline_default_folder: '设置离线默认目录',
   start_tg_index_backfill: '启动 Telegram 索引补录',
   start_tg_qr_login: '启动 Telegram 二维码登录',
+  toggle_subscription: '切换订阅状态',
   update_pansou_config: '更新盘搜配置',
   update_runtime_settings: '更新运行时设置',
   unknown: '未知'
@@ -349,7 +374,17 @@ const pathPatterns = [
   [/^\/api\/license\//, '许可证接口'],
   [/^\/api\/license$/, '许可证接口'],
   [/^\/api\/workflows\//, '工作流接口'],
-  [/^\/api\/workflows$/, '工作流接口']
+  [/^\/api\/workflows$/, '工作流接口'],
+  [/^\/api\/explore\//, '探索接口'],
+  [/^\/api\/explore$/, '探索接口'],
+  [/^\/api\/tg\//, 'Telegram接口'],
+  [/^\/api\/tg$/, 'Telegram接口'],
+  [/^\/api\/charts\//, '榜单接口'],
+  [/^\/api\/charts$/, '榜单接口'],
+  [/^\/api\/archive\//, '归档接口'],
+  [/^\/api\/archive$/, '归档接口'],
+  [/^\/api\/emby\//, 'Emby接口'],
+  [/^\/api\/emby$/, 'Emby接口'],
 ]
 
 const translateAction = (value) => {
@@ -534,10 +569,18 @@ const formatHttpCell = (row) => {
   return `${method} ${path}（状态码 ${statusCode}）`
 }
 
+const ALLOWED_MODULES = [
+  'subscriptions', 'explore_queue', 'pan115', 'search', 'settings',
+  'archive', 'emby', 'downloads', 'scheduler', 'sync', 'feiniu_sync',
+  'emby_sync', 'tg_sync', 'chart_subscription', 'workflow', 'hdhive',
+  'strm', 'auth', 'license', 'workflows', 'unknown',
+]
+
 const fetchFilterOptions = async () => {
   try {
     const { data } = await logsApi.modules()
-    moduleOptions.value = Array.isArray(data?.modules) ? data.modules : []
+    const rawModules = Array.isArray(data?.modules) ? data.modules : []
+    moduleOptions.value = rawModules.filter(m => ALLOWED_MODULES.includes(m))
     sourceTypeOptions.value = Array.isArray(data?.source_types) ? data.source_types : []
     statusOptions.value = Array.isArray(data?.statuses) ? data.statuses : []
   } catch (error) {
