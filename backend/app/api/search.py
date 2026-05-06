@@ -742,7 +742,7 @@ def _strip_keyword_punctuation(value: str) -> str:
 
 
 def _build_pansou_keyword_candidates(
-    payload: dict, media_type: str, tmdb_id: int
+    payload: dict, media_type: str, tmdb_id: int, season: int | None = None
 ) -> list[str]:
     candidates: list[str] = []
     seen: set[str] = set()
@@ -765,6 +765,7 @@ def _build_pansou_keyword_candidates(
         date_like = payload.get("release_date") or payload.get("release")
 
     year = _extract_year_from_date_like(date_like)
+    season_tag = f" S{season:02d}" if season and media_type == "tv" else ""
 
     def add_keyword(keyword: str) -> None:
         normalized = _normalize_keyword_text(keyword)
@@ -778,13 +779,15 @@ def _build_pansou_keyword_candidates(
 
     # Prefer localized title with year, then fallback to localized title.
     if title and year:
-        add_keyword(f"{title} {year}")
-    add_keyword(title)
+        add_keyword(f"{title} {year}{season_tag}")
+    if title:
+        add_keyword(f"{title}{season_tag}")
 
     # Then try original title with and without year.
     if original_title and year:
-        add_keyword(f"{original_title} {year}")
-    add_keyword(original_title)
+        add_keyword(f"{original_title} {year}{season_tag}")
+    if original_title:
+        add_keyword(f"{original_title}{season_tag}")
 
     if media_type != "tv":
         # Movie-specific fallback variants: de-yeared / punctuation-stripped / subtitle split.
@@ -811,7 +814,7 @@ def _build_pansou_keyword_candidates(
 
 
 def _build_tg_keyword_candidates(
-    payload: dict, media_type: str, tmdb_id: int
+    payload: dict, media_type: str, tmdb_id: int, season: int | None = None
 ) -> list[str]:
     candidates: list[str] = []
     seen: set[str] = set()
@@ -834,6 +837,7 @@ def _build_tg_keyword_candidates(
         date_like = payload.get("release_date") or payload.get("release")
 
     year = _extract_year_from_date_like(date_like)
+    season_tag = f" S{season:02d}" if season and media_type == "tv" else ""
 
     def add_keyword(keyword: str) -> None:
         normalized = _normalize_keyword_text(keyword)
@@ -846,11 +850,13 @@ def _build_tg_keyword_candidates(
         candidates.append(normalized)
 
     if title and year:
-        add_keyword(f"{title} {year}")
-    add_keyword(title)
+        add_keyword(f"{title} {year}{season_tag}")
+    if title:
+        add_keyword(f"{title}{season_tag}")
     if original_title and year:
-        add_keyword(f"{original_title} {year}")
-    add_keyword(original_title)
+        add_keyword(f"{original_title} {year}{season_tag}")
+    if original_title:
+        add_keyword(f"{original_title}{season_tag}")
     add_keyword(f"TMDB {tmdb_id}")
     return candidates
 
@@ -898,7 +904,7 @@ def _build_pansou_keyword_from_media(payload: dict, media_type: str) -> str:
 
 
 def _build_seedhub_keyword_candidates(
-    payload: dict, media_type: str, tmdb_id: int
+    payload: dict, media_type: str, tmdb_id: int, season: int | None = None
 ) -> list[str]:
     candidates: list[str] = []
     seen: set[str] = set()
@@ -921,6 +927,7 @@ def _build_seedhub_keyword_candidates(
         date_like = payload.get("release_date") or payload.get("release")
 
     year = _extract_year_from_date_like(date_like)
+    season_tag = f" S{season:02d}" if season and media_type == "tv" else ""
 
     def add_keyword(keyword: str) -> None:
         normalized = _normalize_keyword_text(keyword)
@@ -932,12 +939,14 @@ def _build_seedhub_keyword_candidates(
         seen.add(fingerprint)
         candidates.append(normalized)
 
-    add_keyword(title)
-    add_keyword(original_title)
+    if title:
+        add_keyword(f"{title}{season_tag}")
+    if original_title:
+        add_keyword(f"{original_title}{season_tag}")
     if title and year:
-        add_keyword(f"{title} {year}")
+        add_keyword(f"{title} {year}{season_tag}")
     if original_title and year:
-        add_keyword(f"{original_title} {year}")
+        add_keyword(f"{original_title} {year}{season_tag}")
     add_keyword(f"TMDB {tmdb_id}")
     return candidates
 
@@ -2102,13 +2111,13 @@ async def _load_media_payload(tmdb_id: int, media_type: str) -> dict:
 
 
 async def _search_pansou_pan115_resources(
-    tmdb_id: int, media_type: str
+    tmdb_id: int, media_type: str, season: int | None = None
 ) -> dict[str, Any]:
     pansou_service.set_base_url(runtime_settings_service.get_pansou_base_url())
     media_payload = await _load_media_payload(tmdb_id, media_type)
 
     keyword_candidates = _build_pansou_keyword_candidates(
-        media_payload, media_type, tmdb_id
+        media_payload, media_type, tmdb_id, season
     )
     selected_keyword = (
         keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
@@ -2156,10 +2165,12 @@ async def _search_pansou_pan115_resources(
     }
 
 
-async def _search_tg_pan115_resources(tmdb_id: int, media_type: str) -> dict[str, Any]:
+async def _search_tg_pan115_resources(
+    tmdb_id: int, media_type: str, season: int | None = None
+) -> dict[str, Any]:
     media_payload = await _load_media_payload(tmdb_id, media_type)
     keyword_candidates = _build_tg_keyword_candidates(
-        media_payload, media_type, tmdb_id
+        media_payload, media_type, tmdb_id, season
     )
     context = _extract_tg_expected_context(media_payload, media_type)
     selected_keyword = (
@@ -2217,12 +2228,12 @@ async def _search_tg_pan115_resources(tmdb_id: int, media_type: str) -> dict[str
 
 
 async def _search_seedhub_magnet_resources(
-    tmdb_id: int, media_type: str, limit: int = 40
+    tmdb_id: int, media_type: str, limit: int = 40, season: int | None = None
 ) -> tuple[str, list[dict]]:
     media_payload = await _load_media_payload(tmdb_id, media_type)
     expected_context = _extract_seedhub_expected_context(media_payload, media_type)
     keyword_candidates = _build_seedhub_keyword_candidates(
-        media_payload, media_type, tmdb_id
+        media_payload, media_type, tmdb_id, season
     )
     selected_keyword = (
         keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
@@ -2240,11 +2251,11 @@ async def _search_seedhub_magnet_resources(
 
 
 async def _search_butailing_magnet_resources(
-    tmdb_id: int, media_type: str
+    tmdb_id: int, media_type: str, season: int | None = None
 ) -> tuple[str, list[dict]]:
     media_payload = await _load_media_payload(tmdb_id, media_type)
     keyword_candidates = _build_pansou_keyword_candidates(
-        media_payload, media_type, tmdb_id
+        media_payload, media_type, tmdb_id, season
     )
     selected_keyword = (
         keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
@@ -2602,14 +2613,15 @@ async def get_tv_pan115(
     tmdb_id: int,
     page: int = Query(1, ge=1),
     refresh: bool = Query(False, description="是否绕过缓存"),
+    season: int | None = Query(None, description="季数"),
 ):
-    cache_key = f"{tmdb_id}:{page}:pansou"
+    cache_key = f"{tmdb_id}:{page}:pansou:s{season or 'all'}"
     if not refresh:
         cached_payload, is_fresh = _get_cached_payload(_tv_pan115_cache, cache_key)
         if is_fresh:
             return cached_payload
 
-    search_result = await _search_pansou_pan115_resources(tmdb_id, "tv")
+    search_result = await _search_pansou_pan115_resources(tmdb_id, "tv", season)
     pansou_list: list[dict] = list(search_result.get("list") or [])
     pansou_keyword = str(search_result.get("keyword") or "")
     attempts = list(search_result.get("attempts") or [])
@@ -2639,14 +2651,15 @@ async def get_tv_pan115_with_pansou(
     tmdb_id: int,
     page: int = Query(1, ge=1),
     refresh: bool = Query(False, description="是否绕过缓存"),
+    season: int | None = Query(None, description="季数"),
 ):
-    cache_key = f"{tmdb_id}:{page}:pansou"
+    cache_key = f"{tmdb_id}:{page}:pansou:s{season or 'all'}"
     if not refresh:
         cached_payload, is_fresh = _get_cached_payload(_tv_pan115_cache, cache_key)
         if is_fresh:
             return cached_payload
 
-    search_result = await _search_pansou_pan115_resources(tmdb_id, "tv")
+    search_result = await _search_pansou_pan115_resources(tmdb_id, "tv", season)
     pansou_list: list[dict] = list(search_result.get("list") or [])
     pansou_keyword = str(search_result.get("keyword") or "")
     attempts = list(search_result.get("attempts") or [])
@@ -2676,8 +2689,9 @@ async def get_tv_pan115_with_hdhive(
     tmdb_id: int,
     page: int = Query(1, ge=1),
     refresh: bool = Query(False, description="是否绕过缓存"),
+    season: int | None = Query(None, description="季数"),
 ):
-    cache_key = f"{tmdb_id}:{page}:hdhive"
+    cache_key = f"{tmdb_id}:{page}:hdhive:s{season or 'all'}"
     if not refresh:
         cached_payload, is_fresh = _get_cached_payload(_tv_pan115_cache, cache_key)
         if is_fresh:
@@ -2726,14 +2740,15 @@ async def get_tv_pan115_with_tg(
     tmdb_id: int,
     page: int = Query(1, ge=1),
     refresh: bool = Query(False, description="是否绕过缓存"),
+    season: int | None = Query(None, description="季数"),
 ):
-    cache_key = f"{tmdb_id}:{page}:tg"
+    cache_key = f"{tmdb_id}:{page}:tg:s{season or 'all'}"
     if not refresh:
         cached_payload, is_fresh = _get_cached_payload(_tv_pan115_cache, cache_key)
         if is_fresh:
             return cached_payload
 
-    search_result = await _search_tg_pan115_resources(tmdb_id, "tv")
+    search_result = await _search_tg_pan115_resources(tmdb_id, "tv", season)
     tg_list: list[dict] = list(search_result.get("list") or [])
     tg_keyword = str(search_result.get("keyword") or "")
     attempts = list(search_result.get("attempts") or [])
@@ -2928,7 +2943,7 @@ async def get_tv_magnet(
     episode: Optional[int] = Query(None, description="Episode"),
     limit: int = Query(40, ge=1, le=80, description="SeedHub 结果上限"),
 ):
-    keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "tv", limit=limit)
+    keyword, items = await _search_seedhub_magnet_resources(tmdb_id, "tv", limit=limit, season=season)
     return {
         "id": tmdb_id,
         "media_type": "tv",
@@ -2949,6 +2964,7 @@ async def get_tv_magnet(
 @router.get("/tv/{tmdb_id}/magnet/seedhub")
 async def get_tv_magnet_seedhub(
     tmdb_id: int,
+    season: Optional[int] = Query(None, description="Season"),
     limit: int = Query(40, ge=1, le=80, description="SeedHub 结果上限"),
 ):
     attempts: list[dict[str, Any]] = []
@@ -2957,7 +2973,7 @@ async def get_tv_magnet_seedhub(
 
     try:
         keyword, items = await _search_seedhub_magnet_resources(
-            tmdb_id, "tv", limit=limit
+            tmdb_id, "tv", limit=limit, season=season
         )
         attempts.append(
             {
@@ -2981,13 +2997,16 @@ async def get_tv_magnet_seedhub(
 
 
 @router.get("/tv/{tmdb_id}/magnet/butailing")
-async def get_tv_magnet_butailing(tmdb_id: int):
+async def get_tv_magnet_butailing(
+    tmdb_id: int,
+    season: Optional[int] = Query(None, description="Season"),
+):
     attempts: list[dict[str, Any]] = []
     keyword = ""
     items: list[dict] = []
 
     try:
-        keyword, items = await _search_butailing_magnet_resources(tmdb_id, "tv")
+        keyword, items = await _search_butailing_magnet_resources(tmdb_id, "tv", season=season)
         attempts.append(
             {
                 "service": "butailing",

@@ -653,11 +653,11 @@ const getPosterUrl = (path) => {
   return TMDB_IMAGE_BASE + path
 }
 
-const getPan115CacheKey = () => `tv_pan115_${route.params.id}`
+const getPan115CacheKey = (season = null) => `tv_pan115_${route.params.id}_s${season || 'all'}`
 
-const readPan115Cache = () => {
+const readPan115Cache = (season = null) => {
   try {
-    const raw = sessionStorage.getItem(getPan115CacheKey())
+    const raw = sessionStorage.getItem(getPan115CacheKey(season))
     if (!raw) return null
     const parsed = JSON.parse(raw)
     if (!parsed || !Array.isArray(parsed.list) || !parsed.ts) return null
@@ -669,10 +669,10 @@ const readPan115Cache = () => {
   }
 }
 
-const writePan115Cache = (list) => {
+const writePan115Cache = (list, season = null) => {
   try {
     sessionStorage.setItem(
-      getPan115CacheKey(),
+      getPan115CacheKey(season),
       JSON.stringify({
         version: PAN115_CACHE_VERSION,
         ts: Date.now(),
@@ -928,6 +928,7 @@ const buildHdhiveKeywords = () => {
   const name = String(tv.value?.name || '').trim()
   const originalName = String(tv.value?.original_name || '').trim()
   const year = String(tv.value?.first_air_date || '').split('-')[0]
+  const season = selectedSeason.value
   const candidates = []
   const seen = new Set()
   const add = (keyword) => {
@@ -939,10 +940,15 @@ const buildHdhiveKeywords = () => {
     candidates.push(raw)
   }
 
+  const seasonTag = season ? ` S${String(season).padStart(2, '0')}` : ''
   add(name)
   if (name && year) add(`${name} ${year}`)
+  if (name && seasonTag) add(`${name}${seasonTag}`)
+  if (name && year && seasonTag) add(`${name} ${year}${seasonTag}`)
   add(originalName)
   if (originalName && year) add(`${originalName} ${year}`)
+  if (originalName && seasonTag) add(`${originalName}${seasonTag}`)
+  if (originalName && year && seasonTag) add(`${originalName} ${year}${seasonTag}`)
   return candidates
 }
 
@@ -1034,7 +1040,8 @@ const fetchExternalIds = async () => {
 }
 
 const fetchPan115 = async (forceRefresh = false) => {
-  const cachedList = readPan115Cache()
+  const cacheKey = `s${selectedSeason.value}`
+  const cachedList = readPan115Cache(cacheKey)
   if (!forceRefresh && cachedList && cachedList.length > 0) {
     pan115Resources.value = cachedList
     pansouTried.value = cachedList.some((item) => item?.source_service === 'pansou')
@@ -1049,7 +1056,7 @@ const fetchPan115 = async (forceRefresh = false) => {
   }
 
   try {
-    const { data } = await searchApi.getTvPan115(route.params.id, 1, forceRefresh)
+    const { data } = await searchApi.getTvPan115(route.params.id, 1, forceRefresh, selectedSeason.value)
     const pansouList = Array.isArray(data.list) ? data.list : []
     const cachedPansouList = pan115Resources.value.filter((item) => item?.source_service === 'pansou')
     const cachedHdhiveList = pan115Resources.value.filter((item) => item?.source_service === 'hdhive')
@@ -1059,7 +1066,7 @@ const fetchPan115 = async (forceRefresh = false) => {
       mergePan115Resources(cachedTgList, mergePan115Resources(cachedPansouList, cachedHdhiveList))
     )
     pan115Resources.value = mergedList
-    writePan115Cache(mergedList)
+    writePan115Cache(mergedList, cacheKey)
   } catch (error) {
     if (!cachedList || cachedList.length === 0) {
       console.error('Failed to fetch pan115:', error)
@@ -1074,11 +1081,11 @@ const handleFetchPansouPan115 = async () => {
   pansouLoading.value = true
   pansouTried.value = true
   try {
-    const { data } = await searchApi.getTvPan115Pansou(route.params.id)
+    const { data } = await searchApi.getTvPan115Pansou(route.params.id, 1, false, selectedSeason.value)
     const pansouList = Array.isArray(data.list) ? data.list : []
     const mergedList = mergePan115Resources(pan115Resources.value, pansouList)
     pan115Resources.value = mergedList
-    writePan115Cache(mergedList)
+    writePan115Cache(mergedList, selectedSeason.value)
     if (pansouList.length === 0) {
       ElMessage.info('Pansou 暂未找到可用资源')
     }
@@ -1094,7 +1101,7 @@ const handleFetchHdhivePan115 = async () => {
   hdhiveLoading.value = true
   hdhiveTried.value = true
   try {
-    const { data } = await searchApi.getTvPan115Hdhive(route.params.id)
+    const { data } = await searchApi.getTvPan115Hdhive(route.params.id, 1, false, selectedSeason.value)
     let hdhiveList = Array.isArray(data.list) ? data.list : []
     hdhiveList = hdhiveList.map((item) => ({ ...item, source_service: item?.source_service || 'hdhive' }))
 
@@ -1118,7 +1125,7 @@ const handleFetchHdhivePan115 = async () => {
 
     const mergedList = mergePan115Resources(pan115Resources.value, hdhiveList)
     pan115Resources.value = mergedList
-    writePan115Cache(mergedList)
+    writePan115Cache(mergedList, selectedSeason.value)
     if (hdhiveList.length === 0) {
       ElMessage.info('HDHive 暂未找到可用资源')
     }
@@ -1134,11 +1141,11 @@ const handleFetchTgPan115 = async () => {
   tgLoading.value = true
   tgTried.value = true
   try {
-    const { data } = await searchApi.getTvPan115Tg(route.params.id)
+    const { data } = await searchApi.getTvPan115Tg(route.params.id, 1, false, selectedSeason.value)
     const tgList = Array.isArray(data.list) ? data.list : []
     const mergedList = mergePan115Resources(pan115Resources.value, tgList)
     pan115Resources.value = mergedList
-    writePan115Cache(mergedList)
+    writePan115Cache(mergedList, selectedSeason.value)
     if (tgList.length === 0) {
       ElMessage.info('Telegram 暂未找到可用资源')
     }
@@ -1171,7 +1178,7 @@ const handleFetchSeedhubMagnet = async () => {
   magnetPager.value.seedhub = 1
 
   try {
-    const { data } = await searchApi.getTvMagnetSeedhub(route.params.id, seedhubFetchLimit)
+    const { data } = await searchApi.getTvMagnetSeedhub(route.params.id, selectedSeason.value, seedhubFetchLimit)
     const seedhubList = Array.isArray(data?.list) ? data.list : []
     const markedSeedhubList = seedhubList.map((item) => ({ ...item, source_service: item?.source_service || 'seedhub' }))
     magnetResources.value = mergeMagnetResources(magnetResources.value, markedSeedhubList)
@@ -1193,7 +1200,7 @@ const handleFetchButailingMagnet = async () => {
   magnetPager.value.butailing = 1
 
   try {
-    const { data } = await searchApi.getTvMagnetButailing(route.params.id)
+    const { data } = await searchApi.getTvMagnetButailing(route.params.id, selectedSeason.value)
     const btlList = Array.isArray(data?.list) ? data.list : []
     const markedBtlList = btlList.map((item) => ({ ...item, source_service: item?.source_service || 'butailing' }))
     magnetResources.value = mergeMagnetResources(magnetResources.value, markedBtlList)
@@ -1214,6 +1221,12 @@ const handleSeasonChange = () => {
   magnetResources.value = []
   seedhubMagnetTried.value = false
   butailingMagnetTried.value = false
+  pan115Resources.value = []
+  pan115ResourcesCache.value = {}
+  pansouTried.value = false
+  hdhiveTried.value = false
+  tgTried.value = false
+  pan115SourceTab.value = 'pansou'
 }
 
 const handleSubscribe = async () => {

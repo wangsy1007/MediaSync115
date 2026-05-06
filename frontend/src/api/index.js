@@ -165,24 +165,24 @@ export const searchApi = {
     api.post(`/search/movie/${tmdbId}/magnet/seedhub/tasks`, null, { params: { limit, force_refresh: forceRefresh } }),
 
   getTv: (tmdbId) => api.get(`/search/tv/${tmdbId}`),
-  getTvPan115: (tmdbId, page = 1, refresh = false) =>
-    api.get(`/search/tv/${tmdbId}/115`, { params: { page, refresh } }),
-  getTvPan115Pansou: (tmdbId, page = 1, refresh = false) =>
-    api.get(`/search/tv/${tmdbId}/115/pansou`, { params: { page, refresh } }),
-  getTvPan115Hdhive: (tmdbId, page = 1, refresh = false) =>
-    api.get(`/search/tv/${tmdbId}/115/hdhive`, { params: { page, refresh } }),
-  getTvPan115Tg: (tmdbId, page = 1, refresh = false) =>
-    api.get(`/search/tv/${tmdbId}/115/tg`, { params: { page, refresh } }),
+  getTvPan115: (tmdbId, page = 1, refresh = false, season = null) =>
+    api.get(`/search/tv/${tmdbId}/115`, { params: { page, refresh, season } }),
+  getTvPan115Pansou: (tmdbId, page = 1, refresh = false, season = null) =>
+    api.get(`/search/tv/${tmdbId}/115/pansou`, { params: { page, refresh, season } }),
+  getTvPan115Hdhive: (tmdbId, page = 1, refresh = false, season = null) =>
+    api.get(`/search/tv/${tmdbId}/115/hdhive`, { params: { page, refresh, season } }),
+  getTvPan115Tg: (tmdbId, page = 1, refresh = false, season = null) =>
+    api.get(`/search/tv/${tmdbId}/115/tg`, { params: { page, refresh, season } }),
 
   getTvSeason: (tmdbId, seasonNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}`),
 
   getTvEpisode: (tmdbId, seasonNumber, episodeNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}/episode/${episodeNumber}`),
 
   getTvMagnet: (tmdbId, season, episode) => api.get(`/search/tv/${tmdbId}/magnet`, { params: { season, episode } }),
-  getTvMagnetSeedhub: (tmdbId, limit = 80) =>
-    api.get(`/search/tv/${tmdbId}/magnet`, { params: { source: 'seedhub', limit } }),
-  getTvMagnetButailing: (tmdbId) =>
-    api.get(`/search/tv/${tmdbId}/magnet/butailing`),
+  getTvMagnetSeedhub: (tmdbId, season = null, limit = 80) =>
+    api.get(`/search/tv/${tmdbId}/magnet/seedhub`, { params: { season, limit } }),
+  getTvMagnetButailing: (tmdbId, season = null) =>
+    api.get(`/search/tv/${tmdbId}/magnet/butailing`, { params: { season } }),
   createTvSeedhubMagnetTask: (tmdbId, limit = 40, forceRefresh = false) =>
     api.post(`/search/tv/${tmdbId}/magnet/seedhub/tasks`, null, { params: { limit, force_refresh: forceRefresh } }),
   getSeedhubMagnetTask: (taskId) => api.get(`/search/magnet/seedhub/tasks/${taskId}`),
