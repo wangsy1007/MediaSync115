@@ -93,9 +93,8 @@ class ExploreActionQueueService:
     @staticmethod
     def _sort_by_pref(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         pref_res = runtime_settings_service.get_resource_preferred_resolutions()
-        pref_fmt = runtime_settings_service.get_resource_preferred_formats()
-        if pref_res or pref_fmt:
-            return sort_by_preference(rows, pref_res, pref_fmt)
+        if pref_res:
+            return sort_by_preference(rows, pref_res, [])
         return rows
 
     @staticmethod

@@ -1026,11 +1026,6 @@
                 <el-checkbox v-for="r in allResolutions" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
               </el-checkbox-group>
             </el-form-item>
-            <el-form-item label="格式偏好">
-              <el-checkbox-group v-model="resourcePrefForm.formats" class="preference-inline-group">
-                <el-checkbox v-for="f in allFormats" :key="f" :label="f" :value="f">{{ f }}</el-checkbox>
-              </el-checkbox-group>
-            </el-form-item>
             <el-form-item label="HDR偏好">
               <el-checkbox-group v-model="resourcePrefForm.hdr" class="preference-inline-group">
                 <el-checkbox value="Dolby Vision">杜比视界</el-checkbox>
@@ -1782,7 +1777,6 @@ const allResolutions = ALL_RESOLUTIONS
 const allFormats = ALL_FORMATS
 const resourcePrefForm = reactive({
   resolutions: [],
-  formats: [],
   hdr: [],
   audio: [],
   subtitles: [],
@@ -3838,7 +3832,6 @@ const fetchRuntimeSettings = async () => {
 
     // Resource quality preferences
     resourcePrefForm.resolutions = Array.isArray(data.resource_preferred_resolutions) ? data.resource_preferred_resolutions : []
-    resourcePrefForm.formats = Array.isArray(data.resource_preferred_formats) ? data.resource_preferred_formats : []
     resourcePrefForm.hdr = Array.isArray(data.resource_preferred_hdr) ? data.resource_preferred_hdr : []
     resourcePrefForm.audio = Array.isArray(data.resource_preferred_audio) ? data.resource_preferred_audio : []
     resourcePrefForm.subtitles = Array.isArray(data.resource_preferred_subtitles) ? data.resource_preferred_subtitles : []
@@ -4007,7 +4000,6 @@ const handleSaveScheduler = async () => {
       subscription_hdhive_unlock_threshold_inclusive: schedulerForm.value.hdhiveUnlock.thresholdInclusive !== false,
       subscription_hdhive_prefer_free: schedulerForm.value.hdhiveUnlock.preferFree !== false,
       resource_preferred_resolutions: resourcePrefForm.resolutions,
-      resource_preferred_formats: resourcePrefForm.formats,
       resource_preferred_hdr: resourcePrefForm.hdr,
       resource_preferred_audio: resourcePrefForm.audio,
       resource_preferred_subtitles: resourcePrefForm.subtitles,

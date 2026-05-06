@@ -104,7 +104,6 @@ class RuntimeSettingsRequest(BaseModel):
     subscription_hdhive_unlock_threshold_inclusive: Optional[bool] = None
     subscription_hdhive_prefer_free: Optional[bool] = None
     resource_preferred_resolutions: Optional[list[str]] = None
-    resource_preferred_formats: Optional[list[str]] = None
     resource_preferred_hdr: Optional[list[str]] = None
     resource_preferred_audio: Optional[list[str]] = None
     resource_preferred_subtitles: Optional[list[str]] = None

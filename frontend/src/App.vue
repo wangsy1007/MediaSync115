@@ -385,7 +385,7 @@ html, body, #app {
 
 .app-aside {
   background: var(--ms-glass-bg-heavy);
-  border-right: 1px solid var(--ms-glass-border);
+  border-right: 1px solid transparent;
   /* 性能优化：条件启用 backdrop-filter */
   @supports (backdrop-filter: blur(20px)) {
     backdrop-filter: blur(20px);

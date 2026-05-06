@@ -129,7 +129,6 @@ class RuntimeSettingsService:
             "subscription_hdhive_unlock_threshold_inclusive": True,
             "subscription_hdhive_prefer_free": True,
             "resource_preferred_resolutions": [],
-            "resource_preferred_formats": [],
             "resource_preferred_hdr": [],
             "resource_preferred_audio": [],
             "resource_preferred_subtitles": [],
@@ -661,10 +660,6 @@ class RuntimeSettingsService:
         val = self._data.get("resource_preferred_resolutions")
         return list(val) if isinstance(val, list) else []
 
-    def get_resource_preferred_formats(self) -> list[str]:
-        val = self._data.get("resource_preferred_formats")
-        return list(val) if isinstance(val, list) else []
-
     def get_resource_preferred_hdr(self) -> list[str]:
         val = self._data.get("resource_preferred_hdr")
         return list(val) if isinstance(val, list) else []
@@ -965,7 +960,6 @@ class RuntimeSettingsService:
                 if key in (
                     "detail_visible_tabs",
                     "resource_preferred_resolutions",
-                    "resource_preferred_formats",
                     "resource_preferred_hdr",
                     "resource_preferred_audio",
                     "resource_preferred_subtitles",
@@ -1175,7 +1169,6 @@ class RuntimeSettingsService:
             "subscription_hdhive_unlock_threshold_inclusive": self.get_subscription_hdhive_unlock_threshold_inclusive(),
             "subscription_hdhive_prefer_free": self.get_subscription_hdhive_prefer_free(),
             "resource_preferred_resolutions": self.get_resource_preferred_resolutions(),
-            "resource_preferred_formats": self.get_resource_preferred_formats(),
             "resource_preferred_hdr": self.get_resource_preferred_hdr(),
             "resource_preferred_audio": self.get_resource_preferred_audio(),
             "resource_preferred_subtitles": self.get_resource_preferred_subtitles(),

@@ -1488,10 +1488,9 @@ class SubscriptionService:
                     )
                 # Sort by user's resolution/format preferences
                 pref_res = self._resolve_subscription_resolutions(sub)
-                pref_fmt = self._resolve_subscription_formats(sub)
-                if pref_res or pref_fmt:
+                if pref_res:
                     source_resources = sort_by_preference(
-                        source_resources, pref_res, pref_fmt
+                        source_resources, pref_res, []
                     )
                 primary_resources.extend(source_resources)
 
@@ -1530,10 +1529,9 @@ class SubscriptionService:
         traces.extend(offline_traces)
         if offline_resources:
             pref_res = self._resolve_subscription_resolutions(sub)
-            pref_fmt = self._resolve_subscription_formats(sub)
-            if pref_res or pref_fmt:
+            if pref_res:
                 offline_resources = sort_by_preference(
-                    offline_resources, pref_res, pref_fmt
+                    offline_resources, pref_res, []
                 )
             primary_resources.extend(offline_resources)
             source_attempts.append(
@@ -3159,13 +3157,9 @@ class SubscriptionService:
     def _resolve_subscription_resolutions(self, sub: "SubscriptionSnapshot") -> list[str]:
         return runtime_settings_service.get_resource_preferred_resolutions()
 
-    def _resolve_subscription_formats(self, sub: "SubscriptionSnapshot") -> list[str]:
-        return runtime_settings_service.get_resource_preferred_formats()
-
     def _resolve_subscription_quality_filter(self, sub: "SubscriptionSnapshot") -> dict[str, Any]:
         return {
             "preferred_resolutions": runtime_settings_service.get_resource_preferred_resolutions() or None,
-            "preferred_formats": runtime_settings_service.get_resource_preferred_formats() or None,
             "exclude_labels": runtime_settings_service.get_resource_exclude_tags() or None,
             "preferred_languages": runtime_settings_service.get_resource_preferred_audio() or None,
             "preferred_subtitles": runtime_settings_service.get_resource_preferred_subtitles() or None,
