@@ -2,7 +2,7 @@ import json
 import re
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete as sa_delete, select, or_, and_
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -368,7 +368,9 @@ LIMIT 1
 
 @router.post("")
 async def create_subscription(
-    subscription: SubscriptionCreate, db: AsyncSession = Depends(get_db)
+    subscription: SubscriptionCreate,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
 ):
     dedupe_conditions = []
     if subscription.douban_id:
@@ -391,18 +393,7 @@ async def create_subscription(
     payload = subscription.model_dump()
     normalize_tv_subscription_options(payload, subscription.media_type)
 
-    # 自动补全 ID 信息
-    enriched_ids = await _enrich_subscription_ids(
-        subscription.douban_id,
-        subscription.tmdb_id,
-        subscription.media_type,
-    )
-    payload.update(enriched_ids)
-
-    payload["poster_path"] = await resolve_tmdb_poster_path(
-        payload.get("tmdb_id"),
-        payload.get("media_type"),
-    ) or sanitize_poster_path(payload.get("poster_path"))
+    payload["poster_path"] = sanitize_poster_path(payload.get("poster_path"))
 
     new_subscription = Subscription(**payload)
     new_subscription.auto_download = True
@@ -413,20 +404,62 @@ async def create_subscription(
         await db.rollback()
         raise HTTPException(status_code=400, detail="Subscription already exists")
     await db.refresh(new_subscription)
+
+    # 快速记录操作日志（不阻塞）
     media_label = "电影" if subscription.media_type == MediaType.MOVIE else "电视剧"
-    await operation_log_service.log_background_event(
-        source_type="api",
-        module="subscriptions",
-        action="subscription.create",
-        status="success",
-        message=f"新增{media_label}订阅：{new_subscription.title}（TMDB: {new_subscription.tmdb_id or '无'}）",
-        extra={
-            "subscription_id": new_subscription.id,
-            "title": new_subscription.title,
-            "media_type": media_label,
-            "tmdb_id": new_subscription.tmdb_id,
-        },
+    background_tasks.add_task(
+        _enrich_and_log,
+        new_subscription.id,
+        subscription.douban_id,
+        subscription.tmdb_id,
+        subscription.media_type,
+        new_subscription.title,
+        new_subscription.poster_path,
+        media_label,
+        new_subscription.year,
+        new_subscription.rating,
     )
+
+    return new_subscription
+
+
+async def _enrich_and_log(
+    subscription_id: int,
+    douban_id: str | None,
+    tmdb_id: int | None,
+    media_type: MediaType,
+    title: str,
+    current_poster: str | None,
+    media_label: str,
+    year: str | None,
+    rating: float | None,
+) -> None:
+    """后台补全订阅的 ID 信息、海报并记录日志"""
+    from app.core.database import async_session_maker
+
+    enriched_ids = await _enrich_subscription_ids(douban_id, tmdb_id, media_type)
+
+    resolved_poster = await resolve_tmdb_poster_path(
+        enriched_ids.get("tmdb_id") or tmdb_id,
+        media_type,
+    ) or sanitize_poster_path(current_poster)
+
+    update_data = {}
+    if enriched_ids:
+        update_data.update(enriched_ids)
+    if resolved_poster and resolved_poster != current_poster:
+        update_data["poster_path"] = resolved_poster
+
+    if update_data:
+        async with async_session_maker() as enrich_db:
+            result = await enrich_db.execute(
+                select(Subscription).where(Subscription.id == subscription_id)
+            )
+            sub = result.scalar_one_or_none()
+            if sub:
+                for key, value in update_data.items():
+                    setattr(sub, key, value)
+                await enrich_db.commit()
 
     # 发送订阅创建事件到 Kafka
     try:
@@ -436,19 +469,31 @@ async def create_subscription(
             kafka_producer.send(
                 event_type="subscription_create",
                 data={
-                    "subscription_id": new_subscription.id,
-                    "title": new_subscription.title,
-                    "media_type": str(subscription.media_type),
-                    "tmdb_id": new_subscription.tmdb_id,
-                    "year": new_subscription.year,
-                    "rating": new_subscription.rating,
+                    "subscription_id": subscription_id,
+                    "title": title,
+                    "media_type": str(media_type),
+                    "tmdb_id": tmdb_id,
+                    "year": year,
+                    "rating": rating,
                 },
-                key=str(new_subscription.id),
+                key=str(subscription_id),
             )
     except Exception:
         pass
 
-    return new_subscription
+    await operation_log_service.log_background_event(
+        source_type="api",
+        module="subscriptions",
+        action="subscription.create",
+        status="success",
+        message=f"新增{media_label}订阅：{title}（TMDB: {tmdb_id or '无'}）",
+        extra={
+            "subscription_id": subscription_id,
+            "title": title,
+            "media_type": media_label,
+            "tmdb_id": tmdb_id,
+        },
+    )
 
 
 @router.get("")
