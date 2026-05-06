@@ -493,6 +493,12 @@ class HDHiveService:
             checked_in,
         )
 
+        points_earned = self._extract_first_int(data.get("points_earned"))
+        if points_earned is None:
+            points_earned = self._extract_first_int(data.get("points"))
+        if points_earned is None:
+            points_earned = self._extract_first_int(data.get("change"))
+
         return {
             "success": status == "success",
             "status": status,
@@ -503,6 +509,7 @@ class HDHiveService:
             "data": data,
             "user": user_info,
             "points": self._extract_first_int(user_info.get("points")) if isinstance(user_info, dict) else None,
+            "points_earned": points_earned,
             "checked_in": checked_in,
         }
 
@@ -558,6 +565,12 @@ class HDHiveService:
             checked_in,
         )
 
+        points_earned = self._extract_first_int(data.get("points_earned"))
+        if points_earned is None:
+            points_earned = self._extract_first_int(data.get("points"))
+        if points_earned is None:
+            points_earned = self._extract_first_int(data.get("change"))
+
         return {
             "success": status == "success",
             "status": status,
@@ -568,6 +581,7 @@ class HDHiveService:
             "data": data,
             "user": {},
             "points": None,
+            "points_earned": points_earned,
             "checked_in": checked_in,
         }
 

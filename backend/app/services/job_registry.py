@@ -123,12 +123,14 @@ class JobRegistry:
                 extra={"method": method, "gamble": gamble},
             )
             raise ValueError(str(result.get("message") or "HDHive 自动签到失败"))
+        points_earned = result.get("points_earned")
+        points_msg = f"，获得 {points_earned} 积分" if points_earned is not None else ""
         await operation_log_service.log_background_event(
             source_type="scheduler",
             module="hdhive",
             action="hdhive.checkin.success",
             status="success",
-            message=f"HDHive 签到成功（{method_label}）：{result.get('message') or ''}",
+            message=f"HDHive 签到成功（{method_label}）：{result.get('message') or ''}{points_msg}",
             extra={"method": method, "gamble": gamble, "result": result},
         )
         return result

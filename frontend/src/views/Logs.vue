@@ -205,6 +205,10 @@ const actionLabels = {
   'api.request.start': '接口请求开始',
   'api.request.finish': '接口请求完成',
   'api.request.exception': '接口请求异常',
+  'hdhive.checkin.start': 'HDHive 签到开始',
+  'hdhive.checkin.skipped': 'HDHive 今日已签到',
+  'hdhive.checkin.failed': 'HDHive 签到失败',
+  'hdhive.checkin.success': 'HDHive 签到成功',
 }
 
 const translateLabel = (value, map) => {
