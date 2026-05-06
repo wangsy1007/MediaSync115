@@ -660,6 +660,11 @@ class ExploreActionQueueService:
         except Exception:
             tmdb_id = None
 
+        # 快速路径：如果已有有效 TMDB ID，直接返回，避免网络请求
+        if tmdb_id and tmdb_id > 0:
+            douban_id = str(payload.get("douban_id") or payload.get("id") or "").strip()
+            return {"media_type": media_type, "tmdb_id": tmdb_id, "douban_id": douban_id}
+
         if source == "tmdb":
             if not tmdb_id:
                 raise ValueError("缺少有效的 TMDB ID")
