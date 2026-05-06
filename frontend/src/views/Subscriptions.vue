@@ -172,7 +172,11 @@
           <el-divider content-position="left">画质偏好</el-divider>
           <el-form-item>
             <el-alert type="info" :closable="false" show-icon>
-              画质偏好已统一为全局设置，请在<el-button type="primary" link size="small" @click="$router.push('/settings')">设置页面 → 订阅任务</el-button>中配置，所有订阅将使用相同的规则。
+              <span style="line-height: 2;">
+                画质偏好已统一为全局设置，请在
+                <el-button type="primary" link @click="$router.push('/settings')" style="font-size: inherit; padding: 0 2px; vertical-align: baseline;">设置页面 → 订阅任务</el-button>
+                中配置，所有订阅将使用相同的规则。
+              </span>
             </el-alert>
           </el-form-item>
         </el-form>
