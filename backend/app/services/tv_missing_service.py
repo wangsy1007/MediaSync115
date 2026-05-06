@@ -212,10 +212,10 @@ class TvMissingService:
         semaphore = asyncio.Semaphore(max(1, int(concurrency or 1)))
 
         async def build_one(tmdb_id: int) -> tuple[int, dict[str, Any]]:
-            options = self._normalize_status_options(
-                include_specials=include_specials,
-                **((options_by_tmdb or {}).get(tmdb_id) or {}),
-            )
+            per_sub_opts = dict((options_by_tmdb or {}).get(tmdb_id) or {})
+            if "include_specials" not in per_sub_opts:
+                per_sub_opts["include_specials"] = include_specials
+            options = self._normalize_status_options(**per_sub_opts)
             try:
                 async with semaphore:
                     tmdb_pairs = await self._collect_tmdb_episode_pairs(
@@ -283,10 +283,10 @@ class TvMissingService:
             *(build_one(tmdb_id) for tmdb_id in pending_ids)
         ):
             output[tmdb_id] = result
-            options = self._normalize_status_options(
-                include_specials=include_specials,
-                **((options_by_tmdb or {}).get(tmdb_id) or {}),
-            )
+            per_sub_opts = dict((options_by_tmdb or {}).get(tmdb_id) or {})
+            if "include_specials" not in per_sub_opts:
+                per_sub_opts["include_specials"] = include_specials
+            options = self._normalize_status_options(**per_sub_opts)
             await self._set_cached_status(self._build_cache_key(tmdb_id, **options), result)
 
         return output
