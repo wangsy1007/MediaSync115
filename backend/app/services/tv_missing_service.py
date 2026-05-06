@@ -58,19 +58,22 @@ class TvMissingService:
         emby_ok = False
         status_messages: list[str] = []
 
-        indexed_emby_result = await emby_sync_index_service.get_tv_existing_episodes(normalized_tmdb_id)
-        emby_result = indexed_emby_result if indexed_emby_result is not None else await emby_service.get_tv_episode_status_by_tmdb(normalized_tmdb_id)
-        emby_status_text = str(emby_result.get("status") or "")
-        if emby_status_text == "ok":
-            emby_ok = True
-            emby_existing = emby_result.get("existing_episodes") or set()
-            if isinstance(emby_existing, (list, set)):
-                for pair in emby_existing:
-                    if isinstance(pair, (list, tuple)) and len(pair) == 2:
-                        existing_pairs_all.add((int(pair[0]), int(pair[1])))
-            status_messages.append("Emby 正常")
-        else:
-            status_messages.append(f"Emby: {emby_result.get('message') or emby_status_text or 'error'}")
+        try:
+            indexed_emby_result = await emby_sync_index_service.get_tv_existing_episodes(normalized_tmdb_id)
+            emby_result = indexed_emby_result if indexed_emby_result is not None else await emby_service.get_tv_episode_status_by_tmdb(normalized_tmdb_id)
+            emby_status_text = str(emby_result.get("status") or "")
+            if emby_status_text == "ok":
+                emby_ok = True
+                emby_existing = emby_result.get("existing_episodes") or set()
+                if isinstance(emby_existing, (list, set)):
+                    for pair in emby_existing:
+                        if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                            existing_pairs_all.add((int(pair[0]), int(pair[1])))
+                status_messages.append("Emby 正常")
+            else:
+                status_messages.append(f"Emby: {emby_result.get('message') or emby_status_text or 'error'}")
+        except Exception:
+            status_messages.append("Emby: 查询异常")
 
         feiniu_url = runtime_settings_service.get_feiniu_url().strip()
         if feiniu_url:
@@ -103,14 +106,27 @@ class TvMissingService:
             await self._set_cached_status(cache_key, result)
             return result
 
-        tmdb_pairs = await self._collect_tmdb_episode_pairs(
-            normalized_tmdb_id,
-            include_specials=include_specials,
-            season_number=season_number,
-            episode_start=episode_start,
-            episode_end=episode_end,
-            aired_only=aired_only,
-        )
+        try:
+            tmdb_pairs = await self._collect_tmdb_episode_pairs(
+                normalized_tmdb_id,
+                include_specials=include_specials,
+                season_number=season_number,
+                episode_start=episode_start,
+                episode_end=episode_end,
+                aired_only=aired_only,
+            )
+        except Exception as exc:
+            result = {
+                "status": "tmdb_error",
+                "message": f"TMDB 查询失败: {exc}",
+                "aired_episodes": [],
+                "existing_episodes": [],
+                "missing_episodes": [],
+                "missing_by_season": {},
+                "counts": {"aired": 0, "total": 0, "existing": 0, "missing": 0},
+            }
+            await self._set_cached_status(cache_key, result)
+            return result
         if not tmdb_pairs:
             result = {
                 "status": "tmdb_error",
@@ -200,15 +216,32 @@ class TvMissingService:
                 include_specials=include_specials,
                 **((options_by_tmdb or {}).get(tmdb_id) or {}),
             )
-            async with semaphore:
-                tmdb_pairs = await self._collect_tmdb_episode_pairs(
-                    tmdb_id,
-                    include_specials=bool(options.get("include_specials")),
-                    season_number=options.get("season_number"),
-                    episode_start=options.get("episode_start"),
-                    episode_end=options.get("episode_end"),
-                    aired_only=bool(options.get("aired_only")),
-                )
+            try:
+                async with semaphore:
+                    tmdb_pairs = await self._collect_tmdb_episode_pairs(
+                        tmdb_id,
+                        include_specials=bool(options.get("include_specials")),
+                        season_number=options.get("season_number"),
+                        episode_start=options.get("episode_start"),
+                        episode_end=options.get("episode_end"),
+                        aired_only=bool(options.get("aired_only")),
+                    )
+            except Exception as exc:
+                result = {
+                    "status": "tmdb_error",
+                    "message": f"TMDB 查询失败: {exc}",
+                    "aired_episodes": [],
+                    "existing_episodes": [],
+                    "missing_episodes": [],
+                    "missing_by_season": {},
+                    "counts": {
+                        "aired": 0,
+                        "total": 0,
+                        "existing": 0,
+                        "missing": 0,
+                    },
+                }
+                return tmdb_id, result
             if not tmdb_pairs:
                 result = {
                     "status": "tmdb_error",

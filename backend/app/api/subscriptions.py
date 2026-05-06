@@ -684,15 +684,26 @@ async def get_tv_missing_status(
             "counts": {"aired": 0, "existing": 0, "missing": 0},
         }
 
-    status = await tv_missing_service.get_tv_missing_status(
-        int(subscription.tmdb_id),
-        include_specials=bool(subscription.tv_include_specials),
-        refresh=bool(refresh),
-        season_number=subscription.tv_season_number if subscription.tv_scope in {"season", "episode_range"} else None,
-        episode_start=subscription.tv_episode_start if subscription.tv_scope == "episode_range" else None,
-        episode_end=subscription.tv_episode_end if subscription.tv_scope == "episode_range" else None,
-        aired_only=subscription.tv_follow_mode == "new",
-    )
+    try:
+        status = await tv_missing_service.get_tv_missing_status(
+            int(subscription.tmdb_id),
+            include_specials=bool(subscription.tv_include_specials),
+            refresh=bool(refresh),
+            season_number=subscription.tv_season_number if subscription.tv_scope in {"season", "episode_range"} else None,
+            episode_start=subscription.tv_episode_start if subscription.tv_scope == "episode_range" else None,
+            episode_end=subscription.tv_episode_end if subscription.tv_scope == "episode_range" else None,
+            aired_only=subscription.tv_follow_mode == "new",
+        )
+    except Exception as exc:
+        status = {
+            "status": "error",
+            "message": f"获取缺集状态失败: {exc}",
+            "aired_episodes": [],
+            "existing_episodes": [],
+            "missing_episodes": [],
+            "missing_by_season": {},
+            "counts": {"aired": 0, "existing": 0, "missing": 0},
+        }
     return {
         "subscription_id": subscription.id,
         "tmdb_id": subscription.tmdb_id,
