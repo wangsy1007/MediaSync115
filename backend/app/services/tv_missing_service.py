@@ -177,10 +177,10 @@ class TvMissingService:
         pending_ids: list[int] = []
 
         for tmdb_id in unique_ids:
-            options = self._normalize_status_options(
-                include_specials=include_specials,
-                **((options_by_tmdb or {}).get(tmdb_id) or {}),
-            )
+            per_sub_opts = dict((options_by_tmdb or {}).get(tmdb_id) or {})
+            if "include_specials" not in per_sub_opts:
+                per_sub_opts["include_specials"] = include_specials
+            options = self._normalize_status_options(**per_sub_opts)
             cache_key = self._build_cache_key(tmdb_id, **options)
             if not refresh:
                 cached = await self._get_cached_status(cache_key)
