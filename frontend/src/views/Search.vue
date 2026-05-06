@@ -1676,25 +1676,6 @@ onBeforeUnmount(() => {
       .row-shell {
         position: relative;
 
-        .edge-mask {
-          position: absolute;
-          top: 0;
-          bottom: 0;
-          width: 40px;
-          pointer-events: none;
-          z-index: 2;
-        }
-
-        .edge-mask.left {
-          left: 0;
-          background: linear-gradient(to right, rgba(10, 25, 51, 0.9), transparent);
-        }
-
-        .edge-mask.right {
-          right: 0;
-          background: linear-gradient(to left, rgba(10, 25, 51, 0.9), transparent);
-        }
-
         .side-scroll-btn {
           position: absolute;
           top: 50%;
@@ -2171,7 +2152,6 @@ onBeforeUnmount(() => {
         }
 
         .row-shell {
-          .edge-mask,
           .side-scroll-btn {
             display: none;
           }

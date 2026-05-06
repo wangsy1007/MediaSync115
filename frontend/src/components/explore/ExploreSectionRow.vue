@@ -26,8 +26,6 @@
     </div>
 
     <div v-else class="row-shell">
-      <div class="edge-mask left" v-if="scrollState.hasLeft" />
-      <div class="edge-mask right" v-if="scrollState.hasRight" />
       <el-button
         class="side-scroll-btn left"
         circle
@@ -513,25 +511,6 @@ onBeforeUnmount(() => {
 
   .row-shell {
     position: relative;
-
-    .edge-mask {
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      width: 40px;
-      pointer-events: none;
-      z-index: 2;
-    }
-
-    .edge-mask.left {
-      left: 0;
-      background: linear-gradient(to right, rgba(10, 25, 51, 0.9), transparent);
-    }
-
-    .edge-mask.right {
-      right: 0;
-      background: linear-gradient(to left, rgba(10, 25, 51, 0.9), transparent);
-    }
 
     .side-scroll-btn {
       position: absolute;
