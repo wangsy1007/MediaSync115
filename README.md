@@ -189,6 +189,37 @@ services:
       start_period: 120s
 ```
 
+**Compose 参数说明：**
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| `ports: 5173:5173` | 是 | 前端 UI 端口，浏览器访问 `http://你的IP:5173` |
+| `ports: 9008:9008` | 是 | 后端 API + STRM 播放端口，飞牛影视读取 STRM 时走此端口 |
+| `ports: 8099:8099` | 否 | **Emby 代理端口**。如果不需要 Emby 代理 302 播放可删除此行 |
+| `TZ: Asia/Shanghai` | 推荐 | 容器时区 |
+| `EMBY_PROXY_HOST` | 否 | 真实 Emby 服务器的 IP/域名。`host.docker.internal` 表示宿主机。如果 Emby 在另一台设备上，改为 `192.168.1.x` |
+| `EMBY_PROXY_PORT` | 否 | 真实 Emby 的端口（默认 8096） |
+| `volumes: ./data:/app/data` | 是 | 持久化数据目录。**不要删除宿主机上的这个目录**，所有配置、数据库都在里面 |
+| `volumes: strm:/app/strm` | STRM 场景 | STRM 输出目录挂载。如果不用 STRM 功能可删除此行 |
+
+**首次启动后需在设置页勾选：**
+
+| 设置项 | 说明 |
+|--------|------|
+| TMDB API Key | 在 [TMDB](https://www.themoviedb.org/settings/api) 申请 |
+| 115 Cookie | 浏览器登录 115 后按 F12 → Network → 找到请求里的 `Cookie` 头完整复制 |
+| Emby URL + API Key | Emby 后台 → 高级 → API 密钥管理 |
+| 飞牛影视 URL + API Key | 飞牛后台 → 设置 → API 密钥 |
+
+> **关于端口**：如果仅部署单实例，建议保持默认。如需修改，`:` 左边是宿主机端口（可改），右边是容器内端口（不要改）。
+
+> **关于 STRM**：STRM 功能生成的是文本文件，写入容器内 `/app/strm` 目录。请确保这个目录已挂载到宿主机，并被 Emby/飞牛影视的媒体库路径覆盖到。
+
+> **关于 Emby 代理 8099**：
+> - 在 STRM 设置页开启「Emby 代理」开关后，生成的 `.strm` 文件会使用代理端口
+> - Emby 客户端（App / Web）连接 `http://你的IP:8099` 即可实现播放自动 302 跳转到 115 CDN 直连
+> - `EMBY_PROXY_HOST` 必须指向真实的 Emby 服务地址。如果 Emby 装在同一个 Docker 网络里的另一个容器，可以用容器名；如果装在宿主机，用 `host.docker.internal`
+
 启动：
 
 ```bash
