@@ -77,6 +77,16 @@
             <el-input v-model="config.strm_base_url" :placeholder="suggestedBaseUrl || '例如：http://192.168.1.100:9008'" />
             <div class="form-hint">STRM 播放地址使用端口 `9008`。系统会自动拼出 `/api/strm/play/&lt;token&gt;`。</div>
           </el-form-item>
+
+          <el-form-item label="Emby 代理">
+            <el-switch v-model="config.strm_proxy_enabled" />
+            <div class="form-hint">启用后 STRM 文件将指向代理端口，Emby 客户端连接 `:&lt;代理端口&gt;` 即可统一管理播放与 302 跳转。</div>
+          </el-form-item>
+
+          <el-form-item v-if="config.strm_proxy_enabled" label="代理端口">
+            <el-input-number v-model="config.strm_proxy_port" :min="1024" :max="65535" :step="1" style="width: 160px" />
+            <div class="form-hint">默认为 8099。Emby 客户端请连接此端口的代理地址。</div>
+          </el-form-item>
         </div>
 
         <div class="config-actions">
@@ -191,6 +201,8 @@ const config = reactive({
   strm_redirect_mode: 'auto',
   strm_refresh_emby_after_generate: false,
   strm_refresh_feiniu_after_generate: false,
+  strm_proxy_enabled: false,
+  strm_proxy_port: 8099,
   archive_output_cid: '',
   archive_output_name: ''
 })
@@ -212,7 +224,12 @@ const redirectModeLabel = computed(() => {
 
 const playUrlTemplate = computed(() => {
   if (!config.strm_base_url) return '未配置'
-  return `${config.strm_base_url.replace(/\/$/, '')}/api/strm/play/<token>`
+  let base = config.strm_base_url.replace(/\/$/, '')
+  if (config.strm_proxy_enabled) {
+    const url = new URL(base)
+    base = `${url.protocol}//${url.hostname}:${config.strm_proxy_port || 8099}`
+  }
+  return `${base}/api/strm/play/<token>`
 })
 
 const summaryText = computed(() => {
@@ -251,6 +268,8 @@ const applyConfig = (data) => {
   config.strm_redirect_mode = data.strm_redirect_mode || 'auto'
   config.strm_refresh_emby_after_generate = !!data.strm_refresh_emby_after_generate
   config.strm_refresh_feiniu_after_generate = !!data.strm_refresh_feiniu_after_generate
+  config.strm_proxy_enabled = !!data.strm_proxy_enabled
+  config.strm_proxy_port = Number(data.strm_proxy_port) || 8099
   config.archive_output_cid = data.archive_output_cid || ''
   config.archive_output_name = data.archive_output_name || ''
   mountPaths.value = Array.isArray(data.mount_paths) ? data.mount_paths : []
@@ -300,7 +319,9 @@ const saveConfig = async () => {
       strm_base_url: config.strm_base_url,
       strm_redirect_mode: config.strm_redirect_mode,
       strm_refresh_emby_after_generate: config.strm_refresh_emby_after_generate,
-      strm_refresh_feiniu_after_generate: config.strm_refresh_feiniu_after_generate
+      strm_refresh_feiniu_after_generate: config.strm_refresh_feiniu_after_generate,
+      strm_proxy_enabled: config.strm_proxy_enabled,
+      strm_proxy_port: config.strm_proxy_port
     })
     applyConfig(data)
     ElMessage.success('STRM 配置已保存')

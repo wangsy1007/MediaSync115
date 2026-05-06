@@ -59,6 +59,13 @@ fi
 # ===== 第二阶段：启动前端(nginx) =====
 echo "[$(date '+%H:%M:%S')] 前端启动中..."
 
+# 注入 Emby 代理地址到 nginx 配置
+EMBY_PROXY_HOST="${EMBY_PROXY_HOST:-host.docker.internal}"
+EMBY_PROXY_PORT="${EMBY_PROXY_PORT:-8096}"
+sed -i "s/__EMBY_HOST__/${EMBY_PROXY_HOST}/g" /etc/nginx/nginx.conf
+sed -i "s/__EMBY_PORT__/${EMBY_PROXY_PORT}/g" /etc/nginx/nginx.conf
+echo "[$(date '+%H:%M:%S')] Emby 代理目标: ${EMBY_PROXY_HOST}:${EMBY_PROXY_PORT}"
+
 # 配置检查
 if ! nginx -t 2>&1; then
   echo "[$(date '+%H:%M:%S')] ✗ nginx 配置检查失败"
@@ -73,7 +80,7 @@ nginx_pid=$!
 # 等待 nginx 进程启动并验证
 sleep 1
 if kill -0 "${nginx_pid}" 2>/dev/null; then
-  echo "[$(date '+%H:%M:%S')] ✓ 前端(nginx)启动成功（端口 5173/9008）"
+  echo "[$(date '+%H:%M:%S')] ✓ 前端(nginx)启动成功（端口 5173/9008/8099）"
   echo "========================================="
   echo "  MediaSync115 已就绪"
   echo "========================================="

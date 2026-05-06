@@ -20,6 +20,8 @@ class StrmConfigRequest(BaseModel):
     strm_redirect_mode: Optional[str] = None
     strm_refresh_emby_after_generate: Optional[bool] = None
     strm_refresh_feiniu_after_generate: Optional[bool] = None
+    strm_proxy_enabled: Optional[bool] = None
+    strm_proxy_port: Optional[int] = None
 
 
 def _raise_strm_error(exc: Exception) -> None:

@@ -7,10 +7,13 @@ services:
     ports:
       - "5173:5173"
       - "9008:9008"
+      - "8099:8099"
     environment:
       TZ: Asia/Shanghai
       STRM_HOST_IP: ${STRM_HOST_IP:-}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-}
+      EMBY_PROXY_HOST: ${EMBY_PROXY_HOST:-host.docker.internal}
+      EMBY_PROXY_PORT: ${EMBY_PROXY_PORT:-8096}
     volumes:
       - ./data:/app/data
       - ${STRM_HOST_DIR:-./strm}:/app/strm

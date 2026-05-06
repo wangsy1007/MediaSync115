@@ -168,6 +168,8 @@ class RuntimeSettingsService:
             "strm_refresh_emby_after_generate": False,
             "strm_refresh_feiniu_after_generate": False,
             "strm_token_secret": "",
+            "strm_proxy_enabled": False,
+            "strm_proxy_port": 8099,
         }
         self._data = dict(self._defaults)
         self._load()
@@ -739,6 +741,12 @@ class RuntimeSettingsService:
     def get_strm_token_secret(self) -> str:
         return str(self._data.get("strm_token_secret") or "").strip()
 
+    def get_strm_proxy_enabled(self) -> bool:
+        return bool(self._data.get("strm_proxy_enabled", False))
+
+    def get_strm_proxy_port(self) -> int:
+        return int(self._data.get("strm_proxy_port") or 8099)
+
     def get_strm_config(self) -> dict[str, Any]:
         return {
             "strm_enabled": self.get_strm_enabled(),
@@ -747,6 +755,8 @@ class RuntimeSettingsService:
             "strm_redirect_mode": self.get_strm_redirect_mode(),
             "strm_refresh_emby_after_generate": self.get_strm_refresh_emby_after_generate(),
             "strm_refresh_feiniu_after_generate": self.get_strm_refresh_feiniu_after_generate(),
+            "strm_proxy_enabled": self.get_strm_proxy_enabled(),
+            "strm_proxy_port": self.get_strm_proxy_port(),
         }
 
     def update_strm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -789,6 +799,10 @@ class RuntimeSettingsService:
             self._data["strm_token_secret"] = str(
                 payload["strm_token_secret"] or ""
             ).strip()
+        if "strm_proxy_enabled" in payload and payload["strm_proxy_enabled"] is not None:
+            self._data["strm_proxy_enabled"] = bool(payload["strm_proxy_enabled"])
+        if "strm_proxy_port" in payload and payload["strm_proxy_port"] is not None:
+            self._data["strm_proxy_port"] = int(payload["strm_proxy_port"] or 8099)
 
         self._save()
         return self.get_strm_config()
@@ -1151,6 +1165,8 @@ class RuntimeSettingsService:
             "strm_redirect_mode": self.get_strm_redirect_mode(),
             "strm_refresh_emby_after_generate": self.get_strm_refresh_emby_after_generate(),
             "strm_refresh_feiniu_after_generate": self.get_strm_refresh_feiniu_after_generate(),
+            "strm_proxy_enabled": self.get_strm_proxy_enabled(),
+            "strm_proxy_port": self.get_strm_proxy_port(),
         }
 
 

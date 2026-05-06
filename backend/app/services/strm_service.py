@@ -111,6 +111,12 @@ class StrmService:
         base_url = runtime_settings_service.get_strm_base_url()
         if not base_url:
             raise ValueError("STRM 播放地址未配置")
+        # 如果启用了 Emby 代理，STRM 文件使用代理端口，所有 Emby 播放经过代理
+        if runtime_settings_service.get_strm_proxy_enabled():
+            proxy_port = runtime_settings_service.get_strm_proxy_port()
+            from urllib.parse import urlparse
+            parsed = urlparse(base_url)
+            base_url = f"{parsed.scheme}://{parsed.hostname}:{proxy_port}"
         token = self._encode_token({"pc": str(pick_code or "").strip()})
         return f"{base_url}/api/strm/play/{token}"
 
