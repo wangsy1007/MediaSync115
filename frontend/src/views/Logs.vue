@@ -10,61 +10,38 @@
     </div>
 
     <el-card>
-      <div class="logs-timeline" v-loading="loading">
+      <div v-loading="loading">
         <div v-if="!logs.length" class="empty-state">
           <el-empty description="暂无日志" />
         </div>
 
-        <div v-else class="timeline-list">
-          <div v-for="(log, index) in logs" :key="log.id || index" class="timeline-item" :class="`status-${log.status}`">
-            <div class="timeline-dot"></div>
+        <div class="log-list">
+          <div
+            v-for="(log, index) in logs"
+            :key="log.id || index"
+            class="log-row"
+            :class="[`status-${log.status}`, { expanded: expandedIds.has(log.id) }]"
+            @click="toggleExpand(log.id)"
+          >
+            <span class="log-time">{{ formatTime(log.created_at) }}</span>
+            <el-tag :type="statusTagType(log.status)" size="small" class="log-status">
+              {{ statusLabels[log.status] || log.status }}
+            </el-tag>
+            <span class="log-text">{{ log.message || '-' }}</span>
+            <span class="log-duration" v-if="log.duration_ms">{{ log.duration_ms }}ms</span>
 
-            <div class="timeline-content">
-              <div class="timeline-header">
-                <span class="timeline-time">{{ formatBeijingDateTime(log.created_at) }}</span>
-                <el-tag :type="statusTagType(log.status)" size="small" class="timeline-status">
-                  {{ translateLabel(log.status, statusLabels) }}
-                </el-tag>
-                <span class="timeline-module">{{ translateLabel(log.module, moduleLabels) }}</span>
-                <span class="timeline-type">{{ translateLabel(log.source_type, sourceTypeLabels) }}</span>
+            <div v-show="expandedIds.has(log.id)" class="log-expand">
+              <div v-if="log.request_summary" class="exp-block">
+                <div class="exp-title">请求详情</div>
+                <pre>{{ formatSummaryBlock(log.request_summary) }}</pre>
               </div>
-
-              <div class="timeline-message">{{ formatMessage(log) }}</div>
-
-              <div class="timeline-details" v-if="hasDetails(log)">
-                <div class="detail-item" v-if="log.http_method && log.path">
-                  <span class="detail-label">请求:</span>
-                  <span class="detail-value">{{ formatHttpText(log) }}</span>
-                </div>
-                <div class="detail-item" v-if="log.duration_ms !== null && log.duration_ms !== undefined">
-                  <span class="detail-label">耗时:</span>
-                  <span class="detail-value">{{ log.duration_ms }} 毫秒</span>
-                </div>
-                <div class="detail-item" v-if="log.trace_id">
-                  <span class="detail-label">追踪ID:</span>
-                  <span class="detail-value trace-id">{{ log.trace_id }}</span>
-                </div>
-
-                <div class="detail-expand" v-if="hasExpandDetails(log)">
-                  <el-button type="primary" link size="small" @click="toggleExpand(log.id)">
-                    {{ expandedIds.has(log.id) ? '收起详情' : '查看详情' }}
-                  </el-button>
-
-                  <div v-show="expandedIds.has(log.id)" class="expand-content">
-                    <div class="expand-block" v-if="log.request_summary">
-                      <div class="expand-title">请求详情</div>
-                      <pre>{{ formatSummaryBlock(log.request_summary) }}</pre>
-                    </div>
-                    <div class="expand-block" v-if="log.response_summary">
-                      <div class="expand-title">响应详情</div>
-                      <pre>{{ formatSummaryBlock(log.response_summary) }}</pre>
-                    </div>
-                    <div class="expand-block" v-if="log.extra">
-                      <div class="expand-title">额外信息</div>
-                      <pre>{{ formatSummaryBlock(log.extra) }}</pre>
-                    </div>
-                  </div>
-                </div>
+              <div v-if="log.response_summary" class="exp-block">
+                <div class="exp-title">响应详情</div>
+                <pre>{{ formatSummaryBlock(log.response_summary) }}</pre>
+              </div>
+              <div v-if="log.extra" class="exp-block">
+                <div class="exp-title">额外信息</div>
+                <pre>{{ formatSummaryBlock(log.extra) }}</pre>
               </div>
             </div>
           </div>
@@ -86,41 +63,9 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { logsApi } from '@/api'
-import { formatBeijingDateTime } from '@/utils/timezone'
-
-const sourceTypeLabels = {
-  api: 'API 请求',
-  scheduler: '定时任务',
-  background_task: '后台任务',
-  explore_queue: '探索队列',
-}
-
-const moduleLabels = {
-  subscriptions: '订阅',
-  explore_queue: '探索队列',
-  pan115: '115网盘',
-  search: '搜索',
-  settings: '设置',
-  archive: '归档',
-  emby: 'Emby',
-  downloads: '下载',
-  scheduler: '调度器',
-  sync: '剧集同步',
-  feiniu_sync: '飞牛同步',
-  emby_sync: 'Emby同步',
-  tg_sync: 'Telegram同步',
-  chart_subscription: '榜单订阅',
-  workflow: '工作流',
-  hdhive: 'HDHive签到',
-  strm: 'STRM生成',
-  auth: '认证',
-  license: '许可证',
-  workflows: '工作流',
-  unknown: '未知',
-}
 
 const statusLabels = {
   success: '成功',
@@ -130,352 +75,6 @@ const statusLabels = {
   partial: '部分成功',
 }
 
-const actionLabels = {
-  'scheduler.job.start': '调度任务开始',
-  'scheduler.job.finish': '调度任务完成',
-  'scheduler.job.update': '调度任务更新',
-  'scheduler.job.result_persist_failed': '调度结果持久化失败',
-  'subscription.check.start': '订阅检查任务开始',
-  'subscription.run.background.start': '订阅后台任务开始',
-  'subscription.run.background.running': '订阅后台任务执行中',
-  'subscription.run.background.finish': '订阅后台任务完成',
-  'subscription.item.done': '订阅项自动清理',
-  'subscription.item.failed': '订阅项处理失败',
-  'subscription.item.fetch_done': '资源抓取完成',
-  'subscription.item.store_done': '资源入库完成',
-  'subscription.item.transfer_new_start': '开始自动转存新资源',
-  'subscription.item.transfer_new_done': '新资源转存完成',
-  'subscription.item.transfer_retry_start': '开始重试历史资源',
-  'subscription.item.transfer_retry_done': '历史重试完成',
-  'subscription.item.cleanup_after_transfer': '转存完成后自动清理',
-  'explore.queue.subscribe.start': '探索订阅开始',
-  'explore.queue.subscribe.finish': '探索订阅完成',
-  'explore.queue.save.start': '探索转存开始',
-  'explore.queue.save.finish': '探索转存完成',
-  'archive.watch.start': '归档监听启动',
-  'archive.watch.stop': '归档监听停止',
-  'archive.scan.start': '归档扫描开始',
-  'archive.scan.finish': '归档扫描完成',
-  'archive.file.start': '归档文件开始处理',
-  'archive.file.parsed': '归档文件名解析完成',
-  'archive.file.matched': '归档 TMDB 匹配完成',
-  'archive.file.plan': '归档目标路径已生成',
-  'archive.file.skipped': '归档文件已跳过',
-  'archive.file.success': '归档文件处理成功',
-  'archive.file.failed': '归档文件处理失败',
-  'archive.tasks.clear': '归档任务已清理',
-  'api.request.start': '接口请求开始',
-  'api.request.finish': '接口请求完成',
-  'api.request.exception': '接口请求异常',
-  'hdhive.checkin.start': 'HDHive 签到开始',
-  'hdhive.checkin.skipped': 'HDHive 今日已签到',
-  'hdhive.checkin.failed': 'HDHive 签到失败',
-  'hdhive.checkin.success': 'HDHive 签到成功',
-}
-
-const translateLabel = (value, map) => {
-  if (!value) return '-'
-  return map[value] || value
-}
-
-const apiActionPatterns = [
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/search/, '搜索'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/pan115/, '115网盘'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/archive/, '归档'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/subscriptions/, '订阅'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/settings/, '设置'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/emby/, 'Emby'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/logs/, '日志'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/health/, '健康检查'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/downloads/, '下载'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/scheduler/, '调度器'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/workflows/, '工作流'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/explore/, '探索'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/auth/, '认证'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/license/, '许可证'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/tg/, 'Telegram'],
-  [/^(GET|POST|PUT|DELETE|PATCH)\s+\/api\/charts/, '榜单'],
-]
-
-const httpMethodLabels = { GET: '查询', POST: '提交', PUT: '更新', DELETE: '删除', PATCH: '修改' }
-
-const summaryKeyLabels = {
-  method: '请求方法',
-  path: '请求路径',
-  route_path: '路由路径',
-  query: '查询参数',
-  client: '客户端',
-  ip: 'IP地址',
-  user_agent: '用户代理',
-  timezone: '时区',
-  auth: '认证信息',
-  authenticated: '已认证',
-  username: '用户名',
-  headers: '头信息',
-  endpoint: '处理函数',
-  status_code: '状态码',
-  duration_ms: '耗时(毫秒)',
-  data: '数据',
-  detail: '详情',
-  body: '请求体',
-  params: '参数',
-  url: '地址',
-  content_type: '内容类型',
-  content_length: '内容长度',
-  code: '结果代码',
-  msg: '结果消息',
-  success: '成功',
-  error: '错误',
-  errors: '错误列表',
-  count: '数量',
-  total: '总数',
-  items: '项目',
-  results: '结果',
-  list: '列表',
-  page: '页码',
-  page_size: '每页数量',
-  page_num: '页码',
-  limit: '限制数量',
-  offset: '偏移量'
-}
-
-const headerKeyLabels = {
-  'content-type': '内容类型',
-  'content-length': '内容长度',
-  referer: '来源页',
-  origin: '来源站点',
-  location: '跳转地址',
-  'x-trace-id': '追踪ID',
-  accept: '接受类型',
-  host: '主机',
-  connection: '连接方式'
-}
-
-const endpointLabels = {
-  check_all_services_health: '检查全部服务健康状态',
-  check_cookie_valid: '检查 Cookie 有效性',
-  check_emby_credentials: '检查 Emby 连接',
-  check_feiniu_credentials: '检查飞牛连接',
-  check_hdhive_credentials: '检查 HDHive 连接',
-  check_tg_credentials: '检查 Telegram 连接',
-  check_tg_qr_login_status: '检查 Telegram 二维码登录状态',
-  create_subscription: '创建订阅',
-  delete_subscription: '删除订阅',
-  enqueue_explore_subscribe_task: '加入探索订阅队列',
-  get_app_info: '获取应用信息',
-  get_auth_session: '获取登录会话',
-  get_available_charts: '获取可用榜单',
-  get_bridge_by_imdb_id: '通过 IMDb 获取桥接信息',
-  get_current_cookie: '获取当前 Cookie',
-  get_default_folder: '获取默认目录',
-  get_douban_subject_detail: '获取豆瓣条目详情',
-  get_emby_status_map: '获取 Emby 状态图',
-  get_emby_sync_status: '获取 Emby 同步状态',
-  get_explore_meta: '获取探索元信息',
-  get_explore_queue_active_tasks: '获取探索队列活动任务',
-  get_explore_section: '获取探索分区',
-  get_feiniu_status_map: '获取飞牛状态图',
-  get_feiniu_sync_status: '获取飞牛同步状态',
-  get_file_list: '获取文件列表',
-  get_license_status: '获取许可证状态',
-  get_movie: '获取电影详情',
-  get_movie_magnet_butailing: '获取电影不太灵磁力',
-  get_movie_pan115: '获取电影 115 资源',
-  get_offline_default_folder: '获取离线默认目录',
-  get_offline_quota: '获取离线配额',
-  get_offline_tasks: '获取离线任务列表',
-  get_pan115_risk_health: '获取 115 风控健康状态',
-  get_pansou_config: '获取盘搜配置',
-  get_proxy_config: '获取代理配置',
-  get_runtime_settings: '获取运行时设置',
-  get_subscription_status_map: '获取订阅状态图',
-  get_tg_index_job: '获取 Telegram 索引任务',
-  get_tg_index_status: '获取 Telegram 索引状态',
-  get_tv: '获取剧集详情',
-  get_tv_magnet: '获取剧集磁力资源',
-  get_tv_magnet_butailing: '获取剧集不太灵磁力',
-  get_tv_pan115: '获取剧集 115 资源',
-  health_check: '健康检查',
-  list_dynamic_tasks: '获取动态任务列表',
-  list_scheduler_jobs: '获取调度任务列表',
-  list_subscription_logs: '获取订阅日志',
-  list_subscriptions: '获取订阅列表',
-  list_tv_missing_status: '获取剧集缺集状态',
-  list_workflows: '获取工作流列表',
-  login: '登录',
-  login_feiniu: '登录飞牛',
-  proxy_explore_poster: '代理探索海报',
-  run_chart_subscription_now: '立即执行榜单订阅',
-  run_feiniu_sync: '立即执行飞牛同步',
-  run_hdhive_checkin: '执行 HDHive 签到',
-  search: '搜索',
-  set_offline_default_folder: '设置离线默认目录',
-  start_tg_index_backfill: '启动 Telegram 索引补录',
-  start_tg_qr_login: '启动 Telegram 二维码登录',
-  toggle_subscription: '切换订阅状态',
-  update_pansou_config: '更新盘搜配置',
-  update_runtime_settings: '更新运行时设置',
-  unknown: '未知'
-}
-
-const pathPatterns = [
-  [/^\/api\/search\//, '搜索接口'],
-  [/^\/api\/search$/, '搜索接口'],
-  [/^\/api\/settings\//, '设置接口'],
-  [/^\/api\/settings$/, '设置接口'],
-  [/^\/api\/logs\//, '日志接口'],
-  [/^\/api\/logs$/, '日志接口'],
-  [/^\/api\/pan115\//, '115网盘接口'],
-  [/^\/api\/pan115$/, '115网盘接口'],
-  [/^\/api\/subscriptions\//, '订阅接口'],
-  [/^\/api\/subscriptions$/, '订阅接口'],
-  [/^\/api\/scheduler\//, '调度器接口'],
-  [/^\/api\/scheduler$/, '调度器接口'],
-  [/^\/api\/downloads\//, '下载接口'],
-  [/^\/api\/downloads$/, '下载接口'],
-  [/^\/api\/auth\//, '认证接口'],
-  [/^\/api\/auth$/, '认证接口'],
-  [/^\/api\/health\//, '健康检查接口'],
-  [/^\/api\/health$/, '健康检查接口'],
-  [/^\/api\/license\//, '许可证接口'],
-  [/^\/api\/license$/, '许可证接口'],
-  [/^\/api\/workflows\//, '工作流接口'],
-  [/^\/api\/workflows$/, '工作流接口'],
-  [/^\/api\/explore\//, '探索接口'],
-  [/^\/api\/explore$/, '探索接口'],
-  [/^\/api\/tg\//, 'Telegram接口'],
-  [/^\/api\/tg$/, 'Telegram接口'],
-  [/^\/api\/charts\//, '榜单接口'],
-  [/^\/api\/charts$/, '榜单接口'],
-  [/^\/api\/archive\//, '归档接口'],
-  [/^\/api\/archive$/, '归档接口'],
-  [/^\/api\/emby\//, 'Emby接口'],
-  [/^\/api\/emby$/, 'Emby接口'],
-]
-
-const translateAction = (value) => {
-  if (!value) return '-'
-  if (actionLabels[value]) return actionLabels[value]
-  for (const [key, label] of Object.entries(actionLabels)) {
-    if (value.startsWith(key)) return label
-  }
-  // 翻译 API 请求 action（如 "GET /api/search/..."）
-  for (const [pattern, moduleName] of apiActionPatterns) {
-    const match = value.match(pattern)
-    if (match) {
-      const method = httpMethodLabels[match[1]] || match[1]
-      return `${method}${moduleName}`
-    }
-  }
-  return value
-}
-
-const translateHttpMethod = (method) => {
-  const normalized = String(method || '').toUpperCase()
-  return httpMethodLabels[normalized] || normalized || '-'
-}
-
-const translateEndpoint = (value) => {
-  const normalized = String(value || '').trim()
-  if (!normalized) return '-'
-  return endpointLabels[normalized] || normalized
-}
-
-const translatePath = (value) => {
-  const normalized = String(value || '').trim()
-  if (!normalized) return '-'
-  for (const [pattern, label] of pathPatterns) {
-    if (pattern.test(normalized)) {
-      return label
-    }
-  }
-  return normalized
-}
-
-const tryParseJson = (value) => {
-  if (typeof value !== 'string') return value
-  const text = value.trim()
-  if (!text) return value
-  if (!(text.startsWith('{') || text.startsWith('['))) return value
-  try {
-    return JSON.parse(text)
-  } catch {
-    return value
-  }
-}
-
-const translateSummaryValue = (value, key = '') => {
-  if (typeof value === 'boolean') return value ? '是' : '否'
-  if (value === null || value === undefined) return value
-  if (key === 'method') return translateHttpMethod(value)
-  if (key === 'endpoint') return translateEndpoint(value)
-  if (key === 'path' || key === 'route_path') return translatePath(value)
-  if (typeof value === 'string' && /^(GET|POST|PUT|DELETE|PATCH)$/.test(value)) {
-    return translateHttpMethod(value)
-  }
-  if (key === 'content-type' && value === 'application/json') return 'JSON'
-  if (key === 'status' || key === 'result') {
-    const lowered = String(value).trim().toLowerCase()
-    return statusLabels[lowered] || value
-  }
-  return value
-}
-
-const translateSummaryData = (value, parentKey = '') => {
-  const parsed = tryParseJson(value)
-  if (Array.isArray(parsed)) {
-    return parsed.map((item) => translateSummaryData(item, parentKey))
-  }
-  if (parsed && typeof parsed === 'object') {
-    return Object.fromEntries(
-      Object.entries(parsed).map(([key, item]) => {
-        const translatedKey = parentKey === 'headers'
-          ? (headerKeyLabels[key] || key)
-          : (summaryKeyLabels[key] || key)
-        return [translatedKey, translateSummaryData(item, key)]
-      })
-    )
-  }
-  return translateSummaryValue(parsed, parentKey)
-}
-
-const ensureAsciiFalseReplacer = () => (key, val) => val
-
-const formatApiMessage = (message, row) => {
-  const raw = String(message || '').trim()
-  if (!raw) return '-'
-
-  let match = raw.match(/^(GET|POST|PUT|DELETE|PATCH)\s+(\S+)\s*->\s*(\d{3})$/)
-  if (match) {
-    return `接口请求完成：${translateHttpMethod(match[1])} ${translatePath(match[2])}，状态码 ${match[3]}`
-  }
-
-  match = raw.match(/^收到接口请求：(GET|POST|PUT|DELETE|PATCH)\s+([^，]+)，模块=([^，]+)，路由=([^，]+)，处理函数=([^，]+)，客户端=(.+)$/)
-  if (match) {
-    return `收到接口请求：${translateHttpMethod(match[1])} ${translatePath(match[2])}，模块=${translateLabel(match[3], moduleLabels)}，处理函数=${translateEndpoint(match[5])}`
-  }
-
-  match = raw.match(/^接口处理完成：(GET|POST|PUT|DELETE|PATCH)\s+([^，]+)，模块=([^，]+)，状态码=(\d+)，耗时=(\d+)ms，结果=(.+)$/)
-  if (match) {
-    return `接口处理完成：${translateHttpMethod(match[1])} ${translatePath(match[2])}，状态码=${match[4]}，耗时=${match[5]}毫秒`
-  }
-
-  return raw.replace(/\b(GET|POST|PUT|DELETE|PATCH)\b/g, (_, method) => translateHttpMethod(method))
-}
-
-const formatMessage = (row) => {
-  if (!row) return '-'
-  // 先尝试翻译 action 字段，看有没有更友好的描述
-  const actionText = translateAction(row.action)
-  if (actionText && actionText !== '-' && actionText !== row.action) {
-    return actionText
-  }
-  if (row.source_type === 'api') {
-    return formatApiMessage(row.message, row)
-  }
-  return row.message || '-'
-}
-
 const loading = ref(false)
 const clearing = ref(false)
 const logs = ref([])
@@ -483,7 +82,7 @@ const total = ref(0)
 const currentPage = ref(1)
 const expandedIds = ref(new Set())
 
-const filters = reactive({
+const filters = ref({
   limit: 100
 })
 
@@ -494,49 +93,55 @@ const statusTagType = (status) => {
   return 'info'
 }
 
+const formatTime = (val) => {
+  if (!val) return '-'
+  const d = new Date(val)
+  if (isNaN(d.getTime())) return '-'
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+const tryParseJson = (value) => {
+  if (typeof value !== 'string') return value
+  const text = value.trim()
+  if (!text) return value
+  if (!(text.startsWith('{') || text.startsWith('['))) return value
+  try { return JSON.parse(text) } catch { return value }
+}
+
 const formatSummaryBlock = (value) => {
   if (!value) return '-'
-  const translated = translateSummaryData(value)
+  const parsed = tryParseJson(value)
   try {
-    return JSON.stringify(translated, null, 2)
+    return JSON.stringify(parsed, null, 2)
   } catch {
-    return String(translated)
+    return String(parsed)
   }
 }
 
-const formatHttpText = (row) => {
-  const method = translateHttpMethod(row.http_method || '-')
-  const path = translatePath(row.path || '-')
-  const statusCode = row.status_code || '-'
-  return `${method} ${path}（状态码 ${statusCode}）`
-}
-
-const hasDetails = (log) => {
-  return log.http_method || log.path || log.duration_ms !== null || log.trace_id || log.request_summary || log.response_summary || log.extra
-}
-
-const hasExpandDetails = (log) => {
+const hasDetail = (log) => {
   return log.request_summary || log.response_summary || log.extra
 }
 
 const toggleExpand = (id) => {
-  if (expandedIds.value.has(id)) {
-    expandedIds.value.delete(id)
-  } else {
-    expandedIds.value.add(id)
-  }
+  if (!hasDetail(logs.value.find(l => l.id === id))) return
+  const set = expandedIds.value
+  if (set.has(id)) set.delete(id)
+  else set.add(id)
 }
 
 const fetchLogs = async () => {
   loading.value = true
   try {
     const params = {
-      limit: Number(filters.limit || 100),
-      offset: (currentPage.value - 1) * Number(filters.limit || 100)
+      limit: Number(filters.value.limit || 100),
+      offset: (currentPage.value - 1) * Number(filters.value.limit || 100)
     }
 
     const { data } = await logsApi.list(params)
-    logs.value = Array.isArray(data?.items) ? data.items : []
+    const all = Array.isArray(data?.items) ? data.items : []
+    // 只显示非 API 请求的操作日志（转存、订阅、STRM、302播放等）
+    logs.value = all.filter(item => item.source_type !== 'api')
     total.value = Number(data?.total || 0)
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '日志获取失败')
@@ -607,179 +212,104 @@ onMounted(fetchLogs)
     }
   }
 
-  .logs-timeline {
-    min-height: 300px;
-  }
-
   .empty-state {
     padding: 60px 0;
   }
 
-  .timeline-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+  .log-list {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
 
-  .timeline-item {
+  .log-row {
     display: flex;
-    gap: 12px;
-    padding: 14px 16px;
-    border-radius: 12px;
-    background: var(--ms-bg-subtle);
-    transition: background 0.2s;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    font-size: 13px;
+    line-height: 1.4;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.15s;
+    flex-wrap: wrap;
 
     &:hover {
       background: var(--ms-bg-hover);
     }
 
-    &.status-success {
-      border-left: 3px solid var(--el-color-success);
-    }
+    &.status-success { border-left: 3px solid var(--el-color-success); }
+    &.status-failed { border-left: 3px solid var(--el-color-danger); }
+    &.status-warning { border-left: 3px solid var(--el-color-warning); }
+    &.status-partial { border-left: 3px solid var(--el-color-warning); }
+    &.status-info { border-left: 3px solid var(--el-color-info); }
 
-    &.status-failed {
-      border-left: 3px solid var(--el-color-danger);
-    }
-
-    &.status-warning {
-      border-left: 3px solid var(--el-color-warning);
-    }
-
-    &.status-partial {
-      border-left: 3px solid var(--el-color-warning);
-    }
-
-    &.status-info {
-      border-left: 3px solid var(--el-color-info);
+    &.expanded {
+      background: var(--ms-bg-hover);
     }
   }
 
-  .timeline-dot {
+  .log-time {
+    color: var(--ms-text-secondary);
+    font-size: 12px;
+    font-family: monospace;
     flex-shrink: 0;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    margin-top: 6px;
-    background: var(--el-color-info);
-
-    .status-success & {
-      background: var(--el-color-success);
-    }
-
-    .status-failed & {
-      background: var(--el-color-danger);
-    }
-
-    .status-warning &,
-    .status-partial & {
-      background: var(--el-color-warning);
-    }
+    min-width: 60px;
   }
 
-  .timeline-content {
+  .log-status {
+    flex-shrink: 0;
+  }
+
+  .log-text {
+    color: var(--ms-text-primary);
     flex: 1;
     min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .timeline-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 8px;
-    flex-wrap: wrap;
-  }
-
-  .timeline-time {
-    font-size: 13px;
+  .log-duration {
     color: var(--ms-text-secondary);
-  }
-
-  .timeline-status {
+    font-size: 12px;
+    font-family: monospace;
     flex-shrink: 0;
   }
 
-  .timeline-module,
-  .timeline-type {
-    font-size: 12px;
-    color: var(--ms-text-secondary);
-    background: var(--ms-bg-card);
-    padding: 2px 8px;
-    border-radius: 4px;
-  }
-
-  .timeline-message {
-    font-size: 14px;
-    color: var(--ms-text-primary);
-    line-height: 1.5;
-  }
-
-  .timeline-details {
-    margin-top: 10px;
-    padding-top: 10px;
+  .log-expand {
+    width: 100%;
+    margin-top: 6px;
+    padding-top: 6px;
     border-top: 1px solid var(--ms-border-color);
   }
 
-  .detail-item {
-    display: flex;
-    gap: 8px;
-    font-size: 13px;
-    margin-bottom: 4px;
-    line-height: 1.4;
-  }
-
-  .detail-label {
-    color: var(--ms-text-secondary);
-    flex-shrink: 0;
-  }
-
-  .detail-value {
-    color: var(--ms-text-primary);
-    word-break: break-all;
-
-    &.trace-id {
-      font-family: monospace;
-      font-size: 12px;
-    }
-  }
-
-  .detail-expand {
-    margin-top: 6px;
-  }
-
-  .expand-content {
-    margin-top: 10px;
-  }
-
-  .expand-block {
+  .exp-block {
     background: var(--ms-bg-card);
     border: 1px solid var(--ms-border-color);
-    border-radius: 8px;
-    padding: 10px 12px;
-    margin-bottom: 8px;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
 
-    &:last-child {
-      margin-bottom: 0;
-    }
+    &:last-child { margin-bottom: 0; }
   }
 
-  .expand-title {
-    font-size: 12px;
+  .exp-title {
+    font-size: 11px;
     font-weight: 600;
     color: var(--ms-text-primary);
-    margin-bottom: 6px;
+    margin-bottom: 4px;
   }
 
-  .expand-block pre {
+  .exp-block pre {
     margin: 0;
     white-space: pre-wrap;
     word-break: break-word;
-    font-size: 12px;
-    line-height: 1.6;
+    font-size: 11px;
+    line-height: 1.5;
     color: var(--ms-text-secondary);
   }
 
   .pager-wrap {
-    margin-top: 20px;
+    margin-top: 16px;
     display: flex;
     justify-content: flex-end;
   }
@@ -793,16 +323,12 @@ onMounted(fetchLogs)
 
       .page-actions {
         justify-content: flex-start;
-
-        :deep(.el-input-number),
-        :deep(.el-button) {
-          width: auto;
-        }
       }
     }
 
-    .timeline-header {
-      gap: 6px;
+    .log-row {
+      padding: 5px 8px;
+      font-size: 12px;
     }
 
     .pager-wrap {
