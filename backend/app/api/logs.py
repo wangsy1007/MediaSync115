@@ -30,6 +30,7 @@ def _parse_iso_datetime(value: Optional[str], field_name: str) -> datetime | Non
 @router.get("")
 async def list_operation_logs(
     source_type: Optional[str] = None,
+    exclude_source_type: Optional[str] = None,
     module: Optional[str] = None,
     status: Optional[str] = None,
     path: Optional[str] = None,
@@ -42,6 +43,8 @@ async def list_operation_logs(
     where_clauses = []
     if source_type:
         where_clauses.append(OperationLog.source_type == source_type.strip())
+    if exclude_source_type:
+        where_clauses.append(OperationLog.source_type != exclude_source_type.strip())
     if module:
         where_clauses.append(OperationLog.module == module.strip())
     if status:

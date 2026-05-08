@@ -135,13 +135,12 @@ const fetchLogs = async () => {
   try {
     const params = {
       limit: Number(filters.value.limit || 100),
-      offset: (currentPage.value - 1) * Number(filters.value.limit || 100)
+      offset: (currentPage.value - 1) * Number(filters.value.limit || 100),
+      exclude_source_type: 'api'
     }
 
     const { data } = await logsApi.list(params)
-    const all = Array.isArray(data?.items) ? data.items : []
-    // 只显示非 API 请求的操作日志（转存、订阅、STRM、302播放等）
-    logs.value = all.filter(item => item.source_type !== 'api')
+    logs.value = Array.isArray(data?.items) ? data.items : []
     total.value = Number(data?.total || 0)
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '日志获取失败')
