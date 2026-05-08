@@ -1,6 +1,12 @@
 ﻿<template>
   <div class="movie-detail-page" v-loading="loading">
     <template v-if="movie">
+      <div class="back-button-container">
+        <el-button @click="handleBack" class="back-button" text>
+          <el-icon><ArrowLeft /></el-icon>
+          返回
+        </el-button>
+      </div>
       <div class="detail-header">
         <div class="poster">
           <img :src="getPosterUrl(movie.poster_path)" :alt="movie.title" />
@@ -509,10 +515,10 @@
 
 <script setup>
 import { computed, ref, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { searchApi, subscriptionApi, pan115Api } from '@/api'
-import { Star, Plus } from '@element-plus/icons-vue'
+import { Star, Plus, ArrowLeft } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import { getVisibleTabs, loadVisibleTabs, isTabVisible } from '@/utils/detailTabs'
 import { extractTags } from '@/utils/resourceTags'
@@ -529,6 +535,15 @@ const getRowTags = (row) => {
 }
 
 const route = useRoute()
+const router = useRouter()
+
+const handleBack = () => {
+  if (window.history.length > 1) {
+    router.back()
+  } else {
+    router.push('/explore/douban')
+  }
+}
 
 const movie = ref(null)
 const loading = ref(true)
@@ -1394,7 +1409,26 @@ onMounted(() => {
 <style lang="scss" scoped>
 .movie-detail-page {
   animation: fadeIn 0.4s ease;
-  
+
+  .back-button-container {
+    margin-bottom: 16px;
+
+    .back-button {
+      font-size: 14px;
+      color: var(--ms-text-secondary);
+      transition: all 0.2s ease;
+
+      &:hover {
+        color: var(--ms-primary);
+        transform: translateX(-2px);
+      }
+
+      .el-icon {
+        margin-right: 4px;
+      }
+    }
+  }
+
   .detail-header {
     display: flex;
     gap: 32px;

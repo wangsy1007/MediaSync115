@@ -1,6 +1,12 @@
 <template>
   <div class="douban-detail-page" v-loading="loading">
     <template v-if="detail">
+      <div class="back-button-container">
+        <el-button @click="handleBack" class="back-button" text>
+          <el-icon><ArrowLeft /></el-icon>
+          返回
+        </el-button>
+      </div>
       <div class="detail-header">
         <div class="poster">
           <img :src="getPosterUrl(detail.poster_url)" :alt="detail.title" @error="handlePosterError" />
@@ -472,9 +478,10 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { pansouApi, pan115Api, searchApi, subscriptionApi } from '@/api'
+import { ArrowLeft } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import { getVisibleTabs, loadVisibleTabs, isTabVisible } from '@/utils/detailTabs'
 import { extractTags } from '@/utils/resourceTags'
@@ -491,6 +498,16 @@ const getRowTags = (row) => {
 }
 
 const route = useRoute()
+const router = useRouter()
+
+const handleBack = () => {
+  if (window.history.length > 1) {
+    router.back()
+  } else {
+    router.push('/explore/douban')
+  }
+}
+
 const loading = ref(false)
 const mappingLoading = ref(false)
 const subscribing = ref(false)
@@ -1535,6 +1552,25 @@ onMounted(async () => {
 <style scoped lang="scss">
 .douban-detail-page {
   padding: 8px;
+
+  .back-button-container {
+    margin-bottom: 16px;
+
+    .back-button {
+      font-size: 14px;
+      color: var(--ms-text-secondary);
+      transition: all 0.2s ease;
+
+      &:hover {
+        color: var(--ms-primary);
+        transform: translateX(-2px);
+      }
+
+      .el-icon {
+        margin-right: 4px;
+      }
+    }
+  }
 
   .detail-header {
     display: flex;
