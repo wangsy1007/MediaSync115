@@ -1396,6 +1396,117 @@ class SubscriptionService:
             logger.exception("飞牛剧集缺集状态查询失败: tmdb_id=%s", tmdb_id)
             return {"checked": False}
 
+    async def cleanup_single_subscription(
+        self, db: AsyncSession, subscription_id: int
+    ) -> dict[str, Any]:
+        """检查并清理单个订阅（电影已转存/已在库 或 剧集不缺集）"""
+        sub_result = await db.execute(
+            select(Subscription).where(Subscription.id == subscription_id)
+        )
+        sub = sub_result.scalar_one_or_none()
+        if sub is None:
+            return {"deleted": False, "reason": "订阅不存在"}
+        if not sub.is_active:
+            return {"deleted": False, "reason": "订阅未激活"}
+
+        # 检查是否有成功转存记录
+        has_successful_transfer = (
+            select(DownloadRecord.id)
+            .where(
+                DownloadRecord.subscription_id == sub.id,
+                or_(
+                    DownloadRecord.completed_at.is_not(None),
+                    DownloadRecord.status.in_(
+                        (MediaStatus.COMPLETED, MediaStatus.OFFLINE_COMPLETED)
+                    ),
+                ),
+            )
+            .exists()
+        )
+        has_transfer_result = await db.execute(
+            select(has_successful_transfer)
+        )
+        sub_has_transfer = bool(has_transfer_result.scalar())
+
+        should_delete = False
+        reason = ""
+
+        if sub.media_type == MediaType.MOVIE:
+            if sub_has_transfer:
+                should_delete = True
+                reason = "电影已有成功转存记录"
+            elif sub.tmdb_id is not None:
+                try:
+                    movie_status = await emby_service.get_movie_status_by_tmdb(sub.tmdb_id)
+                    if str(movie_status.get("status") or "") == "ok" and bool(
+                        movie_status.get("exists")
+                    ):
+                        should_delete = True
+                        reason = "电影已存在于 Emby"
+                except Exception:
+                    logger.exception("单订阅清理检查 Emby 失败: %s", sub.title)
+                if not should_delete:
+                    feiniu_movie = await self._check_feiniu_movie_status(sub.tmdb_id)
+                    if feiniu_movie.get("checked") and feiniu_movie.get("exists"):
+                        should_delete = True
+                        reason = "电影已存在于飞牛"
+        elif sub.media_type == MediaType.TV and sub.tmdb_id is not None:
+            try:
+                tv_missing_result = await tv_missing_service.get_tv_missing_status(
+                    sub.tmdb_id,
+                    include_specials=bool(sub.tv_include_specials),
+                    season_number=sub.tv_season_number
+                    if str(sub.tv_scope or "all") in {"season", "episode_range"}
+                    else None,
+                    episode_start=sub.tv_episode_start
+                    if str(sub.tv_scope or "all") == "episode_range"
+                    else None,
+                    episode_end=sub.tv_episode_end
+                    if str(sub.tv_scope or "all") == "episode_range"
+                    else None,
+                    aired_only=str(sub.tv_follow_mode or "missing") == "new",
+                )
+                if str(tv_missing_result.get("status") or "") == "ok":
+                    counts = (
+                        tv_missing_result.get("counts")
+                        if isinstance(tv_missing_result.get("counts"), dict)
+                        else {}
+                    )
+                    missing_count = int(counts.get("missing") or 0)
+                    if missing_count <= 0:
+                        should_delete = True
+                        reason = "剧集已不缺集（Emby）"
+                if not should_delete:
+                    feiniu_tv = await self._check_feiniu_tv_missing_status(sub.tmdb_id)
+                    if feiniu_tv.get("checked") and feiniu_tv.get("missing_count", -1) == 0:
+                        should_delete = True
+                        reason = "剧集已不缺集（飞牛）"
+            except Exception:
+                logger.exception("单订阅清理检查剧集状态失败: %s", sub.title)
+
+        if not should_delete:
+            return {"deleted": False, "reason": ""}
+
+        await self._delete_subscription_with_records(db, sub.id)
+        await db.commit()
+        await operation_log_service.log_background_event(
+            source_type="api",
+            module="subscriptions",
+            action="subscription.item.cleanup_manual",
+            status="success",
+            message=f"[{sub.title}] 手动触发清理：{reason}，自动删除订阅",
+            extra={
+                "subscription_id": sub.id,
+                "title": sub.title,
+                "reason": reason,
+            },
+        )
+        logger.info(
+            "单订阅清理完成: id=%d title=%s reason=%s",
+            sub.id, sub.title, reason,
+        )
+        return {"deleted": True, "reason": reason}
+
     async def _fetch_resources(
         self,
         channel: str,

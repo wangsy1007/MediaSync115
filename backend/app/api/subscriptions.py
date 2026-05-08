@@ -419,6 +419,7 @@ async def create_subscription(
             new_subscription.rating,
         )
     )
+    asyncio.create_task(_cleanup_subscription_if_eligible(new_subscription.id))
 
     return new_subscription
 
@@ -499,6 +500,28 @@ async def _enrich_and_log(
         )
     except Exception:
         _logger.exception("后台补全订阅信息失败")
+
+
+async def _cleanup_subscription_if_eligible(subscription_id: int) -> None:
+    """后台任务：检查新创建的订阅，若媒体已在库中则自动清理"""
+    import logging
+
+    _logger = logging.getLogger(__name__)
+    try:
+        from app.core.database import async_session_maker
+
+        async with async_session_maker() as cleanup_db:
+            result = await subscription_service.cleanup_single_subscription(
+                cleanup_db, subscription_id
+            )
+            if result.get("deleted"):
+                _logger.info(
+                    "新创建的订阅 %d 已自动清理（媒体已在库中）: %s",
+                    subscription_id,
+                    result.get("reason"),
+                )
+    except Exception:
+        _logger.exception("新订阅创建后清理检查失败: %d", subscription_id)
 
 
 @router.get("")
@@ -931,6 +954,7 @@ async def toggle_subscription(
                 new_subscription.rating,
             )
         )
+        asyncio.create_task(_cleanup_subscription_if_eligible(new_subscription.id))
 
         return {"subscribed": True, "subscription_id": new_subscription.id, "message": "订阅成功"}
 
@@ -987,6 +1011,49 @@ async def delete_subscription(subscription_id: int, db: AsyncSession = Depends(g
         pass
 
     return {"message": "Subscription deleted"}
+
+
+# ==================== 订阅清理 ====================
+
+
+@router.post("/cleanup")
+async def trigger_bulk_cleanup(
+    db: AsyncSession = Depends(get_db),
+):
+    """批量清理所有活跃订阅：删除已转存成功或媒体已在库中的订阅"""
+    await operation_log_service.log_background_event(
+        source_type="api",
+        module="subscriptions",
+        action="subscription.cleanup.manual_bulk",
+        status="info",
+        message="手动触发批量订阅清理",
+    )
+    try:
+        result = await subscription_service.cleanup_completed_subscriptions(db)
+        return result
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"批量清理失败: {str(exc)}",
+        )
+
+
+@router.post("/{subscription_id}/cleanup")
+async def trigger_single_cleanup(
+    subscription_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """检查并清理单个订阅：若已转存成功或媒体已在库中则自动删除"""
+    sub_result = await db.execute(
+        select(Subscription).where(Subscription.id == subscription_id)
+    )
+    if not sub_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="订阅不存在")
+
+    result = await subscription_service.cleanup_single_subscription(
+        db, subscription_id
+    )
+    return result
 
 
 # ==================== 下载记录相关 ====================
@@ -1190,21 +1257,31 @@ async def mark_download_complete(
     subscription_id: int, record_id: int, db: AsyncSession = Depends(get_db)
 ):
     """
-    标记下载记录为已完成
+    标记下载记录为已完成，并同步检查父订阅是否应清理
 
     Args:
         subscription_id: 订阅ID
         record_id: 下载记录ID
 
     Returns:
-        更新后的下载记录
+        更新后的下载记录及清理结果
     """
-    return await update_download_record(
+    record = await update_download_record(
         subscription_id,
         record_id,
         DownloadRecordUpdate(status=MediaStatus.COMPLETED),
         db,
     )
+
+    cleanup_result = await subscription_service.cleanup_single_subscription(
+        db, subscription_id
+    )
+
+    response: dict[str, Any] = {"record": record}
+    if cleanup_result.get("deleted"):
+        response["subscription_cleaned_up"] = True
+        response["cleanup_reason"] = cleanup_result.get("reason")
+    return response
 
 
 @router.post("/{subscription_id}/downloads/{record_id}/fail")
