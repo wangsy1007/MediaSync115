@@ -193,7 +193,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { searchApi, subscriptionApi, pan115Api } from '@/api'
+import { searchApi, subscriptionApi, pan115Api, settingsApi } from '@/api'
 import ExploreSectionRow from '@/components/explore/ExploreSectionRow.vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import {
@@ -238,6 +238,18 @@ const lastSearchKeyword = ref('')
 const activeSearchService = ref('')
 const isSearchMode = computed(() => searched.value && Boolean(lastSearchKeyword.value))
 const showBackToExploreButton = computed(() => isSearchMode.value)
+
+const resourcePriority = ref(['hdhive', 'pansou', 'tg'])
+
+const loadResourcePriority = async () => {
+  try {
+    const { data } = await settingsApi.getRuntime()
+    const list = data?.subscription_resource_priority
+    if (Array.isArray(list) && list.length) {
+      resourcePriority.value = list
+    }
+  } catch { /* use default */ }
+}
 
 const getExplorePan115CheckTarget = (item) => {
   if (!item || typeof item !== 'object') return null
@@ -1510,6 +1522,29 @@ const handleSavePansouResult = async (item) => {
   }
 }
 
+const SOURCE_115_APIS = {
+  hdhive: (type) => type === 'tv' ? searchApi.getTvPan115Hdhive : searchApi.getMoviePan115Hdhive,
+  pansou: (type) => type === 'tv' ? searchApi.getTvPan115Pansou : searchApi.getMoviePan115Pansou,
+  tg: (type) => type === 'tv' ? searchApi.getTvPan115Tg : searchApi.getMoviePan115Tg
+}
+
+const doSave115Resource = async (resource, folderName) => {
+  const shareLink = resource.share_link || resource.url || resource.link
+  if (!shareLink) {
+    ElMessage.warning('115 资源缺少分享链接')
+    return false
+  }
+  let folderId = '0'
+  try {
+    const { data } = await pan115Api.getDefaultFolder()
+    folderId = data.folder_id || '0'
+  } catch { /* use root */ }
+  const receiveCode = parseReceiveCodeFromShareLink(shareLink)
+  await pan115Api.saveShareToFolder(shareLink, folderName, folderId, receiveCode)
+  ElMessage.success(`已转存至 115 网盘: ${resource.title || resource.name || folderName}`)
+  return true
+}
+
 const handleSave = async (item) => {
   if (item.isPansouResult) {
     await handleSavePansouResult(item)
@@ -1528,30 +1563,21 @@ const handleSave = async (item) => {
   const year = item.release_date
     ? item.release_date.split('-')[0]
     : (item.first_air_date ? item.first_air_date.split('-')[0] : (item.year || ''))
+  const folderName = year ? `${title} (${year})` : title
 
   try {
-    // Step 1: 搜索 115 网盘资源 (Pansou)
-    const pansouApi = type === 'tv' ? searchApi.getTvPan115Pansou : searchApi.getMoviePan115Pansou
-    const { data: pansouData } = await pansouApi(id, 1, false)
-    const pansouList = Array.isArray(pansouData?.list) ? pansouData.list : []
-
-    if (pansouList.length > 0) {
-      const resource = pansouList[0]
-      const shareLink = resource.share_link || resource.url || resource.link
-      if (!shareLink) {
-        ElMessage.warning('115 资源缺少分享链接')
-        return
-      }
-      let folderId = '0'
+    // Step 1: 按优先级顺序搜索 115 网盘资源
+    for (const source of resourcePriority.value) {
+      const apiFn = SOURCE_115_APIS[source]
+      if (!apiFn) continue
       try {
-        const { data } = await pan115Api.getDefaultFolder()
-        folderId = data.folder_id || '0'
-      } catch { /* use root */ }
-      const folderName = year ? `${title} (${year})` : title
-      const receiveCode = parseReceiveCodeFromShareLink(shareLink)
-      await pan115Api.saveShareToFolder(shareLink, folderName, folderId, receiveCode)
-      ElMessage.success(`已转存至 115 网盘: ${resource.title || resource.name || folderName}`)
-      return
+        const { data } = await apiFn(type)(id, 1, false)
+        const list = Array.isArray(data?.list) ? data.list : []
+        if (list.length > 0) {
+          await doSave115Resource(list[0], folderName)
+          return
+        }
+      } catch { /* try next source */ }
     }
 
     // Step 2: 无 115 资源，搜索磁力链接 (SeedHub)
@@ -1606,6 +1632,7 @@ const resetExploreState = () => {
 }
 
 onMounted(async () => {
+  loadResourcePriority()
   const q = String(route.query.q || '').trim()
   if (q) {
     searchQuery.value = q
