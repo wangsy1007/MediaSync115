@@ -1411,6 +1411,10 @@
                 />
               </div>
             </el-form-item>
+            <el-form-item label="自动解锁 HDHive">
+              <el-switch v-model="tgBotForm.hdhiveAutoUnlock" />
+              <span class="form-hint">开启后，Bot 搜索 HDHive 资源时自动花费积分解锁获取分享链接</span>
+            </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingTgBot" @click="handleSaveTgBot">保存配置</el-button>
               <el-button :loading="restartingTgBot" @click="handleRestartTgBot">重启 Bot</el-button>
@@ -1836,6 +1840,7 @@ const tgBotForm = ref({
   token: '',
   allowedUsers: [],
   notifyChatIds: [],
+  hdhiveAutoUnlock: false,
 })
 const tgBotNewUserId = ref('')
 const tgBotNewChatId = ref('')
@@ -3689,6 +3694,7 @@ const handleSaveTgBot = async () => {
       tg_bot_token: tgBotForm.value.token,
       tg_bot_allowed_users: tgBotForm.value.allowedUsers,
       tg_bot_notify_chat_ids: tgBotForm.value.notifyChatIds,
+      tg_bot_hdhive_auto_unlock: tgBotForm.value.hdhiveAutoUnlock,
     })
     ElMessage.success('TG Bot 配置已保存')
     // Auto restart if enabled
@@ -3804,6 +3810,7 @@ const fetchRuntimeSettings = async () => {
     tgBotForm.value.token = data.tg_bot_token || ''
     tgBotForm.value.allowedUsers = Array.isArray(data.tg_bot_allowed_users) ? data.tg_bot_allowed_users : []
     tgBotForm.value.notifyChatIds = Array.isArray(data.tg_bot_notify_chat_ids) ? data.tg_bot_notify_chat_ids : []
+    tgBotForm.value.hdhiveAutoUnlock = !!data.tg_bot_hdhive_auto_unlock
 
     // Detail tabs visibility
     if (Array.isArray(data.detail_visible_tabs)) {

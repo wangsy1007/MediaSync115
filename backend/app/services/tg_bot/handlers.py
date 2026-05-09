@@ -636,55 +636,143 @@ async def _search_115_resources(
         _with_current_poster(context, f"正在搜索 115 资源: {escape(title)} ...")
     )
 
+    from app.services.runtime_settings_service import runtime_settings_service
+    from app.services.tmdb_service import tmdb_service
+    from app.services.pansou_service import pansou_service
+
+    auto_unlock_hdhive = runtime_settings_service.get_tg_bot_hdhive_auto_unlock()
+    priority = runtime_settings_service.get_subscription_resource_priority()
+
+    if media_type == "movie":
+        tmdb_detail = await tmdb_service.get_movie_detail(tmdb_id)
+    else:
+        tmdb_detail = await tmdb_service.get_tv_detail(tmdb_id)
+    keywords = _build_search_keywords(tmdb_detail, media_type)
+
     resources = []
 
-    # Search via pansou
-    try:
-        from app.services.tmdb_service import tmdb_service
+    async def _try_pansou(kw: str) -> list[dict]:
+        results = []
+        try:
+            pansou_result = await pansou_service.search(kw, cloud_types="115")
+            items = (
+                pansou_result
+                if isinstance(pansou_result, list)
+                else (pansou_result.get("list") or [])
+            )
+            for item in items[:10]:
+                share_link = (
+                    item.get("share_link")
+                    or item.get("url")
+                    or item.get("link")
+                    or ""
+                )
+                if share_link and not any(r["share_link"] == share_link for r in results):
+                    results.append({
+                        "title": item.get("title") or item.get("name") or kw,
+                        "share_link": share_link,
+                        "size": item.get("size") or "",
+                        "quality": item.get("quality") or item.get("resolution") or "",
+                        "source": "pansou",
+                    })
+        except Exception:
+            pass
+        return results
 
-        if media_type == "movie":
-            tmdb_detail = await tmdb_service.get_movie_detail(tmdb_id)
-        else:
-            tmdb_detail = await tmdb_service.get_tv_detail(tmdb_id)
+    async def _try_hdhive(kw: str) -> list[dict]:
+        results = []
+        try:
+            from app.services.hdhive_service import hdhive_service
+            rows = await hdhive_service.get_pan115_by_keyword(kw, media_type)
+            for row in rows:
+                share_link = str(row.get("share_link") or "").strip()
+                slug = str(row.get("slug") or "").strip()
+                is_locked = bool(row.get("hdhive_locked"))
+                if share_link:
+                    results.append({
+                        "title": row.get("resource_name") or row.get("title") or kw,
+                        "share_link": share_link,
+                        "size": row.get("size") or "",
+                        "quality": row.get("quality") or "",
+                        "source": "hdhive",
+                    })
+                elif is_locked and slug:
+                    if auto_unlock_hdhive:
+                        try:
+                            unlock_result = await hdhive_service.unlock_resource(slug)
+                            unlocked_link = str(unlock_result.get("share_link") or "").strip()
+                            if unlocked_link:
+                                results.append({
+                                    "title": row.get("resource_name") or row.get("title") or kw,
+                                    "share_link": unlocked_link,
+                                    "size": row.get("size") or "",
+                                    "quality": row.get("quality") or "",
+                                    "source": "hdhive",
+                                })
+                        except Exception:
+                            pass
+                    results.append({
+                        "title": f"[需解锁] {row.get('resource_name') or row.get('title') or kw}",
+                        "share_link": "",
+                        "size": row.get("size") or "",
+                        "quality": row.get("quality") or "",
+                        "source": "hdhive",
+                        "locked": True,
+                    })
+            if results:
+                results.sort(key=lambda r: int(bool(r.get("locked"))))
+        except Exception:
+            pass
+        return results
 
-        keywords = _build_search_keywords(tmdb_detail, media_type)
-        from app.services.pansou_service import pansou_service
+    async def _try_tg(kw: str) -> list[dict]:
+        results = []
+        try:
+            from app.services.tg_service import tg_service
+            rows = await tg_service.search_115_by_keyword(kw, media_type=media_type)
+            for row in rows:
+                share_link = str(row.get("share_link") or "").strip()
+                if share_link:
+                    results.append({
+                        "title": row.get("title") or row.get("name") or kw,
+                        "share_link": share_link,
+                        "size": row.get("size") or "",
+                        "quality": row.get("quality") or row.get("resolution") or "",
+                        "source": "tg",
+                    })
+        except Exception:
+            pass
+        return results
 
+    _source_searchers = {
+        "hdhive": _try_hdhive,
+        "pansou": _try_pansou,
+        "tg": _try_tg,
+    }
+
+    for source in priority:
+        searcher = _source_searchers.get(source)
+        if not searcher:
+            continue
         for kw in keywords[:3]:
             try:
-                pansou_result = await pansou_service.search(kw, cloud_types="115")
-                items = (
-                    pansou_result
-                    if isinstance(pansou_result, list)
-                    else (pansou_result.get("list") or [])
-                )
-                for item in items[:10]:
-                    share_link = (
-                        item.get("share_link")
-                        or item.get("url")
-                        or item.get("link")
-                        or ""
-                    )
-                    if share_link and not any(
-                        r["share_link"] == share_link for r in resources
-                    ):
-                        resources.append(
-                            {
-                                "title": item.get("title") or item.get("name") or kw,
-                                "share_link": share_link,
-                                "size": item.get("size") or "",
-                                "quality": item.get("quality")
-                                or item.get("resolution")
-                                or "",
-                                "source": "pansou",
-                            }
-                        )
+                source_results = await searcher(kw)
+                for r in source_results:
+                    sl = r.get("share_link", "")
+                    if sl and not any(existing.get("share_link") == sl for existing in resources):
+                        resources.append(r)
+                    elif not sl and r.get("locked"):
+                        if not any(
+                            existing.get("title") == r.get("title") and existing.get("locked")
+                            for existing in resources
+                        ):
+                            resources.append(r)
                 if resources:
                     break
             except Exception:
                 continue
-    except Exception:
-        logger.debug("Pansou 115 search failed for tmdb_id=%s", tmdb_id)
+        if resources:
+            break
 
     context.user_data["cached_115_resources"] = resources
     context.user_data["cached_115_tmdb_id"] = tmdb_id

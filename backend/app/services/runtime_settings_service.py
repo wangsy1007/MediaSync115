@@ -143,6 +143,7 @@ class RuntimeSettingsService:
             "tg_bot_enabled": False,
             "tg_bot_allowed_users": [],
             "tg_bot_notify_chat_ids": [],
+            "tg_bot_hdhive_auto_unlock": False,
             "detail_visible_tabs": [
                 "pan115",
                 "pan115_pansou",
@@ -534,6 +535,9 @@ class RuntimeSettingsService:
             return max(5, int(value))
         except Exception:
             return 30
+
+    def get_tg_bot_hdhive_auto_unlock(self) -> bool:
+        return bool(self._data.get("tg_bot_hdhive_auto_unlock", False))
 
     def get_tmdb_api_key(self) -> str:
         return self._data["tmdb_api_key"]
@@ -1209,6 +1213,7 @@ class RuntimeSettingsService:
             "tg_bot_enabled": bool(self._data.get("tg_bot_enabled", False)),
             "tg_bot_allowed_users": self._data.get("tg_bot_allowed_users") or [],
             "tg_bot_notify_chat_ids": self._data.get("tg_bot_notify_chat_ids") or [],
+            "tg_bot_hdhive_auto_unlock": bool(self._data.get("tg_bot_hdhive_auto_unlock", False)),
             "detail_visible_tabs": self._data.get("detail_visible_tabs") or [],
             "license_key": str(self._data.get("license_key") or ""),
             "subscription_offline_transfer_enabled": self.get_subscription_offline_transfer_enabled(),
