@@ -178,6 +178,17 @@ class EmbySyncIndexService:
                 sync_payload = await self._collect_emby_snapshot()
                 await self._replace_snapshot(sync_payload, started_at, trigger, started_ts)
                 await self._clear_runtime_caches()
+                # 同步完成后清理已在影视库中的订阅
+                try:
+                    from app.services.subscription_service import subscription_service
+                    async with async_session_maker() as cleanup_db:
+                        cleanup_result = await subscription_service.cleanup_completed_subscriptions(cleanup_db)
+                        if cleanup_result.get("deleted_count"):
+                            logger.info(
+                                "Emby 同步后清理订阅：删除 %d 项", cleanup_result["deleted_count"]
+                            )
+                except Exception:
+                    logger.exception("Emby 同步后清理订阅失败")
                 movie_count = len(sync_payload["movie_rows"])
                 tv_count = len(sync_payload["tv_rows"])
                 episode_count = len(sync_payload["episode_rows"])
