@@ -1268,6 +1268,9 @@ const handleSearch = async () => {
   } finally {
     loading.value = false
   }
+
+  // 将搜索关键词写入 URL，确保返回时可恢复
+  router.replace({ query: { q: keyword } })
 }
 
 const handlePageChange = (page) => {
@@ -1597,7 +1600,13 @@ const resetExploreState = () => {
 }
 
 onMounted(async () => {
-  await initializeExploreHome()
+  const q = String(route.query.q || '').trim()
+  if (q) {
+    searchQuery.value = q
+    await handleSearch()
+  } else {
+    await initializeExploreHome()
+  }
   startExploreQueuePolling()
 })
 
