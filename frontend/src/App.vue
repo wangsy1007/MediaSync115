@@ -180,6 +180,38 @@
         </div>
       </transition>
     </teleport>
+
+    <!-- 手机端「发现」探索页选择面板 -->
+    <teleport to="body">
+      <transition name="action-sheet">
+        <div v-if="showExploreMenu" class="more-overlay" @click.self="showExploreMenu = false">
+          <div class="more-sheet">
+            <div class="more-sheet-header">
+              <span class="more-sheet-title">选择探索页</span>
+            </div>
+            <div class="more-sheet-body">
+              <button
+                class="more-item"
+                :class="{ 'more-item-active': lastExplorePage === '/explore/douban' }"
+                @click="handleExploreNav('/explore/douban')"
+              >
+                <el-icon><Search /></el-icon>
+                <span>豆瓣榜单</span>
+              </button>
+              <button
+                class="more-item"
+                :class="{ 'more-item-active': lastExplorePage === '/explore/tmdb' }"
+                @click="handleExploreNav('/explore/tmdb')"
+              >
+                <el-icon><Search /></el-icon>
+                <span>TMDB 榜单</span>
+              </button>
+            </div>
+            <button class="more-cancel" @click="showExploreMenu = false">取消</button>
+          </div>
+        </div>
+      </transition>
+    </teleport>
   </el-config-provider>
 </template>
 
@@ -217,6 +249,8 @@ const systemDark = ref(supportsMatchMedia ? window.matchMedia('(prefers-color-sc
 const beijingNow = ref(formatBeijingDateTime(new Date()))
 const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1280)
 const showMoreMenu = ref(false)
+const showExploreMenu = ref(false)
+const lastExplorePage = ref('/explore/douban')
 const appVersionLabel = ref('v1.1.3')
 const isLoginRoute = computed(() => route.path === '/login')
 
@@ -273,7 +307,7 @@ function handleGoHome() {
 const dockTabs = computed(() => {
   const path = route.path
   return [
-    { key: 'explore', label: '发现', icon: Search, route: '/explore/douban', active: path === '/' || path === '/search' || path.startsWith('/explore') || path.startsWith('/movie/') || path.startsWith('/tv/') || path.startsWith('/douban/') },
+    { key: 'explore', label: '发现', icon: Search, route: lastExplorePage.value, active: path === '/' || path === '/search' || path.startsWith('/explore') || path.startsWith('/movie/') || path.startsWith('/tv/') || path.startsWith('/douban/') || showExploreMenu.value },
     { key: 'subscriptions', label: '订阅', icon: Star, route: '/subscriptions', active: path.startsWith('/subscriptions') },
     { key: 'downloads', label: '下载', icon: Download, route: '/downloads', active: path.startsWith('/downloads') },
     { key: 'archive', label: '归档', icon: FolderOpened, route: '/archive', active: path.startsWith('/archive') },
@@ -284,9 +318,21 @@ const dockTabs = computed(() => {
 function handleDockTab(tab) {
   if (tab.key === 'more') {
     showMoreMenu.value = true
+  } else if (tab.key === 'explore') {
+    if (route.path.startsWith('/explore')) {
+      showExploreMenu.value = true
+    } else {
+      router.push(lastExplorePage.value)
+    }
   } else {
     router.push(tab.route)
   }
+}
+
+function handleExploreNav(path) {
+  showExploreMenu.value = false
+  lastExplorePage.value = path
+  router.push(path)
 }
 
 function handleMoreNav(path) {
@@ -338,11 +384,15 @@ watch(resolvedTheme, (value) => {
 
 watch(() => route.path, () => {
   showMoreMenu.value = false
+  showExploreMenu.value = false
+  if (route.path.startsWith('/explore/douban')) lastExplorePage.value = '/explore/douban'
+  else if (route.path.startsWith('/explore/tmdb')) lastExplorePage.value = '/explore/tmdb'
 })
 
 watch(isCompact, (compact) => {
   if (!compact) {
     showMoreMenu.value = false
+    showExploreMenu.value = false
   }
 })
 
@@ -774,6 +824,15 @@ html, body, #app {
 
     .el-icon {
       color: var(--ms-accent-danger, #e74c3c);
+    }
+  }
+
+  &.more-item-active {
+    background: var(--ms-glass-bg-heavy);
+    color: var(--ms-primary);
+
+    .el-icon {
+      color: var(--ms-primary);
     }
   }
 }
