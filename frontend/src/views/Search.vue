@@ -1510,7 +1510,19 @@ const handleSave = async (item) => {
     ElMessage.warning('人物不支持转存')
     return
   }
-  handleItemClick(item)
+  const type = item.media_type
+  const id = item.id
+  if (!id) return
+  const query = { from: route.fullPath, autoLoadResources: 'true' }
+  if (type === 'movie') {
+    warmupPan115Resources('movie', id)
+    router.push({ path: `/movie/${id}`, query })
+  } else if (type === 'tv') {
+    warmupPan115Resources('tv', id)
+    router.push({ path: `/tv/${id}`, query })
+  } else if (type === 'collection') {
+    router.push({ path: `/movie/${id}`, query })
+  }
 }
 
 const setupSectionResizeObserver = () => {
