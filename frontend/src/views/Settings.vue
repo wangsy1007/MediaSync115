@@ -1321,6 +1321,23 @@
           </el-alert>
 
           <el-form label-width="120px">
+            <el-divider content-position="left">主标签页顺序</el-divider>
+            <el-form-item label="顺序调整">
+              <div class="subtab-order-list">
+                <div v-for="(key, idx) in detailTabsForm.main_order" :key="key" class="subtab-order-item">
+                  <el-button-group size="small" class="order-btn-group">
+                    <el-button :disabled="idx === 0" @click="moveMainOrder(idx, -1)">
+                      <el-icon><ArrowUp /></el-icon>
+                    </el-button>
+                    <el-button :disabled="idx === detailTabsForm.main_order.length - 1" @click="moveMainOrder(idx, 1)">
+                      <el-icon><ArrowDown /></el-icon>
+                    </el-button>
+                  </el-button-group>
+                  <span class="subtab-label">{{ getMainTabLabel(key) }}</span>
+                </div>
+              </div>
+            </el-form-item>
+
             <el-divider content-position="left">115网盘</el-divider>
             <el-form-item label="115网盘">
               <el-checkbox v-model="detailTabsForm.pan115">显示整个 115网盘 标签页</el-checkbox>
@@ -1864,6 +1881,7 @@ const savingAccount = ref(false)
 
 // Detail tabs visibility
 const detailTabsForm = reactive({
+  main_order: ['pan115', 'magnet'],
   pan115: true,
   pan115_children: ['pan115_pansou', 'pan115_hdhive', 'pan115_tg'],
   magnet: true,
@@ -1876,6 +1894,18 @@ const ALL_MAGNET_CHILDREN = ['magnet_seedhub', 'magnet_butailing']
 const getSubTabLabel = (key) => {
   const tab = ALL_TABS.find(t => t.key === key)
   return tab ? tab.label : key
+}
+
+const getMainTabLabel = (key) => {
+  const tab = ALL_TABS.find(t => t.key === key && t.group === 'main')
+  return tab ? tab.label : key
+}
+
+const moveMainOrder = (idx, dir) => {
+  const arr = detailTabsForm.main_order
+  const target = idx + dir
+  if (target < 0 || target >= arr.length) return
+  ;[arr[idx], arr[target]] = [arr[target], arr[idx]]
 }
 
 const hiddenPan115Children = computed(() =>
@@ -3809,13 +3839,15 @@ const handleCheckTgBotStatus = async () => {
 // Detail tabs visibility handlers
 const handleSaveDetailTabs = async () => {
   const keys = []
-  if (detailTabsForm.pan115) {
-    keys.push('pan115')
-    keys.push(...detailTabsForm.pan115_children)
-  }
-  if (detailTabsForm.magnet) {
-    keys.push('magnet')
-    keys.push(...detailTabsForm.magnet_children)
+  for (const mainKey of detailTabsForm.main_order) {
+    if (mainKey === 'pan115' && detailTabsForm.pan115) {
+      keys.push('pan115')
+      keys.push(...detailTabsForm.pan115_children)
+    }
+    if (mainKey === 'magnet' && detailTabsForm.magnet) {
+      keys.push('magnet')
+      keys.push(...detailTabsForm.magnet_children)
+    }
   }
   try {
     await saveVisibleTabs(keys)
@@ -3826,6 +3858,7 @@ const handleSaveDetailTabs = async () => {
 }
 
 const handleResetDetailTabs = async () => {
+  detailTabsForm.main_order = ['pan115', 'magnet']
   detailTabsForm.pan115 = true
   detailTabsForm.pan115_children = [...ALL_PAN115_CHILDREN]
   detailTabsForm.magnet = true
@@ -3892,6 +3925,7 @@ const fetchRuntimeSettings = async () => {
     // Detail tabs visibility (order preserved from backend array)
     if (Array.isArray(data.detail_visible_tabs)) {
       const arr = data.detail_visible_tabs
+      detailTabsForm.main_order = arr.filter(k => k === 'pan115' || k === 'magnet')
       detailTabsForm.pan115 = arr.includes('pan115')
       detailTabsForm.pan115_children = arr.filter(k => ALL_PAN115_CHILDREN.includes(k))
       detailTabsForm.magnet = arr.includes('magnet')

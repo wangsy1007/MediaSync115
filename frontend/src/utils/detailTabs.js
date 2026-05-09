@@ -69,3 +69,13 @@ export function getFirstVisibleSubTabName(visibleArr, parentKey) {
   if (tabs.length === 0) return ''
   return tabs[0].replace(parentKey + '_', '')
 }
+
+// Return visible main (top-level) tab keys in the configured order
+export function getOrderedVisibleMainTabs(visibleArr) {
+  const arr = Array.isArray(visibleArr) ? visibleArr : visibleArr?.value
+  if (!arr) return ALL_TABS.filter(t => t.group === 'main').map(t => t.key)
+  return arr.filter(k => {
+    const tab = ALL_TABS.find(t => t.key === k)
+    return tab && tab.group === 'main'
+  })
+}

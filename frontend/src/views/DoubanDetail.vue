@@ -87,7 +87,8 @@
       </div>
 
       <el-tabs v-model="activeTab" class="resource-tabs">
-        <el-tab-pane v-if="tabVisible('pan115')" label="115网盘" name="pan115">
+        <template v-for="key in orderedMainTabs" :key="key">
+          <el-tab-pane v-if="key === 'pan115'" label="115网盘" name="pan115">
           <el-tabs v-model="pan115SourceTab" class="source-tabs">
             <template v-for="key in orderedPan115SubTabs" :key="key">
               <el-tab-pane v-if="key === 'pan115_pansou'" label="Pansou" name="pansou">
@@ -342,7 +343,7 @@
           </el-tabs>
         </el-tab-pane>
 
-        <el-tab-pane v-if="tabVisible('magnet')" label="磁力链接" name="magnet">
+        <el-tab-pane v-else-if="key === 'magnet'" label="磁力链接" name="magnet">
           <el-tabs v-model="magnetSourceTab" class="source-tabs">
             <template v-for="key in orderedMagnetSubTabs" :key="key">
               <el-tab-pane v-if="key === 'magnet_seedhub'" label="SeedHub" name="seedhub">
@@ -447,6 +448,7 @@
             </template>
           </el-tabs>
         </el-tab-pane>
+        </template>
 
       </el-tabs>
     </template>
@@ -511,7 +513,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { pansouApi, pan115Api, searchApi, subscriptionApi } from '@/api'
 import { ArrowLeft, VideoCamera } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
-import { getVisibleTabs, loadVisibleTabs, isTabVisible, getOrderedVisibleSubTabs, getFirstVisibleSubTabName } from '@/utils/detailTabs'
+import { getVisibleTabs, loadVisibleTabs, isTabVisible, getOrderedVisibleSubTabs, getFirstVisibleSubTabName, getOrderedVisibleMainTabs } from '@/utils/detailTabs'
 import { extractTags } from '@/utils/resourceTags'
 
 const _visibleTabs = getVisibleTabs()
@@ -519,6 +521,7 @@ const tabVisible = (key) => isTabVisible(_visibleTabs.value, key)
 
 const orderedPan115SubTabs = computed(() => getOrderedVisibleSubTabs(_visibleTabs.value, 'pan115'))
 const orderedMagnetSubTabs = computed(() => getOrderedVisibleSubTabs(_visibleTabs.value, 'magnet'))
+const orderedMainTabs = computed(() => getOrderedVisibleMainTabs(_visibleTabs.value))
 
 const _tagCache = new WeakMap()
 const getRowTags = (row) => {
@@ -544,7 +547,7 @@ const mappingLoading = ref(false)
 const subscribing = ref(false)
 const detail = ref(null)
 
-const activeTab = ref('pan115')
+const activeTab = ref(getOrderedVisibleMainTabs(_visibleTabs.value)[0] || 'pan115')
 const pan115SourceTab = ref(getFirstVisibleSubTabName(_visibleTabs.value, 'pan115') || 'pansou')
 const magnetSourceTab = ref(getFirstVisibleSubTabName(_visibleTabs.value, 'magnet') || 'seedhub')
 
@@ -1588,7 +1591,7 @@ watch(magnetSourceTab, async (tab) => {
 watch(() => `${route.params.mediaType || ''}:${route.params.id || ''}`, async () => {
   isInEmby.value = false
   isInFeiniu.value = false
-  activeTab.value = 'pan115'
+  activeTab.value = getOrderedVisibleMainTabs(_visibleTabs.value)[0] || 'pan115'
   pan115SourceTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'pan115') || 'pansou'
   magnetSourceTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'magnet') || 'seedhub'
   resetResources()
@@ -1596,7 +1599,8 @@ watch(() => `${route.params.mediaType || ''}:${route.params.id || ''}`, async ()
 })
 
 onMounted(async () => {
-  loadVisibleTabs()
+  await loadVisibleTabs()
+  activeTab.value = getOrderedVisibleMainTabs(_visibleTabs.value)[0] || 'pan115'
   pan115SourceTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'pan115') || 'pansou'
   magnetSourceTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'magnet') || 'seedhub'
   await loadDetail()
