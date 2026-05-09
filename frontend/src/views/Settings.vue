@@ -724,8 +724,9 @@
             <el-form-item label="回填批次大小">
               <el-input-number v-model="tgIndexForm.backfillBatchSize" :min="50" :max="2000" />
             </el-form-item>
-            <el-form-item label="建议增量间隔(分钟)">
-              <el-input-number v-model="tgIndexForm.incrementalIntervalMinutes" :min="5" :max="1440" />
+            <el-form-item label="自动增量间隔(分钟)">
+              <el-input-number v-model="tgIndexForm.incrementalIntervalMinutes" :min="15" :max="1440" />
+              <div style="color: #909399; font-size: 12px; margin-top: 4px">最小 15 分钟，保存后自动定时执行增量同步</div>
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingTgIndexConfig" @click="handleSaveTgIndexConfig">

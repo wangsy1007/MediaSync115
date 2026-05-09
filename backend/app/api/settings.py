@@ -633,6 +633,7 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
         updated = runtime_settings_service.update_bulk(payload)
         await subscription_scheduler_service.ensure_subscription_tasks()
         await subscription_scheduler_service.ensure_chart_subscription_task()
+        await subscription_scheduler_service.ensure_tg_index_incremental_task()
         await hdhive_checkin_scheduler_service.ensure_checkin_task()
         await emby_sync_scheduler_service.ensure_sync_task()
         await feiniu_sync_scheduler_service.ensure_sync_task()

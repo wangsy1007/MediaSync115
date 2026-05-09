@@ -169,6 +169,7 @@ async def lifespan(app: FastAPI):
     await scheduler_manager.init()
     await subscription_scheduler_service.ensure_subscription_tasks()
     await subscription_scheduler_service.ensure_chart_subscription_task()
+    await subscription_scheduler_service.ensure_tg_index_incremental_task()
     await hdhive_checkin_scheduler_service.ensure_checkin_task()
     await emby_sync_scheduler_service.ensure_sync_task()
     await feiniu_sync_scheduler_service.ensure_sync_task()

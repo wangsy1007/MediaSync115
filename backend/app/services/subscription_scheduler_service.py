@@ -149,5 +149,48 @@ class SubscriptionSchedulerService:
                 hour_expr = ",".join(str(h) for h in trigger_hours)
         return f"{minute} {hour_expr} * * *"
 
+    async def ensure_tg_index_incremental_task(self) -> None:
+        """确保 TG 索引自动增量同步定时任务存在（interval 触发器，最小间隔 15 分钟）。"""
+        settings_data = runtime_settings_service.get_all()
+        enabled = bool(settings_data.get("tg_index_enabled", False))
+        raw_minutes = int(settings_data.get("tg_incremental_interval_minutes", 30) or 30)
+        minutes = max(15, raw_minutes)
+        interval_seconds = minutes * 60
+        job_key = "tg.index.incremental"
+
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(SchedulerTask)
+                .where(SchedulerTask.job_key == job_key)
+                .limit(1)
+            )
+            task = result.scalar_one_or_none()
+            if not task:
+                task = SchedulerTask(
+                    name="TG 索引增量同步",
+                    job_key=job_key,
+                    trigger_type="interval",
+                    cron_expr=None,
+                    interval_seconds=interval_seconds,
+                    kwargs_json=json.dumps({}, ensure_ascii=False),
+                    enabled=enabled,
+                    state="W" if enabled else "P",
+                )
+                db.add(task)
+                await db.flush()
+            else:
+                task.trigger_type = "interval"
+                task.cron_expr = None
+                task.interval_seconds = interval_seconds
+                task.enabled = enabled
+                task.state = "W" if enabled else "P"
+
+            await db.flush()
+            await scheduler_manager.update_dynamic_job(task)
+            if not enabled:
+                await scheduler_manager.remove_dynamic_job(task.id)
+
+            await db.commit()
+
 
 subscription_scheduler_service = SubscriptionSchedulerService()

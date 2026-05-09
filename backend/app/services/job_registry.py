@@ -33,6 +33,7 @@ class JobRegistry:
             "subscription.check_pansou": self._check_subscription_pansou,
             "subscription.check_tg": self._check_subscription_tg,
             "chart_subscription.sync": self._chart_subscription_sync,
+            "tg.index.incremental": self._tg_index_incremental,
         }
 
     def get(self, job_key: str) -> Callable[..., Any] | None:
@@ -174,6 +175,11 @@ class JobRegistry:
         from app.services.chart_subscription_service import run_chart_subscription
 
         return await run_chart_subscription()
+
+    async def _tg_index_incremental(self, **kwargs) -> dict[str, Any]:
+        from app.services.tg_sync_service import tg_sync_service
+
+        return await tg_sync_service.run_incremental_once()
 
 
 job_registry = JobRegistry()
