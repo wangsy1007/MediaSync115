@@ -82,12 +82,14 @@ class RuntimeSettingsRequest(BaseModel):
     emby_api_key: Optional[str] = None
     emby_sync_enabled: Optional[bool] = None
     emby_sync_interval_hours: Optional[int] = None
+    emby_sync_interval_minutes: Optional[int] = None
     feiniu_url: Optional[str] = None
     feiniu_secret: Optional[str] = None
     feiniu_api_key: Optional[str] = None
     feiniu_session_token: Optional[str] = None
     feiniu_sync_enabled: Optional[bool] = None
     feiniu_sync_interval_hours: Optional[int] = None
+    feiniu_sync_interval_minutes: Optional[int] = None
     subscription_hdhive_enabled: Optional[bool] = None
     subscription_hdhive_interval_hours: Optional[int] = None
     subscription_hdhive_run_time: Optional[str] = None
@@ -322,11 +324,14 @@ def _validate_emby_sync_settings(merged_settings: dict) -> None:
             status_code=400, detail="启用 Emby 定时同步前必须先配置 Emby URL 和 API Key"
         )
     try:
-        interval_hours = int(merged_settings.get("emby_sync_interval_hours", 24) or 24)
+        interval_minutes = int(merged_settings.get("emby_sync_interval_minutes", 1440) or merged_settings.get("emby_sync_interval_hours", 24) or 1440)
     except Exception:
-        interval_hours = 0
-    if interval_hours < 1:
-        raise HTTPException(status_code=400, detail="Emby 同步间隔必须大于等于 1 小时")
+        interval_minutes = 0
+    # 兼容旧版 hours：如果值 <= 168 视为小时，转换为分钟
+    if 0 < interval_minutes <= 168:
+        interval_minutes = interval_minutes * 60
+    if interval_minutes < 15:
+        raise HTTPException(status_code=400, detail="Emby 同步间隔必须大于等于 15 分钟")
 
 
 def _validate_feiniu_sync_settings(merged_settings: dict) -> None:
@@ -342,13 +347,16 @@ def _validate_feiniu_sync_settings(merged_settings: dict) -> None:
             status_code=400, detail="启用飞牛定时同步前必须先配置 URL 并完成登录"
         )
     try:
-        interval_hours = int(
-            merged_settings.get("feiniu_sync_interval_hours", 24) or 24
+        interval_minutes = int(
+            merged_settings.get("feiniu_sync_interval_minutes", 1440) or merged_settings.get("feiniu_sync_interval_hours", 24) or 1440
         )
     except Exception:
-        interval_hours = 0
-    if interval_hours < 1:
-        raise HTTPException(status_code=400, detail="飞牛同步间隔必须大于等于 1 小时")
+        interval_minutes = 0
+    # 兼容旧版 hours：如果值 <= 168 视为小时，转换为分钟
+    if 0 < interval_minutes <= 168:
+        interval_minutes = interval_minutes * 60
+    if interval_minutes < 15:
+        raise HTTPException(status_code=400, detail="飞牛同步间隔必须大于等于 15 分钟")
 
 
 @router.get("/runtime")
@@ -613,6 +621,7 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
             "emby_api_key",
             "emby_sync_enabled",
             "emby_sync_interval_hours",
+            "emby_sync_interval_minutes",
         }
     ):
         _validate_emby_sync_settings(merged_settings)
@@ -623,6 +632,7 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
             "feiniu_session_token",
             "feiniu_sync_enabled",
             "feiniu_sync_interval_hours",
+            "feiniu_sync_interval_minutes",
         }
     ):
         _validate_feiniu_sync_settings(merged_settings)

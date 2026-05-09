@@ -104,12 +104,14 @@ class RuntimeSettingsService:
             "emby_api_key": settings.EMBY_API_KEY or "",
             "emby_sync_enabled": False,
             "emby_sync_interval_hours": 24,
+            "emby_sync_interval_minutes": 1440,
             "feiniu_url": settings.FEINIU_URL or "",
             "feiniu_secret": settings.FEINIU_SECRET or "",
             "feiniu_api_key": settings.FEINIU_API_KEY or "",
             "feiniu_session_token": "",
             "feiniu_sync_enabled": False,
             "feiniu_sync_interval_hours": 24,
+            "feiniu_sync_interval_minutes": 1440,
             "auth_username": "admin",
             "auth_password_hash": "",
             "auth_secret": "",
@@ -557,12 +559,24 @@ class RuntimeSettingsService:
     def get_emby_sync_enabled(self) -> bool:
         return bool(self._data.get("emby_sync_enabled", False))
 
+    def get_emby_sync_interval_minutes(self) -> int:
+        value = self._data.get("emby_sync_interval_minutes")
+        if value is not None:
+            try:
+                return max(15, int(value))
+            except Exception:
+                pass
+        # 兼容旧版 hours 配置，自动转换为分钟
+        old_hours = self._data.get("emby_sync_interval_hours")
+        if old_hours is not None:
+            try:
+                return max(15, int(old_hours) * 60)
+            except Exception:
+                pass
+        return 1440
+
     def get_emby_sync_interval_hours(self) -> int:
-        value = self._data.get("emby_sync_interval_hours", 24)
-        try:
-            return max(1, int(value))
-        except Exception:
-            return 24
+        return max(1, self.get_emby_sync_interval_minutes() // 60)
 
     def get_feiniu_url(self) -> str:
         return str(self._data.get("feiniu_url") or "")
@@ -579,12 +593,24 @@ class RuntimeSettingsService:
     def get_feiniu_sync_enabled(self) -> bool:
         return bool(self._data.get("feiniu_sync_enabled", False))
 
+    def get_feiniu_sync_interval_minutes(self) -> int:
+        value = self._data.get("feiniu_sync_interval_minutes")
+        if value is not None:
+            try:
+                return max(15, int(value))
+            except Exception:
+                pass
+        # 兼容旧版 hours 配置，自动转换为分钟
+        old_hours = self._data.get("feiniu_sync_interval_hours")
+        if old_hours is not None:
+            try:
+                return max(15, int(old_hours) * 60)
+            except Exception:
+                pass
+        return 1440
+
     def get_feiniu_sync_interval_hours(self) -> int:
-        value = self._data.get("feiniu_sync_interval_hours", 24)
-        try:
-            return max(1, int(value))
-        except Exception:
-            return 24
+        return max(1, self.get_feiniu_sync_interval_minutes() // 60)
 
     def get_auth_username(self) -> str:
         return str(self._data.get("auth_username") or "admin").strip() or "admin"
@@ -1128,12 +1154,14 @@ class RuntimeSettingsService:
             "emby_api_key": self.get_emby_api_key(),
             "emby_sync_enabled": self.get_emby_sync_enabled(),
             "emby_sync_interval_hours": self.get_emby_sync_interval_hours(),
+            "emby_sync_interval_minutes": self.get_emby_sync_interval_minutes(),
             "feiniu_url": self.get_feiniu_url(),
             "feiniu_secret": self.get_feiniu_secret(),
             "feiniu_api_key": self.get_feiniu_api_key(),
             "feiniu_session_token": self.get_feiniu_session_token(),
             "feiniu_sync_enabled": self.get_feiniu_sync_enabled(),
             "feiniu_sync_interval_hours": self.get_feiniu_sync_interval_hours(),
+            "feiniu_sync_interval_minutes": self.get_feiniu_sync_interval_minutes(),
             "auth_username": self.get_auth_username(),
             "subscription_hdhive_enabled": bool(
                 self._data.get("subscription_hdhive_enabled", False)

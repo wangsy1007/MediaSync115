@@ -9,8 +9,8 @@ from app.services.runtime_settings_service import runtime_settings_service
 class EmbySyncSchedulerService:
     async def ensure_sync_task(self) -> None:
         enabled = runtime_settings_service.get_emby_sync_enabled()
-        interval_hours = runtime_settings_service.get_emby_sync_interval_hours()
-        interval_seconds = max(1, int(interval_hours)) * 3600
+        interval_minutes = runtime_settings_service.get_emby_sync_interval_minutes()
+        interval_seconds = interval_minutes * 60
         job_key = "system.sync_emby_index"
         display_name = "Emby 全量索引同步"
 

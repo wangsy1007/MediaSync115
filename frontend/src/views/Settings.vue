@@ -375,11 +375,11 @@
             <el-form-item label="定时同步">
               <el-switch v-model="embyForm.syncEnabled" />
             </el-form-item>
-            <el-form-item label="同步间隔(小时)">
+            <el-form-item label="同步间隔(分钟)">
               <el-input-number
-                v-model="embyForm.syncIntervalHours"
-                :min="1"
-                :max="168"
+                v-model="embyForm.syncIntervalMinutes"
+                :min="15"
+                :max="10080"
                 :disabled="!embyForm.syncEnabled"
               />
             </el-form-item>
@@ -481,11 +481,11 @@
             <el-form-item label="定时同步">
               <el-switch v-model="feiniuForm.syncEnabled" />
             </el-form-item>
-            <el-form-item label="同步间隔(小时)">
+            <el-form-item label="同步间隔(分钟)">
               <el-input-number
-                v-model="feiniuForm.syncIntervalHours"
-                :min="1"
-                :max="168"
+                v-model="feiniuForm.syncIntervalMinutes"
+                :min="15"
+                :max="10080"
                 :disabled="!feiniuForm.syncEnabled"
               />
             </el-form-item>
@@ -1699,12 +1699,12 @@ const embyForm = ref({
   url: '',
   apiKey: '',
   syncEnabled: false,
-  syncIntervalHours: 24
+  syncIntervalMinutes: 1440
 })
 const feiniuForm = ref({
   url: '',
   syncEnabled: false,
-  syncIntervalHours: 24
+  syncIntervalMinutes: 1440
 })
 const feiniuLoginForm = ref({
   username: '',
@@ -2901,7 +2901,7 @@ const handleSaveFeiniu = async () => {
     await settingsApi.updateRuntime({
       feiniu_url: feiniuForm.value.url,
       feiniu_sync_enabled: feiniuForm.value.syncEnabled,
-      feiniu_sync_interval_hours: feiniuForm.value.syncIntervalHours
+      feiniu_sync_interval_minutes: feiniuForm.value.syncIntervalMinutes
     })
     await fetchRuntimeSettings()
     ElMessage.success('飞牛影视配置已保存')
@@ -3091,7 +3091,7 @@ const handleSaveEmby = async () => {
       emby_url: embyForm.value.url,
       emby_api_key: embyForm.value.apiKey,
       emby_sync_enabled: embyForm.value.syncEnabled,
-      emby_sync_interval_hours: Number(embyForm.value.syncIntervalHours || 24)
+      emby_sync_interval_minutes: Number(embyForm.value.syncIntervalMinutes || 1440)
     })
     await fetchRuntimeSettings()
     await fetchEmbySyncStatus(false)
@@ -3790,10 +3790,10 @@ const fetchRuntimeSettings = async () => {
     embyForm.value.url = data.emby_url || ''
     embyForm.value.apiKey = data.emby_api_key || ''
     embyForm.value.syncEnabled = !!data.emby_sync_enabled
-    embyForm.value.syncIntervalHours = Number(data.emby_sync_interval_hours || 24)
+    embyForm.value.syncIntervalMinutes = Number(data.emby_sync_interval_minutes || data.emby_sync_interval_hours * 60 || 1440)
     feiniuForm.value.url = data.feiniu_url || ''
     feiniuForm.value.syncEnabled = !!data.feiniu_sync_enabled
-    feiniuForm.value.syncIntervalHours = Number(data.feiniu_sync_interval_hours || 24)
+    feiniuForm.value.syncIntervalMinutes = Number(data.feiniu_sync_interval_minutes || data.feiniu_sync_interval_hours * 60 || 1440)
 
     if (!pansouForm.value.baseUrl) {
       pansouForm.value.baseUrl = data.pansou_base_url || ''
