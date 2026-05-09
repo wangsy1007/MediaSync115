@@ -513,6 +513,13 @@ onBeforeUnmount(() => {
       top: 50%;
       transform: translateY(-50%);
       z-index: 3;
+      width: 36px;
+      height: 36px;
+      min-width: 36px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       border-color: rgba(45, 153, 255, 0.34);
       background: rgba(13, 35, 69, 0.85);
       color: var(--ms-text-primary);
