@@ -599,6 +599,10 @@ onMounted(() => {
     overflow: hidden;
     cursor: pointer;
 
+    :deep(.el-card__body) {
+      padding: 0;
+    }
+
     .card-content {
       display: flex;
       flex-direction: column;
@@ -606,8 +610,8 @@ onMounted(() => {
     }
 
     .poster {
-      width: calc(100% + 40px);
-      margin: -20px -20px 10px;
+      width: 100%;
+      margin: 0;
       position: relative;
       aspect-ratio: 2 / 3;
 
@@ -684,6 +688,7 @@ onMounted(() => {
 
     .info {
       min-width: 0;
+      padding: 8px 12px 12px;
 
       .title-row {
         display: flex;
@@ -765,12 +770,9 @@ onMounted(() => {
     .subscription-item {
       border-radius: 12px;
 
-      .poster {
-        width: calc(100% + 28px);
-        margin: -14px -14px 10px;
-      }
-
       .info {
+        padding: 6px 10px 10px;
+
         .title-row {
           align-items: flex-start;
           flex-direction: column;
