@@ -1,6 +1,7 @@
 import importlib
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.utils import proxy as proxy_module
@@ -67,6 +68,79 @@ def test_proxy_manager_uses_socks_fallback_for_httpx_clients(monkeypatch) -> Non
             all_proxy=original_config.get("all_proxy") or "",
             socks_proxy=original_config.get("socks_proxy") or "",
         )
+
+
+def test_proxy_manager_disables_env_proxy_loading(monkeypatch) -> None:
+    manager = ProxyManager()
+
+    class DummyAsyncClient:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    class DummySyncClient:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    fake_httpx = SimpleNamespace(
+        AsyncHTTPTransport=lambda proxy: proxy,
+        HTTPTransport=lambda proxy: proxy,
+        AsyncClient=DummyAsyncClient,
+        Client=DummySyncClient,
+    )
+    monkeypatch.setattr(proxy_module, "_get_httpx", lambda: fake_httpx)
+
+    async_client = manager.create_httpx_client(base_url="https://example.com")
+    sync_client = manager.create_sync_httpx_client(base_url="https://example.com")
+
+    assert async_client.kwargs["trust_env"] is False
+    assert sync_client.kwargs["trust_env"] is False
+
+
+@pytest.mark.asyncio
+async def test_pansou_health_check_uses_proxy_manager_client(monkeypatch) -> None:
+    pansou_module = importlib.import_module("app.services.pansou_service")
+    captured: dict[str, object] = {}
+
+    class DummyResponse:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, str]:
+            return {"ok": "1"}
+
+    class DummyAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def get(self, path: str) -> DummyResponse:
+            captured["path"] = path
+            return DummyResponse()
+
+    def _fake_create_httpx_client(**kwargs):
+        captured.update(kwargs)
+        return DummyAsyncClient()
+
+    monkeypatch.setattr(
+        pansou_module.proxy_manager,
+        "create_httpx_client",
+        _fake_create_httpx_client,
+    )
+
+    service = pansou_module.PansouService(base_url="https://pansou.example")
+    result = await service.health_check()
+
+    assert captured["base_url"] == "https://pansou.example/"
+    assert captured["timeout"] == 5.0
+    assert captured["follow_redirects"] is True
+    assert captured["path"] == "/api/health"
+    assert result == {
+        "status": "healthy",
+        "code": 200,
+        "data": {"ok": "1"},
+    }
 
 
 def test_health_all_uses_configured_proxy_for_fixed_targets(

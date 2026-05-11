@@ -66,7 +66,7 @@ class PansouService:
         """
         target_url = self._normalize_base_url(base_url) if base_url else self.base_url
         try:
-            async with httpx.AsyncClient(
+            async with proxy_manager.create_httpx_client(
                 base_url=target_url,
                 timeout=5.0,
                 follow_redirects=True,

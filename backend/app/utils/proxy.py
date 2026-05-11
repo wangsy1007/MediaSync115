@@ -126,6 +126,8 @@ def get_httpx_client_kwargs() -> Dict[str, Any]:
         可用于 httpx.AsyncClient(**kwargs) 的字典
     """
     kwargs: Dict[str, Any] = {}
+    # 使用项目内代理配置，避免 httpx 隐式读取进程环境中的脏代理变量。
+    kwargs["trust_env"] = False
     mounts = get_httpx_proxy_mounts()
     if mounts:
         kwargs["mounts"] = mounts
@@ -279,6 +281,8 @@ class ProxyManager:
         httpx_module = _get_httpx()
 
         client_kwargs = dict(kwargs)
+        # 默认禁用环境变量代理，统一只走本项目显式配置的代理。
+        client_kwargs.setdefault("trust_env", False)
         mounts = {}
         base_url = client_kwargs.get("base_url")
 
@@ -311,6 +315,8 @@ class ProxyManager:
         httpx_module = _get_httpx()
 
         client_kwargs = dict(kwargs)
+        # 默认禁用环境变量代理，统一只走本项目显式配置的代理。
+        client_kwargs.setdefault("trust_env", False)
         mounts = {}
         base_url = client_kwargs.get("base_url")
 
