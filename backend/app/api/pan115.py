@@ -954,11 +954,15 @@ async def save_share_to_folder(request: SaveShareToFolderRequest):
                         return result
 
                     # 没有 tmdb_id，走默认全量转存（save_share_to_folder 内部会创建文件夹）
+                    from app.utils.resource_tags import build_quality_filter_from_settings
+
+                    quality_filter = build_quality_filter_from_settings()
                     result = await service.save_share_to_folder(
                         request.share_url,
                         request.folder_name,
                         transfer_parent_id,
                         request.receive_code,
+                        quality_filter,
                     )
                     asyncio.create_task(_trigger_archive_if_enabled("transfer"))
                     return result

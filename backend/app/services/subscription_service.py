@@ -2542,6 +2542,7 @@ class SubscriptionService:
             "folder_id", "0"
         )
         parent_folder_id = str(default_folder_id or "0")
+        quality_filter = self._resolve_subscription_quality_filter(sub)
 
         saved = 0
         failed = 0
@@ -2795,7 +2796,7 @@ class SubscriptionService:
                     for items in matched_candidates.values():
                         if len(items) > 1:
                             selected_items.append(
-                                pan_service.pick_best_video_file(items) or items[0]
+                                pan_service.pick_best_video_file(items, quality_filter) or items[0]
                             )
                         else:
                             selected_items.extend(items)
@@ -2929,6 +2930,7 @@ class SubscriptionService:
                         share_url=share_link,
                         parent_id=parent_folder_id,
                         receive_code=receive_code,
+                        quality_filter=quality_filter,
                     )
                     record.status = MediaStatus.COMPLETED
                     record.completed_at = datetime.utcnow()
@@ -3268,8 +3270,12 @@ class SubscriptionService:
         return runtime_settings_service.get_resource_preferred_resolutions()
 
     def _resolve_subscription_quality_filter(self, sub: "SubscriptionSnapshot") -> dict[str, Any]:
+        hdr = runtime_settings_service.get_resource_preferred_hdr()
+        codec = runtime_settings_service.get_resource_preferred_codec()
+        preferred_formats = (hdr or []) + (codec or [])
         return {
             "preferred_resolutions": runtime_settings_service.get_resource_preferred_resolutions() or None,
+            "preferred_formats": preferred_formats or None,
             "exclude_labels": runtime_settings_service.get_resource_exclude_tags() or None,
             "preferred_languages": runtime_settings_service.get_resource_preferred_audio() or None,
             "preferred_subtitles": runtime_settings_service.get_resource_preferred_subtitles() or None,

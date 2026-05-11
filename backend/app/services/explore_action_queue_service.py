@@ -93,8 +93,11 @@ class ExploreActionQueueService:
     @staticmethod
     def _sort_by_pref(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         pref_res = runtime_settings_service.get_resource_preferred_resolutions()
-        if pref_res:
-            return sort_by_preference(rows, pref_res, [])
+        hdr = runtime_settings_service.get_resource_preferred_hdr()
+        codec = runtime_settings_service.get_resource_preferred_codec()
+        pref_formats = (hdr or []) + (codec or [])
+        if pref_res or pref_formats:
+            return sort_by_preference(rows, pref_res or [], pref_formats or [])
         return rows
 
     @staticmethod
@@ -1155,10 +1158,14 @@ class ExploreActionQueueService:
 
             receive_code = self._extract_receive_code(share_link)
             try:
+                from app.utils.resource_tags import build_quality_filter_from_settings
+
+                quality_filter = build_quality_filter_from_settings()
                 result = await pan115_service.save_share_directly(
                     share_link,
                     folder_id,
                     receive_code,
+                    quality_filter,
                 )
             except Exception as exc:
                 attempts.append(

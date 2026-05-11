@@ -1035,6 +1035,13 @@
                 <el-checkbox value="HDR">HDR</el-checkbox>
               </el-checkbox-group>
             </el-form-item>
+            <el-form-item label="编码偏好">
+              <el-checkbox-group v-model="resourcePrefForm.codec" class="preference-inline-group">
+                <el-checkbox value="HEVC">HEVC / H.265</el-checkbox>
+                <el-checkbox value="H.264">H.264 / AVC</el-checkbox>
+                <el-checkbox value="AV1">AV1</el-checkbox>
+              </el-checkbox-group>
+            </el-form-item>
             <el-form-item label="音频偏好">
               <el-checkbox-group v-model="resourcePrefForm.audio" class="preference-inline-group">
                 <el-checkbox value="国语">国语</el-checkbox>
@@ -1836,6 +1843,7 @@ const allFormats = ALL_FORMATS
 const resourcePrefForm = reactive({
   resolutions: [],
   hdr: [],
+  codec: [],
   audio: [],
   subtitles: [],
   excludeTags: ['CAM', 'TS', '抢先版'],
@@ -3952,6 +3960,7 @@ const fetchRuntimeSettings = async () => {
     // Resource quality preferences
     resourcePrefForm.resolutions = Array.isArray(data.resource_preferred_resolutions) ? data.resource_preferred_resolutions : []
     resourcePrefForm.hdr = Array.isArray(data.resource_preferred_hdr) ? data.resource_preferred_hdr : []
+    resourcePrefForm.codec = Array.isArray(data.resource_preferred_codec) ? data.resource_preferred_codec : []
     resourcePrefForm.audio = Array.isArray(data.resource_preferred_audio) ? data.resource_preferred_audio : []
     resourcePrefForm.subtitles = Array.isArray(data.resource_preferred_subtitles) ? data.resource_preferred_subtitles : []
     resourcePrefForm.excludeTags = Array.isArray(data.resource_exclude_tags) ? data.resource_exclude_tags : ['CAM', 'TS', '抢先版']
@@ -4120,6 +4129,7 @@ const handleSaveScheduler = async () => {
       subscription_hdhive_prefer_free: schedulerForm.value.hdhiveUnlock.preferFree !== false,
       resource_preferred_resolutions: resourcePrefForm.resolutions,
       resource_preferred_hdr: resourcePrefForm.hdr,
+      resource_preferred_codec: resourcePrefForm.codec,
       resource_preferred_audio: resourcePrefForm.audio,
       resource_preferred_subtitles: resourcePrefForm.subtitles,
       resource_exclude_tags: resourcePrefForm.excludeTags,

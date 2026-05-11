@@ -132,6 +132,7 @@ class RuntimeSettingsService:
             "subscription_hdhive_prefer_free": True,
             "resource_preferred_resolutions": [],
             "resource_preferred_hdr": [],
+            "resource_preferred_codec": [],
             "resource_preferred_audio": [],
             "resource_preferred_subtitles": [],
             "resource_exclude_tags": ["CAM", "TS", "抢先版"],
@@ -692,6 +693,10 @@ class RuntimeSettingsService:
 
     def get_resource_preferred_hdr(self) -> list[str]:
         val = self._data.get("resource_preferred_hdr")
+        return list(val) if isinstance(val, list) else []
+
+    def get_resource_preferred_codec(self) -> list[str]:
+        val = self._data.get("resource_preferred_codec")
         return list(val) if isinstance(val, list) else []
 
     def get_resource_preferred_audio(self) -> list[str]:

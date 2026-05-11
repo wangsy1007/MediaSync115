@@ -135,17 +135,20 @@ class SyncService:
                     logger.info("未能解析出集数的视频，加入候选队列: %s", filename)
                     unparsed_video_candidates.append(f)
 
+            from app.utils.resource_tags import build_quality_filter_from_settings
+
+            quality_filter = build_quality_filter_from_settings()
             selected_files: list[dict[str, Any]] = []
             for candidates in candidates_by_episode.values():
                 if len(candidates) > 1:
-                    best = pan115_service.pick_best_video_file(candidates)
+                    best = pan115_service.pick_best_video_file(candidates, quality_filter)
                     selected_files.append(best or candidates[0])
                 else:
                     selected_files.extend(candidates)
 
             if unparsed_video_candidates:
                 if len(unparsed_video_candidates) > 1:
-                    best = pan115_service.pick_best_video_file(unparsed_video_candidates)
+                    best = pan115_service.pick_best_video_file(unparsed_video_candidates, quality_filter)
                     selected_files.append(best or unparsed_video_candidates[0])
                 else:
                     selected_files.extend(unparsed_video_candidates)

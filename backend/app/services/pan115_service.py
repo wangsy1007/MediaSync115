@@ -1175,9 +1175,10 @@ class Pan115Service:
 
     @classmethod
     def pick_best_video_file(
-        cls, files: list[dict[str, Any]]
+        cls, files: list[dict[str, Any]],
+        quality_filter: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """从文件列表中选出画质最好的一个视频文件"""
+        """从文件列表中选出画质最好的一个视频文件，支持按用户质量偏好评分。"""
 
         video_files = [
             item
@@ -1187,13 +1188,27 @@ class Pan115Service:
         ]
         if not video_files:
             return None
+        if quality_filter:
+            preferred_resolutions = quality_filter.get("preferred_resolutions") or []
+            preferred_formats = quality_filter.get("preferred_formats") or []
+            if preferred_resolutions or preferred_formats:
+                from app.utils.resource_tags import score_resource, enrich_resource
+
+                for vf in video_files:
+                    if "_tags" not in vf:
+                        enrich_resource(vf)
+                return max(
+                    video_files,
+                    key=lambda f: score_resource(f, preferred_resolutions, preferred_formats),
+                )
         return max(video_files, key=cls._score_video_file)
 
     @classmethod
     def _select_files_for_best_quality_transfer(
-        cls, files: list[dict[str, Any]]
+        cls, files: list[dict[str, Any]],
+        quality_filter: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """多视频分享只转存画质最好的一个视频文件"""
+        """多视频分享只转存画质最好的一个视频文件，支持按用户质量偏好筛选和评分。"""
 
         video_files = [
             item
@@ -1203,6 +1218,14 @@ class Pan115Service:
         ]
         if len(video_files) <= 1:
             return files
+
+        if quality_filter:
+            from app.utils.resource_tags import filter_and_sort_by_quality
+
+            filtered = filter_and_sort_by_quality(video_files, **quality_filter)
+            if filtered:
+                return [filtered[0]]
+            # 如果过滤后没有匹配的文件，降级使用原来的评分逻辑
         best = cls.pick_best_video_file(video_files)
         return [best] if best else files
 
@@ -1932,6 +1955,7 @@ class Pan115Service:
         folder_name: str,
         parent_id: str = "0",
         receive_code: str = "",
+        quality_filter: dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """
         将分享链接转存到指定文件夹中（递归转存所有文件）
@@ -1941,6 +1965,7 @@ class Pan115Service:
             folder_name: 目标文件夹名称
             parent_id: 父目录ID
             receive_code: 提取码
+            quality_filter: 用户质量偏好筛选参数
 
         Returns:
             转存结果
@@ -1958,7 +1983,7 @@ class Pan115Service:
         if not all_files:
             raise ValueError("分享中没有可转存的文件")
 
-        selected_files = self._select_files_for_best_quality_transfer(all_files)
+        selected_files = self._select_files_for_best_quality_transfer(all_files, quality_filter)
 
         # 批量转存所有文件（去重）
         file_ids = list(
@@ -2008,6 +2033,7 @@ class Pan115Service:
         share_url: str,
         parent_id: str = "0",
         receive_code: str = "",
+        quality_filter: dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """将分享里的所有文件直接转存到目标目录，不创建影视外层文件夹。"""
         share_code, receive_code = self._resolve_share_payload(share_url, receive_code)
@@ -2015,7 +2041,7 @@ class Pan115Service:
         if not all_files:
             raise ValueError("分享中没有可转存的文件")
 
-        selected_files = self._select_files_for_best_quality_transfer(all_files)
+        selected_files = self._select_files_for_best_quality_transfer(all_files, quality_filter)
         file_ids = list(
             dict.fromkeys([str(f["fid"]) for f in selected_files if f.get("fid")])
         )

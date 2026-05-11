@@ -315,6 +315,25 @@ def filter_and_sort_by_quality(
     return resources
 
 
+def build_quality_filter_from_settings() -> dict[str, Any]:
+    """从运行时设置构建质量过滤参数字典，供所有转存路径复用。"""
+    from app.services.runtime_settings_service import runtime_settings_service
+
+    hdr = runtime_settings_service.get_resource_preferred_hdr()
+    codec = runtime_settings_service.get_resource_preferred_codec()
+    preferred_formats = (hdr or []) + (codec or [])
+
+    return {
+        "preferred_resolutions": runtime_settings_service.get_resource_preferred_resolutions() or None,
+        "preferred_formats": preferred_formats or None,
+        "exclude_labels": runtime_settings_service.get_resource_exclude_tags() or None,
+        "preferred_languages": runtime_settings_service.get_resource_preferred_audio() or None,
+        "preferred_subtitles": runtime_settings_service.get_resource_preferred_subtitles() or None,
+        "min_size_gb": runtime_settings_service.get_resource_min_size_gb(),
+        "max_size_gb": runtime_settings_service.get_resource_max_size_gb(),
+    }
+
+
 def sort_by_preference(
     resources: list[dict[str, Any]],
     preferred_resolutions: list[str],

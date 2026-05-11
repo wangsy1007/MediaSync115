@@ -107,6 +107,7 @@ class RuntimeSettingsRequest(BaseModel):
     subscription_hdhive_prefer_free: Optional[bool] = None
     resource_preferred_resolutions: Optional[list[str]] = None
     resource_preferred_hdr: Optional[list[str]] = None
+    resource_preferred_codec: Optional[list[str]] = None
     resource_preferred_audio: Optional[list[str]] = None
     resource_preferred_subtitles: Optional[list[str]] = None
     resource_exclude_tags: Optional[list[str]] = None
