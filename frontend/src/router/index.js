@@ -96,8 +96,13 @@ const router = createRouter({
   routes
 })
 
+import { ref } from 'vue'
+
 let authSessionCache = null
 let authSessionPromise = null
+
+// 导出供 App.vue 使用，在认证检查期间显示加载动画
+export const isAuthChecking = ref(false)
 
 const getAuthSession = async (force = false) => {
   if (!force && authSessionCache) return authSessionCache
@@ -137,14 +142,37 @@ export const resetAuthSessionCache = () => {
 }
 
 router.beforeEach(async (to) => {
-  const session = await getAuthSession()
+  // 公开路由（如 /login）：已有缓存且已登录时才重定向，否则立即放行不阻塞后端
   if (to.meta?.public) {
-    if (to.path === '/login' && session?.authenticated) {
-      return to.query.redirect ? String(to.query.redirect) : '/'
+    if (authSessionCache?.authenticated) {
+      if (to.path === '/login') {
+        return to.query.redirect ? String(to.query.redirect) : '/'
+      }
+      return true
+    }
+    // 无缓存时：先放行显示页面，后台静默检查认证状态
+    if (!authSessionCache) {
+      getAuthSession().then((session) => {
+        if (session?.authenticated && router.currentRoute.value.path === '/login') {
+          router.replace(
+            router.currentRoute.value.query.redirect
+              ? String(router.currentRoute.value.query.redirect)
+              : '/'
+          )
+        }
+      }).catch(() => {})
     }
     return true
   }
 
+  // 受保护路由：阻塞式检查认证
+  isAuthChecking.value = true
+  let session
+  try {
+    session = await getAuthSession()
+  } finally {
+    isAuthChecking.value = false
+  }
   if (session?.authenticated) return true
   return {
     path: '/login',

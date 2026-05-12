@@ -95,7 +95,13 @@ api.interceptors.response.use(
 
     if (isUnauthorized && !isAuthLoginRequest && !isAuthLogoutRequest) {
       if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-        window.location.href = '/login'
+        // 使用 SPA 路由导航，避免整页刷新导致白屏和状态丢失
+        import('@/router').then(({ default: router, resetAuthSessionCache }) => {
+          resetAuthSessionCache()
+          router.replace('/login')
+        }).catch(() => {
+          window.location.href = '/login'
+        })
       }
       return Promise.reject(error)
     }

@@ -1,6 +1,11 @@
 <template>
   <el-config-provider :locale="zhCn">
-    <router-view v-if="isLoginRoute" v-slot="{ Component }">
+    <div v-if="isAuthChecking" class="auth-loading">
+      <el-icon class="auth-loading-icon is-loading"><Loading /></el-icon>
+      <span>正在验证登录状态...</span>
+    </div>
+
+    <router-view v-else-if="isLoginRoute" v-slot="{ Component }">
       <transition name="page-fade" mode="out-in">
         <component :is="Component" />
       </transition>
@@ -221,7 +226,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 import { authApi, settingsApi } from '@/api'
-import { resetAuthSessionCache } from '@/router'
+import { resetAuthSessionCache, isAuthChecking } from '@/router'
 import { formatBeijingDateTime } from '@/utils/timezone'
 import {
   Search,
@@ -236,7 +241,8 @@ import {
   MoonNight,
   Clock,
   Operation,
-  SwitchButton
+  SwitchButton,
+  Loading
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -432,6 +438,23 @@ html, body, #app {
 
 .app-container {
   height: 100%;
+}
+
+.auth-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 16px;
+  color: var(--ms-text-secondary);
+  background: var(--ms-bg-primary);
+  font-size: 14px;
+
+  .auth-loading-icon {
+    font-size: 36px;
+    color: var(--el-color-primary);
+  }
 }
 
 .app-content-container {
