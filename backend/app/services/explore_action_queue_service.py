@@ -626,6 +626,11 @@ class ExploreActionQueueService:
                         result=result,
                     )
                     if finished_task:
+                        log_extra = {
+                            "share_link": str(result.get("share_link") or ""),
+                            "file_count": result.get("file_count"),
+                            "original_file_count": result.get("original_file_count"),
+                        }
                         await self._log_task_event(
                             finished_task,
                             stage="finish",
@@ -633,6 +638,7 @@ class ExploreActionQueueService:
                             message=str(
                                 finished_task.get("message") or "转存任务执行完成"
                             ),
+                            extra=log_extra,
                         )
                 except Exception as exc:
                     finished_task = await self._mark_finished(
@@ -932,6 +938,13 @@ class ExploreActionQueueService:
         source_order = list(source_order or self._resolve_save_source_order())
         keyword_candidates = self._build_keyword_candidates(payload, tmdb_id)
         attempts: list[dict[str, Any]] = []
+        expected_title = str(
+            payload.get("title") or payload.get("name") or ""
+        ).strip()
+        expected_original_title = str(
+            payload.get("original_title") or payload.get("original_name") or ""
+        ).strip()
+        expected_year = str(payload.get("year") or "").strip()
 
         for source in source_order:
             if source == "hdhive":
@@ -1090,7 +1103,11 @@ class ExploreActionQueueService:
                 for keyword in keyword_candidates:
                     try:
                         rows = await tg_service.search_115_by_keyword(
-                            keyword, media_type=media_type
+                            keyword,
+                            media_type=media_type,
+                            expected_title=expected_title,
+                            expected_original_title=expected_original_title,
+                            expected_year=expected_year,
                         )
                         rows = rows if isinstance(rows, list) else []
                         for row in rows:
@@ -1207,6 +1224,10 @@ class ExploreActionQueueService:
             await media_postprocess_service.trigger_archive_after_transfer(
                 trigger="explore_transfer"
             )
+            file_count = result.get("file_count") if isinstance(result, dict) else None
+            original_file_count = (
+                result.get("original_file_count") if isinstance(result, dict) else None
+            )
             return {
                 "tmdb_id": tmdb_id,
                 "media_type": media_type,
@@ -1216,6 +1237,8 @@ class ExploreActionQueueService:
                 "attempts": attempts,
                 "save_mode": "direct",
                 "target_parent_id": folder_id,
+                "file_count": file_count,
+                "original_file_count": original_file_count,
                 "message": str(result.get("message") or "已提交转存任务")
                 if isinstance(result, dict)
                 else "已提交转存任务",
