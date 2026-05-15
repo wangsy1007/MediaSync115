@@ -50,12 +50,15 @@ class SubscriptionSchedulerService:
 
             await db.flush()
             await scheduler_manager.update_dynamic_job(task)
-            if enabled:
-                await scheduler_manager.start(job_id=f"dynamic:{task.id}")
-            else:
-                await scheduler_manager.remove_dynamic_job(task.id)
+            should_start = enabled
+            should_remove = not enabled
 
             await db.commit()
+
+            if should_start:
+                await scheduler_manager.start(job_id=f"dynamic:{task.id}")
+            elif should_remove:
+                await scheduler_manager.remove_dynamic_job(task.id)
 
     async def ensure_chart_subscription_task(self) -> None:
         """确保榜单订阅定时任务存在。"""
@@ -98,12 +101,15 @@ class SubscriptionSchedulerService:
 
             await db.flush()
             await scheduler_manager.update_dynamic_job(task)
-            if enabled:
-                await scheduler_manager.start(job_id=f"dynamic:{task.id}")
-            else:
-                await scheduler_manager.remove_dynamic_job(task.id)
+            should_start = enabled
+            should_remove = not enabled
 
             await db.commit()
+
+            if should_start:
+                await scheduler_manager.start(job_id=f"dynamic:{task.id}")
+            elif should_remove:
+                await scheduler_manager.remove_dynamic_job(task.id)
 
     async def ensure_tg_index_incremental_task(self) -> None:
         """确保 TG 索引自动增量同步定时任务存在（interval 触发器，最小间隔 15 分钟）。"""
