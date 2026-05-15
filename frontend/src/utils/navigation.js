@@ -10,17 +10,47 @@ export const resolveInternalBackPath = (rawFrom) => {
 }
 
 /**
- * 详情页返回：优先使用 from 参数，否则浏览器后退，最后回探索首页。
+ * 将 from 字符串解析为 vue-router 可用的 location 对象。
+ */
+export const parseInternalRouteLocation = (rawFrom) => {
+  const from = resolveInternalBackPath(rawFrom)
+  if (!from) return null
+
+  try {
+    const url = new URL(from, 'http://local')
+    const query = {}
+    url.searchParams.forEach((value, key) => {
+      query[key] = value
+    })
+    return {
+      path: url.pathname,
+      query
+    }
+  } catch {
+    const [path = '/explore/douban', search = ''] = from.split('?')
+    const query = {}
+    if (search) {
+      const params = new URLSearchParams(search)
+      params.forEach((value, key) => {
+        query[key] = value
+      })
+    }
+    return { path, query }
+  }
+}
+
+/**
+ * 详情页返回：优先 replace 到 from，避免历史栈叠加引发反复跳转。
  */
 export const navigateBackFromDetail = (router, route, fallback = '/explore/douban') => {
-  const from = resolveInternalBackPath(route.query?.from)
-  if (from) {
-    router.push(from)
+  const location = parseInternalRouteLocation(route.query?.from)
+  if (location) {
+    router.replace(location)
     return
   }
   if (window.history.length > 1) {
     router.back()
     return
   }
-  router.push(fallback)
+  router.replace(fallback)
 }

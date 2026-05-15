@@ -197,7 +197,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { searchApi, subscriptionApi, pan115Api, settingsApi } from '@/api'
 import ExploreSectionRow from '@/components/explore/ExploreSectionRow.vue'
@@ -244,6 +244,7 @@ const lastDragAt = ref(0)
 const homePrefetchPaused = ref(false)
 const lastSearchKeyword = ref('')
 const activeSearchService = ref('')
+let routeQuerySyncing = false
 const isSearchMode = computed(() => searched.value && Boolean(lastSearchKeyword.value))
 const showBackToExploreButton = computed(() => isSearchMode.value)
 
@@ -1280,27 +1281,56 @@ const clearHomePrefetchTimers = () => {
   homeSectionPrefetchTimers.clear()
 }
 
-const handleBackToExplore = async () => {
+const resetSearchUI = () => {
   searched.value = false
   results.value = []
   totalPages.value = 0
   currentPage.value = 1
   lastSearchKeyword.value = ''
   activeSearchService.value = ''
-  const nextQuery = { ...route.query }
-  delete nextQuery.q
-  await router.replace({
-    path: route.path,
-    query: nextQuery
-  })
 }
 
-const handleSearch = async () => {
+const syncSearchRouteQuery = async (keyword) => {
+  const normalized = String(keyword || '').trim()
+  const nextQuery = { ...route.query }
+  if (normalized) {
+    nextQuery.q = normalized
+  } else {
+    delete nextQuery.q
+  }
+  const currentQ = String(route.query.q || '').trim()
+  if (currentQ === normalized) return
+
+  routeQuerySyncing = true
+  try {
+    await router.replace({
+      path: route.path,
+      query: nextQuery
+    })
+  } finally {
+    routeQuerySyncing = false
+  }
+}
+
+const handleBackToExplore = async () => {
+  resetSearchUI()
+  await syncSearchRouteQuery('')
+  if (!exploreSections.value.length) {
+    await initializeExploreHome()
+  }
+}
+
+const handleSearch = async ({ skipRouteSync = false } = {}) => {
   const keyword = String(searchQuery.value || '').trim()
   if (!keyword) {
     ElMessage.warning('请输入关键词')
     return
   }
+
+  if (!skipRouteSync) {
+    await syncSearchRouteQuery(keyword)
+  }
+
   if (keyword !== lastSearchKeyword.value) {
     currentPage.value = 1
     lastSearchKeyword.value = keyword
@@ -1327,14 +1357,34 @@ const handleSearch = async () => {
   } finally {
     loading.value = false
   }
-
-  if (String(route.query.q || '') !== keyword) {
-    await router.replace({
-      path: route.path,
-      query: { ...route.query, q: keyword }
-    })
-  }
 }
+
+const applyRouteSearchQuery = async (keyword) => {
+  const normalized = String(keyword || '').trim()
+  if (!normalized) {
+    if (!searched.value) return
+    resetSearchUI()
+    if (!exploreSections.value.length) {
+      await initializeExploreHome()
+    }
+    return
+  }
+
+  searchQuery.value = normalized
+  if (normalized === lastSearchKeyword.value && searched.value && results.value.length > 0) {
+    return
+  }
+  await handleSearch({ skipRouteSync: true })
+}
+
+onBeforeRouteUpdate(async (to, from) => {
+  if (routeQuerySyncing) return true
+  const nextQ = String(to.query.q || '').trim()
+  const prevQ = String(from.query.q || '').trim()
+  if (nextQ === prevQ) return true
+  await applyRouteSearchQuery(nextQ)
+  return true
+})
 
 const handlePageChange = (page) => {
   currentPage.value = page
@@ -1728,7 +1778,7 @@ onMounted(async () => {
   const q = String(route.query.q || '').trim()
   if (q) {
     searchQuery.value = q
-    await handleSearch()
+    await handleSearch({ skipRouteSync: true })
   } else {
     await initializeExploreHome()
   }

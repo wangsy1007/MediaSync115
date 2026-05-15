@@ -307,7 +307,8 @@ function tickBeijingClock() {
 }
 
 function handleGoHome() {
-  router.push('/')
+  const homePath = route.path.startsWith('/explore/tmdb') ? '/explore/tmdb' : '/explore/douban'
+  router.replace({ path: homePath, query: {} })
 }
 
 const dockTabs = computed(() => {
