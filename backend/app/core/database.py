@@ -1,6 +1,6 @@
 from importlib import import_module
 
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -13,7 +13,19 @@ engine = create_async_engine(
     connect_args={
         "timeout": 30,
     },
+    pool_size=5,
+    max_overflow=10,
 )
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _on_connect(dbapi_connection, connection_record):
+    """每个新连接建立时立即启用 WAL 并设置忙等待超时。"""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=60000")
+    cursor.close()
+
 
 async_session_maker = async_sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
@@ -95,11 +107,6 @@ def is_missing_table_error(exc: Exception, *table_names: str) -> bool:
 
 async def init_db():
     await ensure_tables_exist()
-    # 启用 WAL 模式，允许读操作与写操作并发，避免写锁堵塞所有请求
-    async with engine.begin() as conn:
-        await conn.execute(text("PRAGMA journal_mode=WAL"))
-        # 设置忙等待超时 60 秒，减少“database is locked”错误
-        await conn.execute(text("PRAGMA busy_timeout=60000"))
     await ensure_subscription_columns()
     await ensure_download_record_columns()
 
