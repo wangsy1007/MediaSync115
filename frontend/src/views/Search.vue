@@ -197,7 +197,8 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { clearSearchReturnContext, saveSearchReturnContext } from '@/utils/navigation'
 import { ElMessage } from 'element-plus'
 import { searchApi, subscriptionApi, pan115Api, settingsApi } from '@/api'
 import ExploreSectionRow from '@/components/explore/ExploreSectionRow.vue'
@@ -244,7 +245,6 @@ const lastDragAt = ref(0)
 const homePrefetchPaused = ref(false)
 const lastSearchKeyword = ref('')
 const activeSearchService = ref('')
-let routeQuerySyncing = false
 const isSearchMode = computed(() => searched.value && Boolean(lastSearchKeyword.value))
 const showBackToExploreButton = computed(() => isSearchMode.value)
 
@@ -535,27 +535,13 @@ const refreshSubscribedKeys = async () => {
   }
 }
 
-const buildNavigationFromPath = () => {
-  const keyword = String(lastSearchKeyword.value || route.query.q || '').trim()
-  if (searched.value && keyword) {
-    const query = { ...route.query, q: keyword }
-    const searchParams = new URLSearchParams()
-    Object.entries(query).forEach(([key, value]) => {
-      if (value == null || value === '') return
-      searchParams.set(key, Array.isArray(value) ? String(value[0]) : String(value))
-    })
-    const qs = searchParams.toString()
-    return qs ? `${route.path}?${qs}` : route.path
-  }
-  return route.fullPath
-}
-
 const goToDetail = (mediaType, tmdbId) => {
   if (!tmdbId) return
+  clearSearchReturnContext()
   const path = mediaType === 'tv' ? `/tv/${tmdbId}` : `/movie/${tmdbId}`
   router.push({
     path,
-    query: { from: buildNavigationFromPath() }
+    query: { from: route.fullPath }
   })
 }
 
@@ -563,9 +549,10 @@ const goToDoubanDetail = (item) => {
   const doubanId = String(item?.douban_id || item?.id || '').trim()
   if (!doubanId) return false
   const mediaType = item?.media_type === 'tv' ? 'tv' : 'movie'
+  clearSearchReturnContext()
   router.push({
     path: `/douban/${mediaType}/${encodeURIComponent(doubanId)}`,
-    query: { from: buildNavigationFromPath() }
+    query: { from: route.fullPath }
   })
   return true
 }
@@ -1281,6 +1268,25 @@ const clearHomePrefetchTimers = () => {
   homeSectionPrefetchTimers.clear()
 }
 
+/** 仅更新地址栏，不触发 Vue Router 导航 */
+const replaceSearchBarUrl = (keyword, page = 1) => {
+  if (typeof window === 'undefined') return
+  const url = new URL(window.location.href)
+  const normalized = String(keyword || '').trim()
+  if (normalized) {
+    url.searchParams.set('q', normalized)
+    if (page > 1) {
+      url.searchParams.set('page', String(page))
+    } else {
+      url.searchParams.delete('page')
+    }
+  } else {
+    url.searchParams.delete('q')
+    url.searchParams.delete('page')
+  }
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`)
+}
+
 const resetSearchUI = () => {
   searched.value = false
   results.value = []
@@ -1290,57 +1296,17 @@ const resetSearchUI = () => {
   activeSearchService.value = ''
 }
 
-const syncSearchRouteQuery = async (keyword) => {
+const runSearchRequest = async (keyword, page = 1) => {
   const normalized = String(keyword || '').trim()
-  const nextQuery = { ...route.query }
-  if (normalized) {
-    nextQuery.q = normalized
-  } else {
-    delete nextQuery.q
-  }
-  const currentQ = String(route.query.q || '').trim()
-  if (currentQ === normalized) return
+  if (!normalized) return
 
-  routeQuerySyncing = true
-  try {
-    await router.replace({
-      path: route.path,
-      query: nextQuery
-    })
-  } finally {
-    routeQuerySyncing = false
-  }
-}
-
-const handleBackToExplore = async () => {
-  resetSearchUI()
-  await syncSearchRouteQuery('')
-  if (!exploreSections.value.length) {
-    await initializeExploreHome()
-  }
-}
-
-const handleSearch = async ({ skipRouteSync = false } = {}) => {
-  const keyword = String(searchQuery.value || '').trim()
-  if (!keyword) {
-    ElMessage.warning('请输入关键词')
-    return
-  }
-
-  if (!skipRouteSync) {
-    await syncSearchRouteQuery(keyword)
-  }
-
-  if (keyword !== lastSearchKeyword.value) {
-    currentPage.value = 1
-    lastSearchKeyword.value = keyword
-  }
-
+  lastSearchKeyword.value = normalized
+  currentPage.value = Math.max(1, Number(page) || 1)
   loading.value = true
   searched.value = true
 
   try {
-    const { data } = await searchApi.search(keyword, currentPage.value)
+    const { data } = await searchApi.search(normalized, currentPage.value)
     const items = data.items || data.results || []
     mergeEmbyStatusMap(data?.emby_status_map || {})
     mergeFeiniuStatusMap(data?.feiniu_status_map || {})
@@ -1351,6 +1317,7 @@ const handleSearch = async ({ skipRouteSync = false } = {}) => {
     applySubscribedFlags()
     const backendPages = Number(data.total_pages) || 0
     totalPages.value = backendPages || (results.value.length > 0 ? 1 : 0)
+    replaceSearchBarUrl(normalized, currentPage.value)
   } catch (error) {
     console.error('Search failed:', error)
     ElMessage.error(error.response?.data?.detail || '搜索失败，请稍后重试')
@@ -1359,36 +1326,49 @@ const handleSearch = async ({ skipRouteSync = false } = {}) => {
   }
 }
 
-const applyRouteSearchQuery = async (keyword) => {
-  const normalized = String(keyword || '').trim()
-  if (!normalized) {
-    if (!searched.value) return
-    resetSearchUI()
-    if (!exploreSections.value.length) {
-      await initializeExploreHome()
-    }
-    return
-  }
-
-  searchQuery.value = normalized
-  if (normalized === lastSearchKeyword.value && searched.value && results.value.length > 0) {
-    return
-  }
-  await handleSearch({ skipRouteSync: true })
+const restoreSearchFromRoute = async () => {
+  const keyword = String(route.query.q || '').trim()
+  if (!keyword) return false
+  const page = Math.max(1, Number(route.query.page) || 1)
+  searchQuery.value = keyword
+  await runSearchRequest(keyword, page)
+  return true
 }
 
-onBeforeRouteUpdate(async (to, from) => {
-  if (routeQuerySyncing) return true
-  const nextQ = String(to.query.q || '').trim()
-  const prevQ = String(from.query.q || '').trim()
-  if (nextQ === prevQ) return true
-  await applyRouteSearchQuery(nextQ)
-  return true
-})
+const handleBackToExplore = async () => {
+  clearSearchReturnContext()
+  resetSearchUI()
+  replaceSearchBarUrl('')
+  if (!exploreSections.value.length) {
+    await initializeExploreHome()
+  }
+}
+
+const handleSearch = async () => {
+  const keyword = String(searchQuery.value || '').trim()
+  if (!keyword) {
+    ElMessage.warning('请输入关键词')
+    return
+  }
+  currentPage.value = 1
+  await runSearchRequest(keyword, 1)
+}
 
 const handlePageChange = (page) => {
-  currentPage.value = page
-  handleSearch()
+  const keyword = String(lastSearchKeyword.value || searchQuery.value || '').trim()
+  if (!keyword) return
+  runSearchRequest(keyword, page)
+}
+
+const openSearchResultDetail = (mediaType, id) => {
+  if (!id) return
+  saveSearchReturnContext({
+    path: route.path,
+    keyword: lastSearchKeyword.value,
+    page: currentPage.value
+  })
+  const path = mediaType === 'tv' ? `/tv/${id}` : `/movie/${id}`
+  router.push({ path })
 }
 
 const handleItemClick = (item) => {
@@ -1397,16 +1377,14 @@ const handleItemClick = (item) => {
   const id = item.id
   if (!id) return
 
-  const query = { from: buildNavigationFromPath() }
-
   if (type === 'movie') {
     warmupPan115Resources('movie', id)
-    router.push({ path: `/movie/${id}`, query })
+    openSearchResultDetail('movie', id)
   } else if (type === 'tv') {
     warmupPan115Resources('tv', id)
-    router.push({ path: `/tv/${id}`, query })
+    openSearchResultDetail('tv', id)
   } else if (type === 'collection') {
-    router.push({ path: `/movie/${id}`, query })
+    openSearchResultDetail('movie', id)
   }
 }
 
@@ -1775,15 +1753,41 @@ const resetExploreState = () => {
 
 onMounted(async () => {
   loadResourcePriority()
-  const q = String(route.query.q || '').trim()
-  if (q) {
-    searchQuery.value = q
-    await handleSearch({ skipRouteSync: true })
-  } else {
+  const restored = await restoreSearchFromRoute()
+  if (!restored) {
     await initializeExploreHome()
   }
   startExploreQueuePolling()
 })
+
+watch(
+  () => `${String(route.query.q || '').trim()}|${String(route.query.page || '1')}`,
+  async (signature, previous) => {
+    if (previous === undefined) return
+    if (signature === previous) return
+    const keyword = String(route.query.q || '').trim()
+    if (!keyword) {
+      if (searched.value) {
+        clearSearchReturnContext()
+        resetSearchUI()
+        replaceSearchBarUrl('')
+        if (!exploreSections.value.length) {
+          await initializeExploreHome()
+        }
+      }
+      return
+    }
+    if (
+      keyword === lastSearchKeyword.value
+      && Number(route.query.page || 1) === currentPage.value
+      && searched.value
+      && results.value.length > 0
+    ) {
+      return
+    }
+    await restoreSearchFromRoute()
+  }
+)
 
 watch(exploreSource, async (newSource, oldSource) => {
   if (newSource === oldSource) return

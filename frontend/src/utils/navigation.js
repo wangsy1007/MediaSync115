@@ -1,31 +1,69 @@
+/** 搜索结果页返回快照（sessionStorage） */
+const SEARCH_RETURN_KEY = 'mediasync115:search-return'
+
 /**
- * 解析详情页返回路径，仅允许站内相对路径。
+ * 进入详情前保存搜索上下文，返回时恢复。
  */
-export const resolveInternalBackPath = (rawFrom) => {
+export const saveSearchReturnContext = (context) => {
+  const keyword = String(context?.keyword || '').trim()
+  if (!keyword) return
+  const payload = {
+    path: String(context.path || '/explore/douban'),
+    keyword,
+    page: Math.max(1, Number(context.page) || 1)
+  }
+  try {
+    sessionStorage.setItem(SEARCH_RETURN_KEY, JSON.stringify(payload))
+  } catch {
+    // ignore quota errors
+  }
+}
+
+/**
+ * 读取并清除搜索返回上下文。
+ */
+export const clearSearchReturnContext = () => {
+  try {
+    sessionStorage.removeItem(SEARCH_RETURN_KEY)
+  } catch {
+    // ignore
+  }
+}
+
+export const consumeSearchReturnContext = () => {
+  try {
+    const raw = sessionStorage.getItem(SEARCH_RETURN_KEY)
+    sessionStorage.removeItem(SEARCH_RETURN_KEY)
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    const keyword = String(data?.keyword || '').trim()
+    if (!keyword) return null
+    return {
+      path: String(data.path || '/explore/douban'),
+      keyword,
+      page: Math.max(1, Number(data.page) || 1)
+    }
+  } catch {
+    sessionStorage.removeItem(SEARCH_RETURN_KEY)
+    return null
+  }
+}
+
+/**
+ * 解析探索页 from 参数（榜单等非搜索场景）。
+ */
+export const parseExploreFromLocation = (rawFrom) => {
   const from = String(rawFrom || '').trim()
   if (!from.startsWith('/') || from.startsWith('//')) {
     return null
   }
-  return from
-}
-
-/**
- * 将 from 字符串解析为 vue-router 可用的 location 对象。
- */
-export const parseInternalRouteLocation = (rawFrom) => {
-  const from = resolveInternalBackPath(rawFrom)
-  if (!from) return null
-
   try {
     const url = new URL(from, 'http://local')
     const query = {}
     url.searchParams.forEach((value, key) => {
       query[key] = value
     })
-    return {
-      path: url.pathname,
-      query
-    }
+    return { path: url.pathname, query }
   } catch {
     const [path = '/explore/douban', search = ''] = from.split('?')
     const query = {}
@@ -40,17 +78,35 @@ export const parseInternalRouteLocation = (rawFrom) => {
 }
 
 /**
- * 详情页返回：优先 replace 到 from，避免历史栈叠加引发反复跳转。
+ * 详情页返回：
+ * 1. 搜索快照 → 回到搜索结果
+ * 2. 探索 from 参数 → 回到探索/榜单
+ * 3. 否则 history.back
  */
 export const navigateBackFromDetail = (router, route, fallback = '/explore/douban') => {
-  const location = parseInternalRouteLocation(route.query?.from)
-  if (location) {
-    router.replace(location)
+  const searchReturn = consumeSearchReturnContext()
+  if (searchReturn) {
+    const query = { q: searchReturn.keyword }
+    if (searchReturn.page > 1) {
+      query.page = String(searchReturn.page)
+    }
+    router.replace({
+      path: searchReturn.path,
+      query
+    })
     return
   }
+
+  const exploreFrom = parseExploreFromLocation(route.query?.from)
+  if (exploreFrom) {
+    router.replace(exploreFrom)
+    return
+  }
+
   if (window.history.length > 1) {
     router.back()
     return
   }
+
   router.replace(fallback)
 }
