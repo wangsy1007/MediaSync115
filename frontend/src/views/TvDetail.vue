@@ -71,20 +71,20 @@
         <template v-for="key in orderedMainTabs" :key="key">
           <el-tab-pane v-if="key === 'pan115'" label="115网盘" name="pan115">
           <el-tabs v-model="pan115SourceTab" class="source-tabs">
+            <div class="resource-tools">
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                :loading="pan115Loading"
+                @click="fetchPan115(true)"
+              >
+                {{ pan115Resources.length > 0 ? '刷新全部来源' : '获取资源（统一管道）' }}
+              </el-button>
+            </div>
             <template v-for="key in orderedPan115SubTabs" :key="key">
               <el-tab-pane v-if="key === 'pan115_pansou'" label="Pansou" name="pansou">
-              <div class="resource-tools">
-                <el-button
-                  size="small"
-                  type="primary"
-                  plain
-                  :loading="pansouLoading"
-                  @click="handleFetchPansouPan115"
-                >
-                  {{ pansouTried ? '重新尝试 Pansou' : '用 Pansou 获取资源' }}
-                </el-button>
-              </div>
-              <div v-loading="pan115Loading || pansouLoading">
+              <div v-loading="pan115Loading">
                 <el-table 
                   v-if="pansouPan115Resources.length > 0" 
                   :data="pagedPansouPan115Resources" 
@@ -168,18 +168,7 @@
               </div>
             </el-tab-pane>
               <el-tab-pane v-else-if="key === 'pan115_hdhive'" label="HDHive" name="hdhive">
-              <div class="resource-tools">
-                <el-button
-                  size="small"
-                  type="primary"
-                  plain
-                  :loading="hdhiveLoading"
-                  @click="handleFetchHdhivePan115"
-                >
-                  {{ hdhiveTried ? '刷新 HDHive' : '用 HDHive 获取资源' }}
-                </el-button>
-              </div>
-              <div v-loading="pan115Loading || hdhiveLoading">
+              <div v-loading="pan115Loading">
                 <el-table
                   v-if="hdhivePan115Resources.length > 0"
                   :data="pagedHdhivePan115Resources"
@@ -274,18 +263,7 @@
               </div>
             </el-tab-pane>
               <el-tab-pane v-else-if="key === 'pan115_tg'" label="Telegram" name="tg">
-              <div class="resource-tools">
-                <el-button
-                  size="small"
-                  type="primary"
-                  plain
-                  :loading="tgLoading"
-                  @click="handleFetchTgPan115"
-                >
-                  {{ tgTried ? '刷新 Telegram' : '用 Telegram 获取资源' }}
-                </el-button>
-              </div>
-              <div v-loading="pan115Loading || tgLoading">
+              <div v-loading="pan115Loading">
                 <el-table
                   v-if="tgPan115Resources.length > 0"
                   :data="pagedTgPan115Resources"
@@ -630,12 +608,6 @@ const pan115Resources = ref([])
 const magnetResources = ref([])
 
 const pan115Loading = ref(false)
-const pansouLoading = ref(false)
-const pansouTried = ref(false)
-const hdhiveLoading = ref(false)
-const hdhiveTried = ref(false)
-const tgLoading = ref(false)
-const tgTried = ref(false)
 const magnetLoading = ref(false)
 const seedhubMagnetLoading = ref(false)
 const seedhubMagnetTried = ref(false)
@@ -745,39 +717,6 @@ const butailingMagnetResources = computed(() =>
 )
 const pagedSeedhubMagnetResources = computed(() => slicePan115Page(seedhubMagnetResources.value, magnetPager.value.seedhub))
 const pagedButailingMagnetResources = computed(() => slicePan115Page(butailingMagnetResources.value, magnetPager.value.butailing))
-
-const buildPan115MergeKey = (item = {}) => {
-  const sourceService = String(item?.source_service || 'pansou').trim() || 'pansou'
-  const slug = String(item?.slug || '').trim()
-  if (slug) return `${sourceService}|slug:${slug}`
-  const shareLink = String(item?.share_link || '').trim()
-  const title = String(item?.title || '').trim()
-  return `${sourceService}|${shareLink}|${title}`
-}
-
-const mergePan115Resources = (primaryList = [], secondaryList = []) => {
-  const merged = []
-  const indexMap = new Map()
-  for (const item of primaryList) {
-    if (!item || typeof item !== 'object') continue
-    const key = buildPan115MergeKey(item)
-    if (indexMap.has(key)) continue
-    indexMap.set(key, merged.length)
-    merged.push({ ...item })
-  }
-  for (const item of secondaryList) {
-    if (!item || typeof item !== 'object') continue
-    const key = buildPan115MergeKey(item)
-    if (indexMap.has(key)) {
-      const index = indexMap.get(key)
-      merged[index] = { ...merged[index], ...item }
-      continue
-    }
-    indexMap.set(key, merged.length)
-    merged.push({ ...item })
-  }
-  return merged
-}
 
 const mergeMagnetResources = (primaryList = [], secondaryList = []) => {
   const merged = []
@@ -936,44 +875,6 @@ const ensureHdhiveShareLink = async (row, actionLabel = '转存', options = {}) 
   }
 }
 
-const normalizeKeywordFingerprint = (value) => {
-  const text = String(value || '').trim()
-  if (!text) return ''
-  return text
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[\s\-_·:：,.，。!！?？/\\'"`()\[\]]+/g, '')
-    .toLowerCase()
-}
-
-const buildHdhiveKeywords = () => {
-  const name = String(tv.value?.name || '').trim()
-  const originalName = String(tv.value?.original_name || '').trim()
-  const year = String(tv.value?.first_air_date || '').split('-')[0]
-  const season = selectedSeason.value
-  const candidates = []
-  const seen = new Set()
-  const add = (keyword) => {
-    const raw = String(keyword || '').trim()
-    if (!raw) return
-    const key = normalizeKeywordFingerprint(raw)
-    if (!key || seen.has(key)) return
-    seen.add(key)
-    candidates.push(raw)
-  }
-
-  const seasonTag = season ? ` S${String(season).padStart(2, '0')}` : ''
-  add(name)
-  if (name && year) add(`${name} ${year}`)
-  if (name && seasonTag) add(`${name}${seasonTag}`)
-  if (name && year && seasonTag) add(`${name} ${year}${seasonTag}`)
-  add(originalName)
-  if (originalName && year) add(`${originalName} ${year}`)
-  if (originalName && seasonTag) add(`${originalName}${seasonTag}`)
-  if (originalName && year && seasonTag) add(`${originalName} ${year}${seasonTag}`)
-  return candidates
-}
-
 const fetchTv = async () => {
   const tmdbId = route.params.id
   loading.value = true
@@ -1066,118 +967,25 @@ const fetchPan115 = async (forceRefresh = false) => {
   const cachedList = readPan115Cache(cacheKey)
   if (!forceRefresh && cachedList && cachedList.length > 0) {
     pan115Resources.value = cachedList
-    pansouTried.value = cachedList.some((item) => item?.source_service === 'pansou')
-    hdhiveTried.value = cachedList.some((item) => item?.source_service === 'hdhive')
-    tgTried.value = cachedList.some((item) => item?.source_service === 'tg')
     pan115Loading.value = false
-  } else {
-    pansouTried.value = false
-    hdhiveTried.value = false
-    tgTried.value = false
-    pan115Loading.value = true
+    return
   }
 
+  pan115Loading.value = true
   try {
-    const { data } = await searchApi.getTvPan115(route.params.id, 1, forceRefresh, selectedSeason.value)
-    const pansouList = Array.isArray(data.list) ? data.list : []
-    const cachedPansouList = pan115Resources.value.filter((item) => item?.source_service === 'pansou')
-    const cachedHdhiveList = pan115Resources.value.filter((item) => item?.source_service === 'hdhive')
-    const cachedTgList = pan115Resources.value.filter((item) => item?.source_service === 'tg')
-    const mergedList = mergePan115Resources(
-      pansouList,
-      mergePan115Resources(cachedTgList, mergePan115Resources(cachedPansouList, cachedHdhiveList))
-    )
-    pan115Resources.value = mergedList
-    writePan115Cache(mergedList, cacheKey)
+    const { data } = await searchApi.getMediaResources(route.params.id, 'tv', selectedSeason.value, forceRefresh)
+    const resourceList = Array.isArray(data.list) ? data.list : []
+    pan115Resources.value = resourceList
+    writePan115Cache(resourceList, cacheKey)
+    if (resourceList.length === 0) {
+      ElMessage.info('未找到可用115网盘资源')
+    }
   } catch (error) {
     if (!cachedList || cachedList.length === 0) {
       console.error('Failed to fetch pan115:', error)
     }
   } finally {
     pan115Loading.value = false
-  }
-}
-
-const handleFetchPansouPan115 = async () => {
-  if (pansouLoading.value) return
-  pansouLoading.value = true
-  pansouTried.value = true
-  try {
-    const { data } = await searchApi.getTvPan115Pansou(route.params.id, 1, false, selectedSeason.value)
-    const pansouList = Array.isArray(data.list) ? data.list : []
-    const mergedList = mergePan115Resources(pan115Resources.value, pansouList)
-    pan115Resources.value = mergedList
-    writePan115Cache(mergedList, selectedSeason.value)
-    if (pansouList.length === 0) {
-      ElMessage.info('Pansou 暂未找到可用资源')
-    }
-  } catch (error) {
-    console.error('Failed to fetch pansou pan115:', error)
-  } finally {
-    pansouLoading.value = false
-  }
-}
-
-const handleFetchHdhivePan115 = async () => {
-  if (hdhiveLoading.value) return
-  hdhiveLoading.value = true
-  hdhiveTried.value = true
-  try {
-    const { data } = await searchApi.getTvPan115Hdhive(route.params.id, 1, false, selectedSeason.value)
-    let hdhiveList = Array.isArray(data.list) ? data.list : []
-    hdhiveList = hdhiveList.map((item) => ({ ...item, source_service: item?.source_service || 'hdhive' }))
-
-    if (hdhiveList.length === 0) {
-      const keywordCandidates = buildHdhiveKeywords()
-      // 并行搜索所有关键词，取前 30 个结果
-      const results = await Promise.allSettled(
-        keywordCandidates.map((kw) => searchApi.getHdhivePan115ByKeyword(kw, 'tv'))
-      )
-      const dedup = new Map()
-      for (const r of results) {
-        if (r.status !== 'fulfilled') continue
-        const rows = Array.isArray(r.value?.data?.list) ? r.value.data.list : []
-        for (const row of rows) {
-          const normalizedRow = { ...row, source_service: row?.source_service || 'hdhive' }
-          const key = `${String(normalizedRow?.slug || '')}|${String(normalizedRow?.share_link || normalizedRow?.resource_name || normalizedRow?.title || '')}`.toLowerCase()
-          if (!dedup.has(key)) {
-            dedup.set(key, normalizedRow)
-          }
-        }
-      }
-      hdhiveList = Array.from(dedup.values()).slice(0, 30)
-    }
-
-    const mergedList = mergePan115Resources(pan115Resources.value, hdhiveList)
-    pan115Resources.value = mergedList
-    writePan115Cache(mergedList, selectedSeason.value)
-    if (hdhiveList.length === 0) {
-      ElMessage.info('HDHive 暂未找到可用资源')
-    }
-  } catch (error) {
-    console.error('Failed to fetch hdhive pan115:', error)
-  } finally {
-    hdhiveLoading.value = false
-  }
-}
-
-const handleFetchTgPan115 = async () => {
-  if (tgLoading.value) return
-  tgLoading.value = true
-  tgTried.value = true
-  try {
-    const { data } = await searchApi.getTvPan115Tg(route.params.id, 1, false, selectedSeason.value)
-    const tgList = Array.isArray(data.list) ? data.list : []
-    const mergedList = mergePan115Resources(pan115Resources.value, tgList)
-    pan115Resources.value = mergedList
-    writePan115Cache(mergedList, selectedSeason.value)
-    if (tgList.length === 0) {
-      ElMessage.info('Telegram 暂未找到可用资源')
-    }
-  } catch (error) {
-    console.error('Failed to fetch tg pan115:', error)
-  } finally {
-    tgLoading.value = false
   }
 }
 
