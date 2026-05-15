@@ -1119,7 +1119,7 @@
             <el-form-item label="启用任务">
               <el-switch v-model="schedulerForm.enabled" />
               <el-text size="small" type="info" style="margin-left: 8px">
-                启用后按间隔自动搜索所有活跃订阅的资源（按优先级依次查找 HDHive / Pansou / Telegram）
+                启用后按间隔自动搜索所有活跃订阅的资源
               </el-text>
             </el-form-item>
             <el-form-item label="检查间隔(小时)">
