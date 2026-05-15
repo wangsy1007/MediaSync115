@@ -11,21 +11,12 @@ engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
     connect_args={
-        "timeout": 30,
+        "timeout": 60,
     },
-    pool_size=1,
-    max_overflow=0,
+    pool_size=5,
+    max_overflow=10,
     pool_pre_ping=True,
 )
-
-
-@event.listens_for(engine.sync_engine, "connect")
-def _on_connect(dbapi_connection, connection_record):
-    """每个新连接建立时立即启用 WAL 并设置忙等待超时。"""
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA busy_timeout=60000")
-    cursor.close()
 
 
 async_session_maker = async_sessionmaker(
