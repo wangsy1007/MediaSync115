@@ -1,11 +1,15 @@
+import logging
 from importlib import import_module
 
 from sqlalchemy import event, inspect, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import Pool
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 engine = create_async_engine(
     settings.DATABASE_URL,
@@ -15,16 +19,18 @@ engine = create_async_engine(
     },
     pool_size=5,
     max_overflow=10,
+    pool_pre_ping=True,
 )
 
 
-@event.listens_for(engine.sync_engine, "connect")
-def _on_connect(dbapi_connection, connection_record):
+@event.listens_for(Pool, "connect")
+def _on_pool_connect(dbapi_connection, connection_record):
     """每个新连接建立时立即启用 WAL 并设置忙等待超时。"""
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA busy_timeout=60000")
     cursor.close()
+    logger.debug("SQLite connection configured: WAL mode, busy_timeout=60s")
 
 
 async_session_maker = async_sessionmaker(
@@ -106,6 +112,11 @@ def is_missing_table_error(exc: Exception, *table_names: str) -> bool:
 
 
 async def init_db():
+    # 在最开始就用独立连接执行 PRAGMA，确保 WAL 和 busy_timeout 生效
+    async with engine.connect() as conn:
+        await conn.execute(text("PRAGMA journal_mode=WAL"))
+        await conn.execute(text("PRAGMA busy_timeout=60000"))
+        await conn.commit()
     await ensure_tables_exist()
     await ensure_subscription_columns()
     await ensure_download_record_columns()
