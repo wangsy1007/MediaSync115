@@ -136,6 +136,7 @@ class SubscriptionService:
             SubscriptionSnapshot(
                 id=int(row.id),
                 tmdb_id=int(row.tmdb_id) if row.tmdb_id is not None else None,
+                douban_id=str(row.douban_id) if row.douban_id is not None else None,
                 title=str(row.title or ""),
                 media_type=row.media_type,
                 year=str(row.year) if row.year is not None else None,
@@ -3491,6 +3492,38 @@ class SubscriptionService:
         return "，".join(parts)
 
 
+    async def fetch_resources_for_media(
+        self,
+        media_type: str,
+        tmdb_id: int | None = None,
+        douban_id: str | None = None,
+        title: str = "",
+        year: str | None = None,
+        season_number: int | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+        """供手动转存等场景调用的统一资源获取入口，复用 _fetch_resources 管道。"""
+        from app.models.models import MediaType
+
+        mt = MediaType.TV if media_type == "tv" else MediaType.MOVIE
+        snapshot = SubscriptionSnapshot(
+            id=0,
+            tmdb_id=tmdb_id,
+            douban_id=douban_id,
+            title=title or "",
+            media_type=mt,
+            year=year,
+            auto_download=False,
+            tv_scope="all",
+            tv_season_number=season_number,
+            tv_episode_start=None,
+            tv_episode_end=None,
+            tv_follow_mode="missing",
+            tv_include_specials=False,
+            has_successful_transfer=False,
+        )
+        return await self._fetch_resources(channel="all", sub=snapshot)
+
+
 subscription_service = SubscriptionService()
 
 
@@ -3498,6 +3531,7 @@ subscription_service = SubscriptionService()
 class SubscriptionSnapshot:
     id: int
     tmdb_id: int | None
+    douban_id: str | None
     title: str
     media_type: MediaType
     year: str | None

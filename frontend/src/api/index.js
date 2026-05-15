@@ -179,6 +179,9 @@ export const searchApi = {
     api.get(`/search/tv/${tmdbId}/115/hdhive`, { params: { page, refresh, season } }),
   getTvPan115Tg: (tmdbId, page = 1, refresh = false, season = null) =>
     api.get(`/search/tv/${tmdbId}/115/tg`, { params: { page, refresh, season } }),
+  // 统一资源获取，复用订阅的 _fetch_resources 管道
+  getMediaResources: (tmdbId, mediaType, season = null, refresh = false) =>
+    api.get(`/search/${mediaType}/${tmdbId}/resources`, { params: { season, refresh } }),
 
   getTvSeason: (tmdbId, seasonNumber) => api.get(`/search/tv/${tmdbId}/season/${seasonNumber}`),
 
