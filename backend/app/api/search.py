@@ -31,6 +31,7 @@ from app.services.butailing_service import butailing_service
 from app.services.hdhive_service import hdhive_service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
+from app.services.operation_log_service import operation_log_service
 from app.services.seedhub_service import seedhub_service
 from app.services.seedhub_task_service import seedhub_task_service
 from app.services.tg_service import tg_service
@@ -2839,6 +2840,108 @@ async def get_tv_pan115_with_tg(
         keyword_hit_index=keyword_hit_index,
     )
     _set_pan115_cached_payload(_tv_pan115_cache, cache_key, result)
+    return result
+
+
+@router.get("/{media_type}/{tmdb_id}/resources")
+async def get_media_resources(
+    media_type: str,
+    tmdb_id: int,
+    refresh: bool = Query(False, description="是否绕过缓存"),
+    season: int | None = Query(None, description="季数（TV时使用）"),
+):
+    """统一资源获取端点，复用订阅的 _fetch_resources 管道，按优先级搜索全部来源。"""
+    normalized_media_type = str(media_type or "").strip().lower()
+    if normalized_media_type not in {"movie", "tv"}:
+        raise HTTPException(status_code=400, detail="media_type must be movie or tv")
+
+    cache_key = f"{tmdb_id}:resources:s{season or 'all'}"
+    cache = _movie_pan115_cache if normalized_media_type == "movie" else _tv_pan115_cache
+    if not refresh:
+        cached_payload, is_fresh = _get_cached_payload(cache, cache_key)
+        if is_fresh:
+            return cached_payload
+
+    media_payload = await _load_media_payload(tmdb_id, normalized_media_type)
+    title = media_payload.get("title") or media_payload.get("name") or ""
+    year = None
+    release_date = media_payload.get("release_date") or media_payload.get("first_air_date")
+    if release_date:
+        year = str(release_date)[:4]
+
+    season_label = f" S{season:02d}" if season is not None else ""
+    await operation_log_service.log_background_event(
+        source_type="api",
+        module="manual_transfer",
+        action="manual_transfer.search.start",
+        status="info",
+        message=f"手动转存搜索开始：{title}{season_label}（{normalized_media_type.upper()}，TMDB ID: {tmdb_id}，年份: {year or '未知'}）",
+        extra={"tmdb_id": tmdb_id, "media_type": normalized_media_type, "title": title, "year": year, "season": season},
+    )
+
+    from app.services.subscription_service import subscription_service
+
+    resources, traces, source_attempt_info = await subscription_service.fetch_resources_for_media(
+        media_type=normalized_media_type,
+        tmdb_id=tmdb_id,
+        title=title,
+        year=year,
+        season_number=season,
+    )
+
+    source_counts: dict[str, int] = {}
+    for r in resources:
+        src = r.get("source_service", "unknown")
+        source_counts[src] = source_counts.get(src, 0) + 1
+
+    attempts = source_attempt_info.get("attempts", [])
+
+    for attempt in attempts:
+        src = attempt.get("source", "unknown")
+        count = attempt.get("count", 0)
+        status = attempt.get("status", "empty")
+        if status == "success" and count > 0:
+            await operation_log_service.log_background_event(
+                source_type="api",
+                module="manual_transfer",
+                action="manual_transfer.search.source_hit",
+                status="success",
+                message=f"[{title}] 来源 {src} 命中 {count} 条资源",
+                extra={"source": src, "count": count},
+            )
+        elif status == "failed":
+            await operation_log_service.log_background_event(
+                source_type="api",
+                module="manual_transfer",
+                action="manual_transfer.search.source_failed",
+                status="warning",
+                message=f"[{title}] 来源 {src} 搜索失败",
+                extra={"source": src, "error": attempt.get("error", "")},
+            )
+
+    total = len(resources)
+    summary_parts = [f"{src}: {cnt}" for src, cnt in source_counts.items()]
+    summary_text = f"[{title}] 搜索完成，共 {total} 条资源" + (f"（{', '.join(summary_parts)}）" if summary_parts else "")
+    await operation_log_service.log_background_event(
+        source_type="api",
+        module="manual_transfer",
+        action="manual_transfer.search.done",
+        status="success" if total > 0 else "warning",
+        message=summary_text,
+        extra={"tmdb_id": tmdb_id, "media_type": normalized_media_type, "title": title, "total": total, "source_counts": source_counts, "attempts": attempts},
+    )
+
+    result = _build_pan115_response(
+        tmdb_id=tmdb_id,
+        media_type=normalized_media_type,
+        page=1,
+        resource_list=resources,
+        search_service="unified",
+        source_counts=source_counts,
+        attempts=attempts,
+        keyword=title,
+    )
+    _set_pan115_cached_payload(cache, cache_key, result)
     return result
 
 
