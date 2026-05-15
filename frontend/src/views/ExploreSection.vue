@@ -78,6 +78,11 @@
       <span v-else>已显示全部内容</span>
     </div>
 
+    <TmdbSetupPrompt
+      v-else-if="exploreSource === 'tmdb' && tmdbConfigured === false"
+      @configured="handleTmdbConfigured"
+    />
+
     <el-empty v-else-if="!loading" description="暂无榜单数据" />
   </div>
 </template>
@@ -89,6 +94,7 @@ import { ElMessage } from 'element-plus'
 import { searchApi, subscriptionApi } from '@/api'
 import { Star, FolderAdd } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
+import TmdbSetupPrompt from '@/components/explore/TmdbSetupPrompt.vue'
 
 const SECTION_BATCH_CACHE_TTL_MS = 10 * 60 * 1000
 const sectionBatchCache = new Map()
@@ -112,6 +118,7 @@ const normalizeExploreSource = (rawSource) => (String(rawSource || '').toLowerCa
 const exploreSource = computed(() => normalizeExploreSource(route.params.source))
 
 const loading = ref(false)
+const tmdbConfigured = ref(true)
 const loadingMore = ref(false)
 const allItems = ref([])
 const displayCount = ref(0)
@@ -891,6 +898,25 @@ const setupLoadObserver = () => {
   loadObserver.observe(loadAnchorRef.value)
 }
 
+const checkTmdbConfigured = async () => {
+  if (exploreSource.value !== 'tmdb') {
+    tmdbConfigured.value = true
+    return true
+  }
+  try {
+    const { data } = await searchApi.getExploreMeta('tmdb')
+    tmdbConfigured.value = data?.tmdb_configured !== false
+  } catch {
+    tmdbConfigured.value = true
+  }
+  return tmdbConfigured.value
+}
+
+const handleTmdbConfigured = async () => {
+  tmdbConfigured.value = true
+  await fetchSection()
+}
+
 const INITIAL_PARALLEL_BATCHES = 3
 const fetchSection = async () => {
   const sectionKey = route.params.key
@@ -899,6 +925,10 @@ const fetchSection = async () => {
   loading.value = true
   resetSectionState()
   try {
+    const configured = await checkTmdbConfigured()
+    if (!configured) {
+      return
+    }
     const [_, ...batchResults] = await Promise.all([
       refreshSubscribedMap(),
       ...Array.from({ length: INITIAL_PARALLEL_BATCHES }, (_, i) =>

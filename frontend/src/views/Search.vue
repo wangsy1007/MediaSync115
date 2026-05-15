@@ -35,8 +35,13 @@
         <p>榜单支持横向拖动浏览，按住卡片区域左右拖动即可完整查看。</p>
       </div>
 
-      <div class="recommend-sections" v-loading="exploreLoading">
-        <template v-if="exploreSections.length > 0">
+      <div class="recommend-sections" v-loading="exploreLoading && tmdbConfigured">
+        <TmdbSetupPrompt
+          v-if="exploreSource === 'tmdb' && !tmdbConfigured"
+          @configured="handleTmdbConfigured"
+        />
+
+        <template v-else-if="exploreSections.length > 0">
           <ExploreSectionRow
             v-for="section in exploreSections"
             :key="section.key"
@@ -57,7 +62,7 @@
           />
         </template>
 
-        <template v-else-if="exploreLoading">
+        <template v-else-if="exploreLoading && tmdbConfigured">
           <div class="explore-skeleton">
             <div v-for="n in 3" :key="`skeleton-${n}`" class="skeleton-section">
               <div class="skeleton-section-title" />
@@ -196,6 +201,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { searchApi, subscriptionApi, pan115Api, settingsApi } from '@/api'
 import ExploreSectionRow from '@/components/explore/ExploreSectionRow.vue'
+import TmdbSetupPrompt from '@/components/explore/TmdbSetupPrompt.vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import {
   Search as SearchIcon,
@@ -219,6 +225,7 @@ const currentPage = ref(1)
 const totalPages = ref(0)
 
 const exploreLoading = ref(false)
+const tmdbConfigured = ref(true)
 const exploreSections = ref([])
 const exploreContainerRef = ref(null)
 const sectionRowRefs = ref({})
@@ -1210,6 +1217,15 @@ const fetchExploreSections = async () => {
   exploreLoading.value = true
   try {
     const { data } = await searchApi.getExploreMeta(exploreSource.value)
+    if (exploreSource.value === 'tmdb') {
+      tmdbConfigured.value = data?.tmdb_configured !== false
+    } else {
+      tmdbConfigured.value = true
+    }
+    if (exploreSource.value === 'tmdb' && !tmdbConfigured.value) {
+      exploreSections.value = []
+      return
+    }
     const sections = Array.isArray(data.sections) ? data.sections : []
     exploreSections.value = sections.map((section) => {
       return {
@@ -1222,6 +1238,11 @@ const fetchExploreSections = async () => {
   } finally {
     exploreLoading.value = false
   }
+}
+
+const handleTmdbConfigured = async () => {
+  tmdbConfigured.value = true
+  await initializeExploreHome()
 }
 
 const initializeExploreHome = async () => {

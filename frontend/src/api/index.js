@@ -13,6 +13,17 @@ const BACKEND_UNAVAILABLE_CODE = 'backend_unavailable'
 const BACKEND_UNAVAILABLE_MESSAGE = '后端正在启动，请稍后重试'
 
 let lastBackendUnavailableNoticeAt = 0
+let lastTmdbKeyMissingNoticeAt = 0
+
+const TMDB_API_KEY_MISSING_MESSAGE = 'TMDB API Key 未配置'
+const isTmdbKeyMissingDetail = (detail) => detail === TMDB_API_KEY_MISSING_MESSAGE
+
+const shouldSuppressTmdbKeyMissingToast = (error, detail) => {
+  if (!isTmdbKeyMissingDetail(detail)) return false
+  if (error.config?.silentError === true) return true
+  const requestUrl = String(error.config?.url || '')
+  return requestUrl.includes('/search/explore/')
+}
 
 const sleep = (ms) => new Promise(resolve => window.setTimeout(resolve, ms))
 
@@ -104,6 +115,18 @@ api.interceptors.response.use(
         })
       }
       return Promise.reject(error)
+    }
+
+    if (shouldSuppressTmdbKeyMissingToast(error, detail)) {
+      return Promise.reject(error)
+    }
+
+    if (isTmdbKeyMissingDetail(detail)) {
+      const now = Date.now()
+      if (now - lastTmdbKeyMissingNoticeAt < 4000) {
+        return Promise.reject(error)
+      }
+      lastTmdbKeyMissingNoticeAt = now
     }
 
     let message = detail || error.message || '请求失败'

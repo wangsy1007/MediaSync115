@@ -1537,7 +1537,7 @@ async def get_explore_meta(
     source_rows = (
         TMDB_SECTION_SOURCES if normalized_source == "tmdb" else DOUBAN_SECTION_SOURCES
     )
-    return {
+    payload: dict[str, Any] = {
         "source": "tmdb" if normalized_source == "tmdb" else "douban-frodo",
         "fetched_at": beijing_now().isoformat(),
         "sections": [
@@ -1549,6 +1549,11 @@ async def get_explore_meta(
             for row in source_rows
         ],
     }
+    if normalized_source == "tmdb":
+        from app.core.config import settings as app_settings
+
+        payload["tmdb_configured"] = bool(str(app_settings.TMDB_API_KEY or "").strip())
+    return payload
 
 
 @router.get("/explore/home")
