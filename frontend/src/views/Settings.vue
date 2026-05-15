@@ -1127,15 +1127,6 @@
                 :disabled="!schedulerForm.hdhive.enabled"
               />
             </el-form-item>
-            <el-form-item label="执行时间">
-              <el-time-picker
-                v-model="schedulerForm.hdhive.runTime"
-                format="HH:mm"
-                value-format="HH:mm"
-                placeholder="选择时间"
-                :disabled="!schedulerForm.hdhive.enabled"
-              />
-            </el-form-item>
 
             <el-divider content-position="left">Pansou 渠道</el-divider>
             <el-form-item label="启用任务">
@@ -1149,15 +1140,6 @@
                 :disabled="!schedulerForm.pansou.enabled"
               />
             </el-form-item>
-            <el-form-item label="执行时间">
-              <el-time-picker
-                v-model="schedulerForm.pansou.runTime"
-                format="HH:mm"
-                value-format="HH:mm"
-                placeholder="选择时间"
-                :disabled="!schedulerForm.pansou.enabled"
-              />
-            </el-form-item>
 
             <el-divider content-position="left">Telegram 渠道</el-divider>
             <el-form-item label="启用任务">
@@ -1168,15 +1150,6 @@
                 v-model="schedulerForm.tg.intervalHours"
                 :min="1"
                 :max="24"
-                :disabled="!schedulerForm.tg.enabled"
-              />
-            </el-form-item>
-            <el-form-item label="执行时间">
-              <el-time-picker
-                v-model="schedulerForm.tg.runTime"
-                format="HH:mm"
-                value-format="HH:mm"
-                placeholder="选择时间"
                 :disabled="!schedulerForm.tg.enabled"
               />
             </el-form-item>
@@ -1230,15 +1203,6 @@
                 v-model="chartSubForm.intervalHours"
                 :min="1"
                 :max="72"
-                :disabled="!chartSubForm.enabled"
-              />
-            </el-form-item>
-            <el-form-item label="执行时间">
-              <el-time-picker
-                v-model="chartSubForm.runTime"
-                format="HH:mm"
-                value-format="HH:mm"
-                placeholder="选择时间"
                 :disabled="!chartSubForm.enabled"
               />
             </el-form-item>
@@ -1817,18 +1781,15 @@ const schedulerForm = ref({
   offlineTransferEnabled: false,
   hdhive: {
     enabled: false,
-    intervalHours: 24,
-    runTime: '03:00'
+    intervalHours: 24
   },
   pansou: {
     enabled: false,
-    intervalHours: 24,
-    runTime: '03:15'
+    intervalHours: 24
   },
   tg: {
     enabled: false,
-    intervalHours: 24,
-    runTime: '03:30'
+    intervalHours: 24
   },
   hdhiveUnlock: {
     enabled: false,
@@ -1968,7 +1929,6 @@ const chartSubForm = reactive({
   enabled: false,
   limit: 20,
   intervalHours: 24,
-  runTime: '02:00',
   selectedKeys: [],
 })
 const availableCharts = ref([])
@@ -3627,7 +3587,6 @@ const loadChartSubSettings = (settings) => {
   chartSubForm.enabled = !!settings.chart_subscription_enabled
   chartSubForm.limit = settings.chart_subscription_limit || 20
   chartSubForm.intervalHours = settings.chart_subscription_interval_hours || 24
-  chartSubForm.runTime = settings.chart_subscription_run_time || '02:00'
   const sources = settings.chart_subscription_sources || []
   chartSubForm.selectedKeys = sources.map(s => `${s.source}:${s.key}`)
 }
@@ -3644,7 +3603,6 @@ const handleSaveChartSub = async () => {
       chart_subscription_sources: sources,
       chart_subscription_limit: chartSubForm.limit,
       chart_subscription_interval_hours: chartSubForm.intervalHours,
-      chart_subscription_run_time: chartSubForm.runTime,
     })
     ElMessage.success('榜单订阅设置已保存')
   } catch (error) {
@@ -3668,7 +3626,6 @@ const handleRunChartSub = async () => {
       chart_subscription_sources: sources,
       chart_subscription_limit: chartSubForm.limit,
       chart_subscription_interval_hours: chartSubForm.intervalHours,
-      chart_subscription_run_time: chartSubForm.runTime,
     })
     const { data } = await settingsApi.runChartSubscription()
     chartSubResult.value = data.message || '执行完成'
@@ -3943,14 +3900,11 @@ const fetchRuntimeSettings = async () => {
     schedulerForm.value.offlineTransferEnabled = !!data.subscription_offline_transfer_enabled
     schedulerForm.value.hdhive.enabled = !!data.subscription_hdhive_enabled
     schedulerForm.value.hdhive.intervalHours = Number(data.subscription_hdhive_interval_hours || 24)
-    schedulerForm.value.hdhive.runTime = data.subscription_hdhive_run_time || '03:00'
 
     schedulerForm.value.pansou.enabled = !!data.subscription_pansou_enabled
     schedulerForm.value.pansou.intervalHours = Number(data.subscription_pansou_interval_hours || 24)
-    schedulerForm.value.pansou.runTime = data.subscription_pansou_run_time || '03:15'
     schedulerForm.value.tg.enabled = !!data.subscription_tg_enabled
     schedulerForm.value.tg.intervalHours = Number(data.subscription_tg_interval_hours || 24)
-    schedulerForm.value.tg.runTime = data.subscription_tg_run_time || '03:30'
     schedulerForm.value.hdhiveUnlock.enabled = !!data.subscription_hdhive_auto_unlock_enabled
     schedulerForm.value.hdhiveUnlock.maxPointsPerItem = Number(data.subscription_hdhive_unlock_max_points_per_item || 10)
     schedulerForm.value.hdhiveUnlock.budgetPointsPerRun = Number(data.subscription_hdhive_unlock_budget_points_per_run || 30)
@@ -4114,13 +4068,10 @@ const handleSaveScheduler = async () => {
       subscription_offline_transfer_enabled: schedulerForm.value.offlineTransferEnabled,
       subscription_hdhive_enabled: schedulerForm.value.hdhive.enabled,
       subscription_hdhive_interval_hours: Number(schedulerForm.value.hdhive.intervalHours || 24),
-      subscription_hdhive_run_time: schedulerForm.value.hdhive.runTime || '03:00',
       subscription_pansou_enabled: schedulerForm.value.pansou.enabled,
       subscription_pansou_interval_hours: Number(schedulerForm.value.pansou.intervalHours || 24),
-      subscription_pansou_run_time: schedulerForm.value.pansou.runTime || '03:15',
       subscription_tg_enabled: schedulerForm.value.tg.enabled,
       subscription_tg_interval_hours: Number(schedulerForm.value.tg.intervalHours || 24),
-      subscription_tg_run_time: schedulerForm.value.tg.runTime || '03:30',
       subscription_resource_priority: normalizedPriority,
       subscription_hdhive_auto_unlock_enabled: schedulerForm.value.hdhiveUnlock.enabled,
       subscription_hdhive_unlock_max_points_per_item: Number(schedulerForm.value.hdhiveUnlock.maxPointsPerItem || 10),

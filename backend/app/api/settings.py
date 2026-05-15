@@ -92,13 +92,10 @@ class RuntimeSettingsRequest(BaseModel):
     feiniu_sync_interval_minutes: Optional[int] = None
     subscription_hdhive_enabled: Optional[bool] = None
     subscription_hdhive_interval_hours: Optional[int] = None
-    subscription_hdhive_run_time: Optional[str] = None
     subscription_pansou_enabled: Optional[bool] = None
     subscription_pansou_interval_hours: Optional[int] = None
-    subscription_pansou_run_time: Optional[str] = None
     subscription_tg_enabled: Optional[bool] = None
     subscription_tg_interval_hours: Optional[int] = None
-    subscription_tg_run_time: Optional[str] = None
     subscription_resource_priority: Optional[list[str]] = None
     subscription_hdhive_auto_unlock_enabled: Optional[bool] = None
     subscription_hdhive_unlock_max_points_per_item: Optional[int] = None
@@ -127,7 +124,6 @@ class RuntimeSettingsRequest(BaseModel):
     chart_subscription_sources: Optional[list] = None
     chart_subscription_limit: Optional[int] = None
     chart_subscription_interval_hours: Optional[int] = None
-    chart_subscription_run_time: Optional[str] = None
 
 
 class TgVerifyPasswordRequest(BaseModel):

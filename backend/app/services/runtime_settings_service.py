@@ -117,13 +117,10 @@ class RuntimeSettingsService:
             "auth_secret": "",
             "subscription_hdhive_enabled": False,
             "subscription_hdhive_interval_hours": 24,
-            "subscription_hdhive_run_time": "03:00",
             "subscription_pansou_enabled": False,
             "subscription_pansou_interval_hours": 24,
-            "subscription_pansou_run_time": "03:15",
             "subscription_tg_enabled": False,
             "subscription_tg_interval_hours": 24,
-            "subscription_tg_run_time": "03:30",
             "subscription_resource_priority": ["hdhive", "pansou", "tg"],
             "subscription_hdhive_auto_unlock_enabled": False,
             "subscription_hdhive_unlock_max_points_per_item": 10,
@@ -160,7 +157,6 @@ class RuntimeSettingsService:
             "chart_subscription_sources": [],
             "chart_subscription_limit": 20,
             "chart_subscription_interval_hours": 24,
-            "chart_subscription_run_time": "02:00",
             "archive_enabled": False,
             "archive_watch_cid": "",
             "archive_watch_name": "",
@@ -1178,26 +1174,17 @@ class RuntimeSettingsService:
             "subscription_hdhive_interval_hours": int(
                 self._data.get("subscription_hdhive_interval_hours", 24) or 24
             ),
-            "subscription_hdhive_run_time": str(
-                self._data.get("subscription_hdhive_run_time", "03:15") or "03:15"
-            ),
             "subscription_pansou_enabled": bool(
                 self._data.get("subscription_pansou_enabled", False)
             ),
             "subscription_pansou_interval_hours": int(
                 self._data.get("subscription_pansou_interval_hours", 24) or 24
             ),
-            "subscription_pansou_run_time": str(
-                self._data.get("subscription_pansou_run_time", "03:30") or "03:30"
-            ),
             "subscription_tg_enabled": bool(
                 self._data.get("subscription_tg_enabled", False)
             ),
             "subscription_tg_interval_hours": int(
                 self._data.get("subscription_tg_interval_hours", 24) or 24
-            ),
-            "subscription_tg_run_time": str(
-                self._data.get("subscription_tg_run_time", "04:00") or "04:00"
             ),
             "subscription_resource_priority": self.get_subscription_resource_priority(),
             "subscription_hdhive_auto_unlock_enabled": self.get_subscription_hdhive_auto_unlock_enabled(),
@@ -1232,9 +1219,6 @@ class RuntimeSettingsService:
             ),
             "chart_subscription_interval_hours": int(
                 self._data.get("chart_subscription_interval_hours", 24) or 24
-            ),
-            "chart_subscription_run_time": str(
-                self._data.get("chart_subscription_run_time", "02:00") or "02:00"
             ),
             "archive_enabled": self.get_archive_enabled(),
             "archive_watch_cid": self.get_archive_watch_cid(),
