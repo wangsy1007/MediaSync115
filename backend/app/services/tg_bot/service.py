@@ -7,6 +7,9 @@ from telegram.ext import Application
 
 logger = logging.getLogger(__name__)
 
+TG_BOT_START_TIMEOUT_SECONDS = 25.0
+TG_BOT_STOP_TIMEOUT_SECONDS = 15.0
+
 
 def _normalize_notify_chat_id(raw: Any) -> int | None:
     """将配置中的 Chat ID 转为整数（群组常为负数）。"""
@@ -39,6 +42,18 @@ class TgBotService:
             "notify_chat_ids": runtime_settings_service.get("tg_bot_notify_chat_ids", []),
         }
 
+    async def _shutdown_app(self, app: Application) -> None:
+        try:
+            if getattr(app, "updater", None) and app.updater.running:
+                await app.updater.stop()
+        except Exception:
+            logger.exception("Error stopping TG Bot updater")
+        try:
+            await app.stop()
+            await app.shutdown()
+        except Exception:
+            logger.exception("Error shutting down TG Bot application")
+
     async def start(self) -> None:
         async with self._lock:
             if self._running:
@@ -49,37 +64,62 @@ class TgBotService:
                 logger.info("TG Bot is disabled or token is empty, skipping start")
                 return
 
+            partial_app: Application | None = None
             try:
                 from .handlers import register_handlers
 
                 builder = Application.builder().token(cfg["token"])
-                self._app = builder.build()
-                register_handlers(self._app, cfg["allowed_users"])
+                partial_app = builder.build()
+                register_handlers(partial_app, cfg["allowed_users"])
+                self._app = partial_app
 
-                await self._app.initialize()
-                await self._app.start()
-                await self._app.updater.start_polling(drop_pending_updates=True)
+                await asyncio.wait_for(
+                    self._finish_start(partial_app),
+                    timeout=TG_BOT_START_TIMEOUT_SECONDS,
+                )
                 self._running = True
                 logger.info("TG Bot started successfully")
+            except asyncio.TimeoutError:
+                logger.error("TG Bot start timed out (check token and Telegram network)")
+                if partial_app is not None:
+                    await self._shutdown_app(partial_app)
+                self._app = None
+                self._running = False
+                raise TimeoutError("TG Bot 启动超时，请检查 Token 与访问 Telegram 的网络") from None
             except Exception:
                 logger.exception("Failed to start TG Bot")
+                if partial_app is not None:
+                    await self._shutdown_app(partial_app)
                 self._app = None
+                self._running = False
+                raise
+
+    async def _finish_start(self, app: Application) -> None:
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
 
     async def stop(self) -> None:
         async with self._lock:
-            if not self._running or not self._app:
+            if not self._running and not self._app:
+                return
+
+            app = self._app
+            self._app = None
+            self._running = False
+            if not app:
                 return
 
             try:
-                await self._app.updater.stop()
-                await self._app.stop()
-                await self._app.shutdown()
+                await asyncio.wait_for(
+                    self._shutdown_app(app),
+                    timeout=TG_BOT_STOP_TIMEOUT_SECONDS,
+                )
                 logger.info("TG Bot stopped")
+            except asyncio.TimeoutError:
+                logger.error("TG Bot stop timed out, state cleared")
             except Exception:
                 logger.exception("Error stopping TG Bot")
-            finally:
-                self._app = None
-                self._running = False
 
     async def restart(self) -> None:
         await self.stop()

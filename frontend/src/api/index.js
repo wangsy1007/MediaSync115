@@ -3,6 +3,9 @@ import { ElMessage } from 'element-plus'
 import { BEIJING_TIMEZONE } from '@/utils/timezone'
 
 const SAVE_OPERATION_TIMEOUT = 180000
+/** 运行时设置保存（会触发调度器同步），需长于默认 30s */
+export const RUNTIME_SAVE_TIMEOUT_MS = 120000
+const TG_BOT_RESTART_TIMEOUT_MS = 45000
 
 const api = axios.create({
   baseURL: '/api',
@@ -273,8 +276,8 @@ export const settingsApi = {
   rebuildTgIndex: () => api.post('/settings/tg/index/rebuild'),
   // TG Bot
   getTgBotStatus: () => api.get('/settings/tg-bot/status'),
-  restartTgBot: () => api.post('/settings/tg-bot/restart'),
-  stopTgBot: () => api.post('/settings/tg-bot/stop'),
+  restartTgBot: () => api.post('/settings/tg-bot/restart', null, { timeout: TG_BOT_RESTART_TIMEOUT_MS }),
+  stopTgBot: () => api.post('/settings/tg-bot/stop', null, { timeout: TG_BOT_RESTART_TIMEOUT_MS }),
   // 榜单订阅
   getAvailableCharts: () => api.get('/settings/chart-subscription/charts'),
   runChartSubscription: () => api.post('/settings/chart-subscription/run', null, { timeout: 120000 }),

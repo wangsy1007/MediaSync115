@@ -1372,7 +1372,7 @@
             </template>
           </el-alert>
 
-          <el-form :model="tgBotForm" label-width="140px">
+          <el-form :model="tgBotForm" label-width="140px" @submit.prevent>
             <el-form-item label="启用 Bot">
               <el-switch v-model="tgBotForm.enabled" />
             </el-form-item>
@@ -1421,9 +1421,13 @@
               <span class="form-hint">开启后，Bot 搜索 HDHive 资源时自动花费积分解锁获取分享链接</span>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" :loading="savingTgBot" @click="handleSaveTgBot">保存配置</el-button>
-              <el-button :loading="restartingTgBot" @click="handleRestartTgBot">重启 Bot</el-button>
-              <el-button @click="handleCheckTgBotStatus">检测状态</el-button>
+              <el-button type="primary" native-type="button" :loading="savingTgBot" @click="handleSaveTgBot">
+                保存配置
+              </el-button>
+              <el-button type="button" native-type="button" :loading="restartingTgBot" @click="handleRestartTgBot">
+                重启 Bot
+              </el-button>
+              <el-button type="button" native-type="button" @click="handleCheckTgBotStatus">检测状态</el-button>
             </el-form-item>
           </el-form>
 
@@ -1680,7 +1684,16 @@
 import { ref, onMounted, onBeforeUnmount, reactive, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowUp, ArrowDown, Close } from '@element-plus/icons-vue'
-import { authApi, pan115Api, pansouApi, settingsApi, subscriptionApi, licenseApi, archiveApi } from '@/api'
+import {
+  authApi,
+  pan115Api,
+  pansouApi,
+  settingsApi,
+  subscriptionApi,
+  licenseApi,
+  archiveApi,
+  RUNTIME_SAVE_TIMEOUT_MS
+} from '@/api'
 import { resetAuthSessionCache } from '@/router'
 import { useRouter } from 'vue-router'
 import { formatBeijingDateTime, formatBeijingTableCell } from '@/utils/timezone'
@@ -1975,7 +1988,7 @@ const savingUpdateSettings = ref(false)
 const checkingUpdates = ref(false)
 
 const appInfo = ref({
-  currentVersion: '1.1.26',
+  currentVersion: '1.1.27',
   currentImageTag: '',
   currentGitSha: '',
   currentBuildTime: '',
@@ -3733,23 +3746,37 @@ const addTgBotNotifyChatId = () => {
 }
 const handleSaveTgBot = async () => {
   savingTgBot.value = true
+  let saved = false
   try {
-    await settingsApi.updateRuntime({
-      tg_bot_enabled: tgBotForm.value.enabled,
-      tg_bot_token: tgBotForm.value.token,
-      tg_bot_allowed_users: tgBotForm.value.allowedUsers,
-      tg_bot_notify_chat_ids: tgBotForm.value.notifyChatIds,
-      tg_bot_hdhive_auto_unlock: tgBotForm.value.hdhiveAutoUnlock,
-    })
+    await settingsApi.updateRuntime(
+      {
+        tg_bot_enabled: tgBotForm.value.enabled,
+        tg_bot_token: tgBotForm.value.token,
+        tg_bot_allowed_users: tgBotForm.value.allowedUsers,
+        tg_bot_notify_chat_ids: tgBotForm.value.notifyChatIds,
+        tg_bot_hdhive_auto_unlock: tgBotForm.value.hdhiveAutoUnlock,
+      },
+      { timeout: RUNTIME_SAVE_TIMEOUT_MS, silentError: true }
+    )
+    saved = true
     ElMessage.success('TG Bot 配置已保存')
-    // Auto restart if enabled
-    if (tgBotForm.value.enabled && tgBotForm.value.token) {
-      await handleRestartTgBot()
-    }
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || 'TG Bot 配置保存失败')
+    const detail = error.response?.data?.detail || error.message || ''
+    ElMessage.error(detail ? String(detail) : 'TG Bot 配置保存失败')
   } finally {
     savingTgBot.value = false
+  }
+
+  // 重启可能因连接 Telegram 较慢；勿阻塞「保存配置」按钮的 loading
+  if (saved && tgBotForm.value.enabled && String(tgBotForm.value.token || '').trim()) {
+    await handleRestartTgBot()
+  } else if (saved && !tgBotForm.value.enabled) {
+    try {
+      await settingsApi.stopTgBot()
+      tgBotStatus.value = { checked: true, running: false }
+    } catch {
+      // 停止失败不阻断保存成功提示
+    }
   }
 }
 const handleRestartTgBot = async () => {

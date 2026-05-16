@@ -1141,11 +1141,20 @@ async def get_tg_bot_status():
 
 @router.post("/tg-bot/restart")
 async def restart_tg_bot():
+    import asyncio
+
     from app.services.tg_bot import tg_bot_service
 
     try:
-        await tg_bot_service.restart()
+        await asyncio.wait_for(tg_bot_service.restart(), timeout=45.0)
         return {"success": True, "running": tg_bot_service.running}
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="TG Bot 重启超时，请检查 Token 与访问 Telegram 的网络",
+        )
+    except TimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
