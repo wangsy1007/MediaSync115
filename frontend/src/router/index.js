@@ -1,5 +1,10 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { authApi, isBackendUnavailableError, waitForBackendReady } from '@/api'
+import {
+  clearAuthSessionHint,
+  readAuthSessionHint,
+  writeAuthSessionHint
+} from '@/utils/authSessionHint'
 
 const routes = [
   {
@@ -96,38 +101,60 @@ const router = createRouter({
   routes
 })
 
-import { ref } from 'vue'
-
-let authSessionCache = null
+let authSessionCache = readAuthSessionHint()
 let authSessionPromise = null
 
-// 导出供 App.vue 使用，在认证检查期间显示加载动画
-export const isAuthChecking = ref(false)
+const normalizeSession = (data) => ({
+  authenticated: Boolean(data?.authenticated),
+  username: String(data?.username || '').trim(),
+  expires_at: data?.expires_at
+})
 
-const getAuthSession = async (force = false) => {
-  if (!force && authSessionCache) return authSessionCache
+const applyAuthSession = (session) => {
+  authSessionCache = normalizeSession(session)
+  writeAuthSessionHint(authSessionCache)
+  return authSessionCache
+}
+
+const hasOptimisticAuth = () => Boolean(authSessionCache?.authenticated)
+
+const isTransientAuthError = (error) => {
+  if (!error) return true
+  if (isBackendUnavailableError(error)) return true
+  const status = Number(error.response?.status || 0)
+  if (!status) return true
+  return status === 502 || status === 503 || status === 504
+}
+
+/**
+ * @param {boolean} force
+ * @param {{ preserveOnTransientError?: boolean }} options
+ */
+const getAuthSession = async (force = false, options = {}) => {
+  const { preserveOnTransientError = false } = options
+  if (!force && authSessionCache?.authenticated) return authSessionCache
   if (!force && authSessionPromise) return authSessionPromise
 
   authSessionPromise = authApi.getSession()
-    .then(({ data }) => {
-      authSessionCache = data || { authenticated: false, username: '' }
-      return authSessionCache
-    })
+    .then(({ data }) => applyAuthSession(data || { authenticated: false, username: '' }))
     .catch(async (error) => {
       if (isBackendUnavailableError(error)) {
         const ready = await waitForBackendReady()
         if (ready) {
           try {
             const { data } = await authApi.getSession()
-            authSessionCache = data || { authenticated: false, username: '' }
-            return authSessionCache
-          } catch {
-            // Fall back to unauthenticated below.
+            return applyAuthSession(data || { authenticated: false, username: '' })
+          } catch (retryError) {
+            if (preserveOnTransientError && isTransientAuthError(retryError) && hasOptimisticAuth()) {
+              return authSessionCache
+            }
           }
         }
       }
-      authSessionCache = { authenticated: false, username: '' }
-      return authSessionCache
+      if (preserveOnTransientError && isTransientAuthError(error) && hasOptimisticAuth()) {
+        return authSessionCache
+      }
+      return applyAuthSession({ authenticated: false, username: '' })
     })
     .finally(() => {
       authSessionPromise = null
@@ -136,13 +163,38 @@ const getAuthSession = async (force = false) => {
   return authSessionPromise
 }
 
+const redirectToLogin = (redirectPath) => {
+  const redirect = String(redirectPath || '').trim() || '/'
+  if (router.currentRoute.value.path === '/login') return
+  router.replace({
+    path: '/login',
+    query: { redirect }
+  })
+}
+
+const verifyAuthSessionInBackground = (redirectOnFailure) => {
+  getAuthSession(true, { preserveOnTransientError: true })
+    .then((session) => {
+      if (session?.authenticated) return
+      resetAuthSessionCache()
+      if (redirectOnFailure) {
+        redirectToLogin(redirectOnFailure)
+      }
+    })
+    .catch(() => {})
+}
+
+export const markAuthSessionAuthenticated = (username) => {
+  applyAuthSession({ authenticated: true, username })
+}
+
 export const resetAuthSessionCache = () => {
   authSessionCache = null
   authSessionPromise = null
+  clearAuthSessionHint()
 }
 
 router.beforeEach(async (to) => {
-  // 公开路由（如 /login）：已有缓存且已登录时才重定向，否则立即放行不阻塞后端
   if (to.meta?.public) {
     if (authSessionCache?.authenticated) {
       if (to.path === '/login') {
@@ -150,34 +202,35 @@ router.beforeEach(async (to) => {
       }
       return true
     }
-    // 无缓存时：先放行显示页面，后台静默检查认证状态
     if (!authSessionCache) {
-      getAuthSession().then((session) => {
-        if (session?.authenticated && router.currentRoute.value.path === '/login') {
-          router.replace(
-            router.currentRoute.value.query.redirect
-              ? String(router.currentRoute.value.query.redirect)
-              : '/'
-          )
-        }
-      }).catch(() => {})
+      getAuthSession(false, { preserveOnTransientError: true })
+        .then((session) => {
+          if (session?.authenticated && router.currentRoute.value.path === '/login') {
+            router.replace(
+              router.currentRoute.value.query.redirect
+                ? String(router.currentRoute.value.query.redirect)
+                : '/'
+            )
+          }
+        })
+        .catch(() => {})
     }
     return true
   }
 
-  // 已有登录缓存时直接放行，避免每次切页整页卸载侧栏（探索页并发请求时尤易误判为“点不动”）
   if (authSessionCache?.authenticated) {
+    verifyAuthSessionInBackground()
     return true
   }
 
-  // 受保护路由：阻塞式检查认证
-  isAuthChecking.value = true
-  let session
-  try {
-    session = await getAuthSession()
-  } finally {
-    isAuthChecking.value = false
+  const hint = readAuthSessionHint()
+  if (hint?.authenticated) {
+    authSessionCache = hint
+    verifyAuthSessionInBackground(to.fullPath)
+    return true
   }
+
+  const session = await getAuthSession()
   if (session?.authenticated) return true
   return {
     path: '/login',

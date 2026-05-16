@@ -40,7 +40,7 @@ import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { authApi } from '@/api'
-import { resetAuthSessionCache } from '@/router'
+import { markAuthSessionAuthenticated } from '@/router'
 
 const router = useRouter()
 const route = useRoute()
@@ -65,7 +65,7 @@ const handleLogin = async () => {
   loggingIn.value = true
   try {
     await authApi.login({ username, password })
-    resetAuthSessionCache()
+    markAuthSessionAuthenticated(username)
     ElMessage.success('登录成功')
     const redirect = String(route.query.redirect || '/').trim() || '/'
     await router.replace(redirect)
