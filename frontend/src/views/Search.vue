@@ -216,6 +216,12 @@ import {
   getInitialExploreCardLayout,
   resolveExploreCardLayout
 } from '@/utils/exploreCardLayout'
+import {
+  getCachedExploreSectionBatch,
+  getExploreSectionBatchInflight,
+  setCachedExploreSectionBatch,
+  setExploreSectionBatchInflight
+} from '@/utils/exploreSectionBatchCache'
 
 const router = useRouter()
 const route = useRoute()
@@ -583,15 +589,12 @@ const HOME_SECTION_BATCH_SIZE = 30
 const EXPLORE_HERO_POSTER_COUNT = 6
 const HOME_SECTION_PREFETCH_ROUNDS = EXPLORE_SPEED_MODE === 'extreme' ? 3 : 1
 const HOME_SECTION_PREFETCH_DELAY_MS = EXPLORE_SPEED_MODE === 'extreme' ? 12 : 36
-const HOME_SECTION_CACHE_TTL_MS = 5 * 60 * 1000
 let exploreContainerResizeObserver = null
 let sectionResizeObserver = null
 let pressScrollTimer = null
 let scrollStateRafId = 0
 const pendingScrollStateKeys = new Set()
 const cardsPerViewRef = ref(initialExploreCardLayout.cardsPerView)
-const homeSectionBatchCache = new Map()
-const homeSectionBatchInflight = new Map()
 const homeSectionMetaMap = new Map()
 const homeSectionLoadPromises = new Map()
 const homeSectionPrefetchTimers = new Map()
@@ -660,33 +663,6 @@ const queueSectionScrollStateUpdate = (sectionKey) => {
   })
 }
 
-const getHomeBatchCacheKey = (sectionKey, start, count) => `${sectionKey}:${start}:${count}`
-
-const getCachedHomeSectionBatch = (sectionKey, start, count) => {
-  const cacheKey = getHomeBatchCacheKey(sectionKey, start, count)
-  const cached = homeSectionBatchCache.get(cacheKey)
-  if (!cached) return null
-  if (Date.now() >= cached.expiresAt) {
-    homeSectionBatchCache.delete(cacheKey)
-    return null
-  }
-  if (
-    !Object.prototype.hasOwnProperty.call(cached.payload || {}, 'emby_status_map') ||
-    !Object.prototype.hasOwnProperty.call(cached.payload || {}, 'feiniu_status_map')
-  ) {
-    homeSectionBatchCache.delete(cacheKey)
-    return null
-  }
-  return cached.payload
-}
-
-const setCachedHomeSectionBatch = (sectionKey, start, count, payload) => {
-  const cacheKey = getHomeBatchCacheKey(sectionKey, start, count)
-  homeSectionBatchCache.set(cacheKey, {
-    payload,
-    expiresAt: Date.now() + HOME_SECTION_CACHE_TTL_MS
-  })
-}
 
 const getExploreSectionByKey = (sectionKey) => {
   return exploreSections.value.find((section) => section.key === sectionKey) || null
@@ -862,30 +838,30 @@ const appendItemsToSection = (sectionKey, incomingItems = []) => {
 
 const requestHomeSectionBatch = async (sectionKey, start, { refresh = false } = {}) => {
   const count = HOME_SECTION_BATCH_SIZE
-  const cacheKey = getHomeBatchCacheKey(sectionKey, start, count)
+  const sectionSource = exploreSource.value
   if (!refresh) {
-    const cachedPayload = getCachedHomeSectionBatch(sectionKey, start, count)
+    const cachedPayload = getCachedExploreSectionBatch(sectionSource, sectionKey, start, count)
     if (cachedPayload) return cachedPayload
   }
 
-  const inflight = homeSectionBatchInflight.get(cacheKey)
+  const inflight = getExploreSectionBatchInflight(sectionSource, sectionKey, start, count)
   if (inflight) return inflight
 
-  const task = searchApi.getExploreSection(exploreSource.value, sectionKey, count, refresh, start)
+  const task = searchApi.getExploreSection(sectionSource, sectionKey, count, refresh, start)
     .then(({ data }) => {
       const payload = {
         ...(data.section || {}),
         emby_status_map: data?.emby_status_map || {},
         feiniu_status_map: data?.feiniu_status_map || {}
       }
-      setCachedHomeSectionBatch(sectionKey, start, count, payload)
+      setCachedExploreSectionBatch(sectionSource, sectionKey, start, count, payload)
       return payload
     })
     .finally(() => {
-      homeSectionBatchInflight.delete(cacheKey)
+      setExploreSectionBatchInflight(sectionSource, sectionKey, start, count, null)
     })
 
-  homeSectionBatchInflight.set(cacheKey, task)
+  setExploreSectionBatchInflight(sectionSource, sectionKey, start, count, task)
   return task
 }
 

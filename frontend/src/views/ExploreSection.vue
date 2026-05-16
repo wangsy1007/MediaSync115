@@ -95,10 +95,12 @@ import { searchApi, subscriptionApi } from '@/api'
 import { Star, FolderAdd } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import TmdbSetupPrompt from '@/components/explore/TmdbSetupPrompt.vue'
-
-const SECTION_BATCH_CACHE_TTL_MS = 10 * 60 * 1000
-const sectionBatchCache = new Map()
-const sectionBatchInflight = new Map()
+import {
+  getCachedExploreSectionBatch,
+  getExploreSectionBatchInflight,
+  setCachedExploreSectionBatch,
+  setExploreSectionBatchInflight
+} from '@/utils/exploreSectionBatchCache'
 const resolveExploreSpeedMode = () => {
   if (typeof window === 'undefined') return 'extreme'
   try {
@@ -419,41 +421,14 @@ const clearPrefetchTimer = () => {
   }
 }
 
-const buildBatchCacheKey = (sectionSource, sectionKey, start, count) =>
-  `${sectionSource}:${sectionKey}:${start}:${count}`
-
-const getCachedBatchPayload = (sectionSource, sectionKey, start, count) => {
-  const cacheKey = buildBatchCacheKey(sectionSource, sectionKey, start, count)
-  const cached = sectionBatchCache.get(cacheKey)
-  if (!cached) return null
-  if (Date.now() >= cached.expiresAt) {
-    sectionBatchCache.delete(cacheKey)
-    return null
-  }
-  if (!Object.prototype.hasOwnProperty.call(cached.payload || {}, 'emby_status_map')) {
-    sectionBatchCache.delete(cacheKey)
-    return null
-  }
-  return cached.payload
-}
-
-const setCachedBatchPayload = (sectionSource, sectionKey, start, count, payload) => {
-  const cacheKey = buildBatchCacheKey(sectionSource, sectionKey, start, count)
-  sectionBatchCache.set(cacheKey, {
-    payload,
-    expiresAt: Date.now() + SECTION_BATCH_CACHE_TTL_MS
-  })
-}
-
 const requestSectionBatch = async (sectionSource, sectionKey, start, { refresh = false } = {}) => {
   const count = API_BATCH_SIZE
-  const cacheKey = buildBatchCacheKey(sectionSource, sectionKey, start, count)
   if (!refresh) {
-    const cachedPayload = getCachedBatchPayload(sectionSource, sectionKey, start, count)
+    const cachedPayload = getCachedExploreSectionBatch(sectionSource, sectionKey, start, count)
     if (cachedPayload) return cachedPayload
   }
 
-  const inflight = sectionBatchInflight.get(cacheKey)
+  const inflight = getExploreSectionBatchInflight(sectionSource, sectionKey, start, count)
   if (inflight) return inflight
 
   const task = searchApi.getExploreSection(sectionSource, sectionKey, count, refresh, start)
@@ -463,14 +438,14 @@ const requestSectionBatch = async (sectionSource, sectionKey, start, { refresh =
         emby_status_map: data?.emby_status_map || {},
         feiniu_status_map: data?.feiniu_status_map || {}
       }
-      setCachedBatchPayload(sectionSource, sectionKey, start, count, payload)
+      setCachedExploreSectionBatch(sectionSource, sectionKey, start, count, payload)
       return payload
     })
     .finally(() => {
-      sectionBatchInflight.delete(cacheKey)
+      setExploreSectionBatchInflight(sectionSource, sectionKey, start, count, null)
     })
 
-  sectionBatchInflight.set(cacheKey, task)
+  setExploreSectionBatchInflight(sectionSource, sectionKey, start, count, task)
   return task
 }
 
@@ -803,7 +778,7 @@ const queuePrefetchBatch = (sectionSource, sectionKey, start, sectionToken) => {
   if (!sectionKey || start < 0) return
   if (prefetchedOffsets.has(start) || prefetchOffsetsInFlight.has(start)) return
 
-  const cachedPayload = getCachedBatchPayload(sectionSource, sectionKey, start, API_BATCH_SIZE)
+  const cachedPayload = getCachedExploreSectionBatch(sectionSource, sectionKey, start, API_BATCH_SIZE)
   if (cachedPayload) {
     prefetchedOffsets.add(start)
     return
@@ -936,7 +911,6 @@ const handleTmdbConfigured = async () => {
   await fetchSection()
 }
 
-const INITIAL_PARALLEL_BATCHES = 3
 const fetchSection = async () => {
   const sectionKey = route.params.key
   if (!sectionKey) return
@@ -948,15 +922,11 @@ const fetchSection = async () => {
     if (!configured) {
       return
     }
-    const [_, ...batchResults] = await Promise.all([
-      refreshSubscribedMap(),
-      ...Array.from({ length: INITIAL_PARALLEL_BATCHES }, (_, i) =>
-        fetchNextBatch({ refresh: false, silent: i > 0 }).catch(() => 0)
-      ),
-    ])
-    const totalAppended = batchResults.reduce((sum, n) => sum + (n || 0), 0)
-    if (totalAppended > 0) {
-      displayCount.value = Math.min(RENDER_BATCH_SIZE, allItems.value.length)
+    // 订阅状态后台刷新，不阻塞首屏
+    refreshSubscribedMap()
+    const appended = await fetchNextBatch({ refresh: false, silent: false })
+    if (appended > 0) {
+      displayCount.value = allItems.value.length
     }
     prefetchCursor = Math.max(prefetchCursor, nextOffset.value)
     schedulePrefetch()

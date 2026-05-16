@@ -363,8 +363,12 @@ async def _resolve_emby_status_payload(media_type: str, tmdb_id: int) -> dict[st
 
 async def _build_emby_status_map(
     items: list[dict[str, Any]],
+    *,
+    max_candidates: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     candidates = _extract_emby_status_candidates(items)
+    if max_candidates is not None:
+        candidates = candidates[: max(0, int(max_candidates))]
     if not candidates:
         return {}
 
@@ -455,8 +459,12 @@ async def _build_douban_library_status_maps(
 
 async def _build_feiniu_status_map(
     items: list[dict[str, Any]],
+    *,
+    max_candidates: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     candidates = _extract_emby_status_candidates(items)
+    if max_candidates is not None:
+        candidates = candidates[: max(0, int(max_candidates))]
     if not candidates:
         return {}
 
@@ -1197,15 +1205,19 @@ def _find_tmdb_source(section_key: str):
     )
 
 
-# 分页偏移 start>0 时压低同步 TMDB 解析条数，降低滚动触底请求的延迟（首屏 start=0 不受影响）
+# 分页偏移 start>0 时压低同步 TMDB 解析条数，降低滚动触底请求的延迟
 _DOUBAN_EXPLORE_PAGINATION_SYNC_PRIME_CAP = 18
+# 「更多」页首屏与首页横滑一致，仅同步解析前 N 条用于角标，其余异步回填
+_DOUBAN_EXPLORE_SECTION_FIRST_SCREEN_SYNC_PRIME_CAP = 12
+# 单批返回条目数较多时，Emby/飞牛角标查询也限制条数，避免首屏阻塞
+_EXPLORE_SECTION_LIBRARY_BADGE_CAP = 12
 
 
 def _douban_explore_sync_prime_limit(limit: int, start: int) -> int:
     base = library_status_sync_prime_limit(limit)
     if start > 0:
         return min(base, _DOUBAN_EXPLORE_PAGINATION_SYNC_PRIME_CAP)
-    return base
+    return min(base, _DOUBAN_EXPLORE_SECTION_FIRST_SCREEN_SYNC_PRIME_CAP)
 
 
 async def _fetch_popular_section(source, refresh):
@@ -1763,8 +1775,12 @@ async def get_explore_section(
                 "count": payload.get("count", limit),
                 "items": items,
             },
-            "emby_status_map": await _build_emby_status_map(items),
-            "feiniu_status_map": await _build_feiniu_status_map(items),
+            "emby_status_map": await _build_emby_status_map(
+                items, max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP
+            ),
+            "feiniu_status_map": await _build_feiniu_status_map(
+                items, max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP
+            ),
             "cache_hit": False,
             "cache_source": "section_runtime",
             "cache_warmed_at": None,
@@ -1807,8 +1823,12 @@ async def get_explore_section(
             "count": payload.get("count", limit),
             "items": items,
         },
-        "emby_status_map": await _build_emby_status_map(items),
-        "feiniu_status_map": await _build_feiniu_status_map(items),
+        "emby_status_map": await _build_emby_status_map(
+            items, max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP
+        ),
+        "feiniu_status_map": await _build_feiniu_status_map(
+            items, max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP
+        ),
         "cache_hit": False,
         "cache_source": "section_runtime",
         "cache_warmed_at": None,
@@ -1862,8 +1882,12 @@ async def get_explore_douban_section(
             "count": payload.get("count", limit),
             "items": items,
         },
-        "emby_status_map": await _build_emby_status_map(items),
-        "feiniu_status_map": await _build_feiniu_status_map(items),
+        "emby_status_map": await _build_emby_status_map(
+            items, max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP
+        ),
+        "feiniu_status_map": await _build_feiniu_status_map(
+            items, max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP
+        ),
     }
 
 
