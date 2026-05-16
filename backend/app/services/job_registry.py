@@ -5,7 +5,6 @@ from typing import Any, Callable
 from app.services.emby_service import emby_service
 from app.services.emby_sync_index_service import emby_sync_index_service
 from app.services.feiniu_sync_index_service import feiniu_sync_index_service
-from app.services.explore_home_warmup_service import explore_home_warmup_service
 from app.core.database import async_session_maker
 from app.services.hdhive_service import hdhive_service
 from app.services.operation_log_service import operation_log_service
@@ -26,7 +25,6 @@ class JobRegistry:
             "system.sync_emby_index": self._sync_emby_index,
             "system.sync_feiniu_index": self._sync_feiniu_index,
             "system.cleanup_runtime_cache": self._cleanup_runtime_cache,
-            "system.warmup_explore_home_cache": self._warmup_explore_home_cache,
             "system.noop": self._noop,
             "system.archive_scan": self._archive_scan,
             "system.offline_monitor": self._offline_monitor,
@@ -63,7 +61,6 @@ class JobRegistry:
         search_api._tv_pan115_cache.clear()
         search_api._emby_badge_cache.clear()
         search_api._feiniu_badge_cache.clear()
-        explore_home_warmup_service.clear_snapshots()
         for cache_item in search_api._popular_sections_cache.values():
             cache_item["payload"] = None
             cache_item["expires_at"] = 0.0
@@ -72,9 +69,6 @@ class JobRegistry:
         douban_explore_service._douban_sections_cache.clear()
         tmdb_explore_service._tmdb_sections_cache.clear()
         return {"success": True, "message": "runtime cache cleared"}
-
-    async def _warmup_explore_home_cache(self, **kwargs) -> dict[str, Any]:
-        return await explore_home_warmup_service.warmup(force_refresh=False)
 
     async def _noop(self, **kwargs) -> dict[str, Any]:
         await asyncio.sleep(0)

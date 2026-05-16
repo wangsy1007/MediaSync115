@@ -28,7 +28,6 @@ from app.api import (
 from app.scheduler import scheduler_manager
 from app.services.auth_service import auth_service
 from app.services.app_metadata_service import app_metadata_service
-from app.services.explore_home_warmup_service import explore_home_warmup_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
@@ -174,12 +173,10 @@ async def lifespan(app: FastAPI):
     await emby_sync_scheduler_service.ensure_sync_task()
     await feiniu_sync_scheduler_service.ensure_sync_task()
     await archive_scheduler_service.ensure_scan_task()
-    explore_home_warmup_service.warmup_in_background(force_refresh=False)
     await tg_bot_service.start()
     global _app_ready
     _app_ready = True
     yield
-    await explore_home_warmup_service.stop()
     await tg_bot_service.stop()
     await scheduler_manager.stop()
     await pansou_service.close()
