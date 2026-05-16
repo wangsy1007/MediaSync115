@@ -65,4 +65,4 @@ async def tg_bot_notify(
             parse_mode,
         )
     except Exception:
-        logger.debug("TG Bot notification failed", exc_info=True)
+        logger.warning("TG Bot notification failed", exc_info=True)

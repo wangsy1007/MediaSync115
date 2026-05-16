@@ -2674,13 +2674,6 @@ class SubscriptionService:
                     record.error_message = None
                     record.file_id = offline_folder_id
                     saved += 1
-                    await self._notify_transfer_success(
-                        sub.title,
-                        record.resource_name,
-                        source,
-                        "离线下载",
-                        getattr(sub, "poster_path", None),
-                    )
                     await operation_log_service.log_background_event(
                         source_type="background_task",
                         module="subscriptions",
@@ -3019,6 +3012,13 @@ class SubscriptionService:
                         record.completed_at = beijing_now()
                     record.error_message = None
                     saved += 1
+                    await self._notify_transfer_success(
+                        sub.title,
+                        record.resource_name,
+                        source,
+                        "已在网盘（跳过重复）",
+                        getattr(sub, "poster_path", None),
+                    )
                     await self._create_step_log(
                         db,
                         run_id=run_id,
@@ -3348,20 +3348,23 @@ class SubscriptionService:
         method: str,
         poster_path: str | None = None,
     ) -> None:
-        """转存成功时通过 TG Bot 发送通知。"""
+        """订阅任务中网盘转存成功（含已在网盘跳过）时通过 TG Bot 推送。"""
+        import logging
+
+        logger = logging.getLogger(__name__)
         try:
             from html import escape
             from app.services.tg_bot.notifications import tg_bot_notify
 
             lines = [
-                f"<b>订阅转存成功</b>",
+                "<b>订阅 · 转存成功</b>",
                 f"订阅：{escape(sub_title)}",
                 f"资源：{escape(resource_name)}",
                 f"来源：{escape(source)}　方式：{escape(method)}",
             ]
             await tg_bot_notify("\n".join(lines), poster_path=poster_path)
         except Exception:
-            pass
+            logger.warning("订阅转存 TG 通知发送失败", exc_info=True)
 
     @staticmethod
     def _split_share_link_and_receive_code(raw_link: str) -> tuple[str, str]:

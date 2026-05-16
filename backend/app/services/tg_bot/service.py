@@ -8,6 +8,14 @@ from telegram.ext import Application
 logger = logging.getLogger(__name__)
 
 
+def _normalize_notify_chat_id(raw: Any) -> int | None:
+    """将配置中的 Chat ID 转为整数（群组常为负数）。"""
+    try:
+        return int(str(raw).strip())
+    except Exception:
+        return None
+
+
 class TgBotService:
     def __init__(self) -> None:
         self._app: Application | None = None
@@ -78,23 +86,50 @@ class TgBotService:
         await self.start()
 
     async def send_notification(self, text: str, parse_mode: str = "HTML") -> None:
-        if not self._running or not self._app:
+        cfg = self._get_settings()
+        if not cfg["enabled"] or not cfg["token"]:
             return
 
-        cfg = self._get_settings()
         chat_ids = cfg.get("notify_chat_ids") or []
         if not chat_ids:
+            logger.debug("TG Bot notify skipped: notify_chat_ids empty")
             return
 
-        for chat_id in chat_ids:
-            try:
-                await self._app.bot.send_message(
-                    chat_id=chat_id,
-                    text=text,
-                    parse_mode=parse_mode,
-                )
-            except Exception:
-                logger.warning("Failed to send notification to chat %s", chat_id)
+        normalized_ids = []
+        for raw in chat_ids:
+            cid = _normalize_notify_chat_id(raw)
+            if cid is not None:
+                normalized_ids.append(cid)
+        if not normalized_ids:
+            logger.debug("TG Bot notify skipped: no valid chat ids")
+            return
+
+        async def _deliver(bot: Bot) -> None:
+            for chat_id in normalized_ids:
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=text,
+                        parse_mode=parse_mode,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to send notification to chat %s", chat_id, exc_info=True
+                    )
+
+        if self._running and self._app and self._app.bot:
+            await _deliver(self._app.bot)
+            return
+
+        try:
+            bot = Bot(cfg["token"])
+            async with bot:
+                await _deliver(bot)
+        except Exception:
+            logger.warning(
+                "TG Bot notify failed (standalone client, polling may be down)",
+                exc_info=True,
+            )
 
     def status(self) -> dict[str, Any]:
         cfg = self._get_settings()

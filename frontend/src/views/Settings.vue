@@ -1409,6 +1409,9 @@
                   style="width: 320px"
                   @keyup.enter="addTgBotNotifyChatId"
                 />
+                <div class="form-hint" style="margin-top: 6px">
+                  订阅扫描自动转存成功后会推送至此会话（需启用 Bot 并填写 Token）。
+                </div>
               </div>
             </el-form-item>
             <el-form-item label="自动解锁 HDHive">
@@ -1427,6 +1430,9 @@
             <el-descriptions-item label="/s <关键词>">搜索影视</el-descriptions-item>
             <el-descriptions-item label="/subs">查看订阅列表</el-descriptions-item>
             <el-descriptions-item label="/run">触发订阅检查</el-descriptions-item>
+            <el-descriptions-item label="订阅转存推送">
+              自动转存成功后推送至上方「通知 Chat ID」（与 Bot 是否轮询无关，仅需启用并配置 Token）
+            </el-descriptions-item>
             <el-descriptions-item label="/status">系统状态</el-descriptions-item>
             <el-descriptions-item label="/offline">离线下载任务</el-descriptions-item>
             <el-descriptions-item label="/recent">最近下载记录</el-descriptions-item>
