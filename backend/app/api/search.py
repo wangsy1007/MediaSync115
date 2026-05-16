@@ -1201,6 +1201,17 @@ def _find_tmdb_source(section_key: str):
     )
 
 
+# 分页偏移 start>0 时压低同步 TMDB 解析条数，降低滚动触底请求的延迟（首屏 start=0 不受影响）
+_DOUBAN_EXPLORE_PAGINATION_SYNC_PRIME_CAP = 18
+
+
+def _douban_explore_sync_prime_limit(limit: int, start: int) -> int:
+    base = library_status_sync_prime_limit(limit)
+    if start > 0:
+        return min(base, _DOUBAN_EXPLORE_PAGINATION_SYNC_PRIME_CAP)
+    return base
+
+
 async def _fetch_popular_section(source, refresh):
     key = source["key"]
     now = time.time()
@@ -1742,7 +1753,7 @@ async def get_explore_section(
         if normalized_source == "douban":
             emby_status_map, feiniu_status_map = await _build_douban_library_status_maps(
                 cached_items,
-                library_status_sync_prime_limit(len(cached_items)),
+                _douban_explore_sync_prime_limit(len(cached_items), start),
             )
         else:
             emby_status_map = await _build_emby_status_map(cached_items)
@@ -1801,7 +1812,7 @@ async def get_explore_section(
             status_code=404, detail=f"Unknown section key: {section_key}"
         )
 
-    library_prime_limit = library_status_sync_prime_limit(limit)
+    library_prime_limit = _douban_explore_sync_prime_limit(limit, start)
     try:
         # 首屏同步解析有限条 TMDB ID，用于媒体库角标；其余条目仍异步回填。
         payload = await fetch_douban_section(
@@ -1857,7 +1868,7 @@ async def get_explore_douban_section(
             status_code=404, detail=f"Unknown section key: {section_key}"
         )
 
-    library_prime_limit = library_status_sync_prime_limit(limit)
+    library_prime_limit = _douban_explore_sync_prime_limit(limit, start)
     try:
         payload = await fetch_douban_section(
             source,

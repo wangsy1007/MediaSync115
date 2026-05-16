@@ -131,10 +131,13 @@ const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342'
 const PRIORITY_POSTER_COUNT = 8
 const API_BATCH_SIZE = 30
 const RENDER_BATCH_SIZE = EXPLORE_SPEED_MODE === 'extreme' ? 30 : 24
-const PREFETCH_BATCH_WINDOW = EXPLORE_SPEED_MODE === 'extreme' ? 3 : 2
-const PREFETCH_CONCURRENCY = EXPLORE_SPEED_MODE === 'extreme' ? 2 : 1
-const PREFETCH_DELAY_MS = EXPLORE_SPEED_MODE === 'extreme' ? 0 : 24
-const PREFETCH_ROOT_MARGIN = EXPLORE_SPEED_MODE === 'extreme' ? '1800px 0px' : '1000px 0px'
+const PREFETCH_BATCH_WINDOW = EXPLORE_SPEED_MODE === 'extreme' ? 4 : 3
+const PREFETCH_CONCURRENCY = EXPLORE_SPEED_MODE === 'extreme' ? 3 : 2
+const PREFETCH_DELAY_MS = EXPLORE_SPEED_MODE === 'extreme' ? 0 : 16
+/** 触底加载哨兵：尽早触发下一轮请求（略大于 prefetch 占位逻辑） */
+const LOAD_ANCHOR_ROOT_MARGIN = EXPLORE_SPEED_MODE === 'extreme'
+  ? '3000px 0px'
+  : '1600px 0px'
 let loadObserver = null
 let prefetchTimer = null
 let prefetchCursor = 0
@@ -194,24 +197,41 @@ const applySubscribedFlags = () => {
   }
 }
 
+/** 仅更新本次状态映射涉及的 TMDB key，避免长列表滚动时全表遍历 */
+const applySubscribedFlagsForTmdbKeys = (tmdbKeys) => {
+  if (!tmdbKeys || !tmdbKeys.size) return
+  for (const item of allItems.value) {
+    const key = buildSubscribedKey(item.media_type, item.tmdb_id)
+    if (key && tmdbKeys.has(key)) applySubscribedFlag(item)
+  }
+}
+
 const mergeEmbyStatusMap = (rawMap = {}) => {
   if (!rawMap || typeof rawMap !== 'object') return
+  const entries = Object.entries(rawMap)
+  if (!entries.length) return
+  const touched = new Set()
   const nextMap = new Map(embyStatusMap.value)
-  for (const [key, value] of Object.entries(rawMap)) {
+  for (const [key, value] of entries) {
     nextMap.set(key, value || {})
+    touched.add(key)
   }
   embyStatusMap.value = nextMap
-  applySubscribedFlags()
+  applySubscribedFlagsForTmdbKeys(touched)
 }
 
 const mergeFeiniuStatusMap = (rawMap = {}) => {
   if (!rawMap || typeof rawMap !== 'object') return
+  const entries = Object.entries(rawMap)
+  if (!entries.length) return
+  const touched = new Set()
   const nextMap = new Map(feiniuStatusMap.value)
-  for (const [key, value] of Object.entries(rawMap)) {
+  for (const [key, value] of entries) {
     nextMap.set(key, value || {})
+    touched.add(key)
   }
   feiniuStatusMap.value = nextMap
-  applySubscribedFlags()
+  applySubscribedFlagsForTmdbKeys(touched)
 }
 
 const normalizeExploreQueueMediaType = (rawType) => {
@@ -862,14 +882,13 @@ const loadMoreData = async () => {
     if (!hasMoreRemote.value && fetchedOnce.value) return
 
     const appended = await fetchNextBatch()
-    if (appended > 0 && !hasHiddenLocal.value) {
-      displayCount.value = Math.min(displayCount.value + RENDER_BATCH_SIZE, allItems.value.length)
+    // 远程追加后 allItems 变长但 displayCount 未变，hasHiddenLocal 恒为 true，必须直接展开否则会卡多轮 reveal
+    if (appended > 0) {
+      displayCount.value = allItems.value.length
       progressed = true
     } else if (displayCount.value === 0) {
       displayCount.value = Math.min(RENDER_BATCH_SIZE, allItems.value.length)
       progressed = displayCount.value > 0
-    } else if (appended > 0) {
-      progressed = true
     }
   } finally {
     schedulePrefetch()
@@ -891,7 +910,7 @@ const setupLoadObserver = () => {
     loadMoreData()
   }, {
     root: null,
-    rootMargin: PREFETCH_ROOT_MARGIN,
+    rootMargin: LOAD_ANCHOR_ROOT_MARGIN,
     threshold: 0.01
   })
 
