@@ -8,8 +8,12 @@ from typing import Any, Optional
 
 import httpx
 
-from fastapi import APIRouter, HTTPException
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from app.services.hdhive_service import hdhive_service
 from app.services.operation_log_service import operation_log_service
@@ -120,6 +124,70 @@ class RuntimeSettingsRequest(BaseModel):
     chart_subscription_sources: Optional[list] = None
     chart_subscription_limit: Optional[int] = None
     chart_subscription_interval_hours: Optional[int] = None
+
+
+_SUBSCRIPTION_SCHEDULER_SETTING_KEYS = frozenset(
+    {
+        "subscription_enabled",
+        "subscription_interval_hours",
+        "subscription_resource_priority",
+        "subscription_hdhive_auto_unlock_enabled",
+        "subscription_hdhive_unlock_max_points_per_item",
+        "subscription_hdhive_unlock_budget_points_per_run",
+        "subscription_hdhive_unlock_threshold_inclusive",
+        "subscription_hdhive_prefer_free",
+        "subscription_offline_transfer_enabled",
+    }
+)
+_CHART_SUBSCRIPTION_SETTING_KEYS = frozenset(
+    {
+        "chart_subscription_enabled",
+        "chart_subscription_sources",
+        "chart_subscription_limit",
+        "chart_subscription_interval_hours",
+    }
+)
+_TG_INDEX_SETTING_KEYS = frozenset(
+    {
+        "tg_index_enabled",
+        "tg_index_realtime_fallback_enabled",
+        "tg_index_query_limit_per_channel",
+        "tg_backfill_batch_size",
+        "tg_incremental_interval_minutes",
+        "tg_channel_usernames",
+        "tg_search_days",
+        "tg_max_messages_per_channel",
+    }
+)
+_HDHIVE_CHECKIN_SETTING_KEYS = frozenset(
+    {
+        "hdhive_auto_checkin_enabled",
+        "hdhive_auto_checkin_mode",
+        "hdhive_auto_checkin_method",
+        "hdhive_auto_checkin_run_time",
+        "hdhive_api_key",
+    }
+)
+_EMBY_SYNC_SETTING_KEYS = frozenset(
+    {
+        "emby_url",
+        "emby_api_key",
+        "emby_sync_enabled",
+        "emby_sync_interval_hours",
+        "emby_sync_interval_minutes",
+    }
+)
+_FEINIU_SYNC_SETTING_KEYS = frozenset(
+    {
+        "feiniu_url",
+        "feiniu_secret",
+        "feiniu_api_key",
+        "feiniu_session_token",
+        "feiniu_sync_enabled",
+        "feiniu_sync_interval_hours",
+        "feiniu_sync_interval_minutes",
+    }
+)
 
 
 class TgVerifyPasswordRequest(BaseModel):
@@ -632,12 +700,24 @@ async def update_runtime_settings(request: RuntimeSettingsRequest):
     _invalidate_settings_check_cache()
     try:
         updated = runtime_settings_service.update_bulk(payload)
-        await subscription_scheduler_service.ensure_subscription_tasks()
-        await subscription_scheduler_service.ensure_chart_subscription_task()
-        await subscription_scheduler_service.ensure_tg_index_incremental_task()
-        await hdhive_checkin_scheduler_service.ensure_checkin_task()
-        await emby_sync_scheduler_service.ensure_sync_task()
-        await feiniu_sync_scheduler_service.ensure_sync_task()
+        payload_keys = set(payload.keys())
+        # 仅同步与本次修改相关的调度任务，且不在保存时立即跑重任务（避免 504）
+        if payload_keys & _SUBSCRIPTION_SCHEDULER_SETTING_KEYS:
+            await subscription_scheduler_service.ensure_subscription_tasks(
+                run_immediately=False
+            )
+        if payload_keys & _CHART_SUBSCRIPTION_SETTING_KEYS:
+            await subscription_scheduler_service.ensure_chart_subscription_task(
+                run_immediately=False
+            )
+        if payload_keys & _TG_INDEX_SETTING_KEYS:
+            await subscription_scheduler_service.ensure_tg_index_incremental_task()
+        if payload_keys & _HDHIVE_CHECKIN_SETTING_KEYS:
+            await hdhive_checkin_scheduler_service.ensure_checkin_task()
+        if payload_keys & _EMBY_SYNC_SETTING_KEYS:
+            await emby_sync_scheduler_service.ensure_sync_task()
+        if payload_keys & _FEINIU_SYNC_SETTING_KEYS:
+            await feiniu_sync_scheduler_service.ensure_sync_task()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1139,24 +1219,29 @@ async def get_tg_bot_status():
     return tg_bot_service.status()
 
 
-@router.post("/tg-bot/restart")
-async def restart_tg_bot():
-    import asyncio
-
+async def _restart_tg_bot_background() -> None:
     from app.services.tg_bot import tg_bot_service
 
     try:
-        await asyncio.wait_for(tg_bot_service.restart(), timeout=45.0)
-        return {"success": True, "running": tg_bot_service.running}
+        await asyncio.wait_for(tg_bot_service.restart(), timeout=60.0)
+        logger.info("TG Bot background restart finished, running=%s", tg_bot_service.running)
     except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=504,
-            detail="TG Bot 重启超时，请检查 Token 与访问 Telegram 的网络",
-        )
-    except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error("TG Bot background restart timed out")
+    except Exception:
+        logger.exception("TG Bot background restart failed")
+
+
+@router.post("/tg-bot/restart")
+async def restart_tg_bot(background_tasks: BackgroundTasks):
+    from app.services.tg_bot import tg_bot_service
+
+    background_tasks.add_task(_restart_tg_bot_background)
+    return {
+        "success": True,
+        "accepted": True,
+        "message": "已在后台重启 Bot，请稍后点击「检测状态」确认",
+        "running": tg_bot_service.running,
+    }
 
 
 @router.post("/tg-bot/stop")

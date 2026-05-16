@@ -3775,10 +3775,12 @@ const handleSaveTgBot = async () => {
     savingTgBot.value = false
   }
 
-  // 重启可能因连接 Telegram 较慢；勿阻塞「保存配置」按钮的 loading
-  if (saved && tgBotForm.value.enabled && String(tgBotForm.value.token || '').trim()) {
-    await handleRestartTgBot()
-  } else if (saved && !tgBotForm.value.enabled) {
+  if (!saved) return
+
+  if (tgBotForm.value.enabled && String(tgBotForm.value.token || '').trim()) {
+    ElMessage.info('配置已保存，正在后台重启 Bot…')
+    handleRestartTgBot({ fromSave: true })
+  } else if (!tgBotForm.value.enabled) {
     try {
       await settingsApi.stopTgBot()
       tgBotStatus.value = { checked: true, running: false }
@@ -3787,11 +3789,20 @@ const handleSaveTgBot = async () => {
     }
   }
 }
-const handleRestartTgBot = async () => {
+const handleRestartTgBot = async ({ fromSave = false } = {}) => {
   restartingTgBot.value = true
   try {
     const { data } = await settingsApi.restartTgBot()
-    tgBotStatus.value = { checked: true, running: data.running }
+    if (data?.accepted) {
+      if (!fromSave) {
+        ElMessage.success(data.message || '已在后台重启 Bot')
+      }
+      window.setTimeout(() => {
+        handleCheckTgBotStatus(true)
+      }, 3000)
+      return
+    }
+    tgBotStatus.value = { checked: true, running: !!data.running }
     ElMessage.success(data.running ? 'TG Bot 已启动' : 'TG Bot 未启动（请检查配置）')
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || 'TG Bot 重启失败')
@@ -3799,13 +3810,17 @@ const handleRestartTgBot = async () => {
     restartingTgBot.value = false
   }
 }
-const handleCheckTgBotStatus = async () => {
+const handleCheckTgBotStatus = async (silent = false) => {
   try {
     const { data } = await settingsApi.getTgBotStatus()
     tgBotStatus.value = { checked: true, running: data.running }
-    ElMessage.info(data.running ? 'TG Bot 运行中' : 'TG Bot 未运行')
+    if (!silent) {
+      ElMessage.info(data.running ? 'TG Bot 运行中' : 'TG Bot 未运行')
+    }
   } catch (error) {
-    ElMessage.error('检测失败')
+    if (!silent) {
+      ElMessage.error('检测失败')
+    }
   }
 }
 

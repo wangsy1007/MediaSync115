@@ -55,3 +55,24 @@ class TestSettings:
         assert response.status_code == 200
         data = response.json()
         assert "has_proxy" in data
+
+    def test_update_tg_bot_runtime_only(self, client: TestClient) -> None:
+        """仅更新 TG Bot 配置时不应阻塞过久"""
+        response = client.put(
+            "/api/settings/runtime",
+            json={
+                "tg_bot_enabled": False,
+                "tg_bot_allowed_users": [],
+                "tg_bot_notify_chat_ids": [],
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    def test_restart_tg_bot_returns_immediately(self, client: TestClient) -> None:
+        """TG Bot 重启接口应立即返回并接受后台任务"""
+        response = client.post("/api/settings/tg-bot/restart")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data.get("accepted") is True
