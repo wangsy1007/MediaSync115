@@ -121,6 +121,10 @@ const props = defineProps({
     type: Object,
     required: true
   },
+  cardWidth: {
+    type: Number,
+    default: 0
+  },
   subscribedIdMap: {
     type: Object,
     default: () => new Map()
@@ -168,12 +172,18 @@ const scrollState = ref({ hasLeft: false, hasRight: false })
 let intersectionObserver = null
 let resizeObserver = null
 
+const resolvedCardWidth = computed(() => {
+  const fromParent = Number(props.cardWidth) || 0
+  if (fromParent > 0) return fromParent
+  return getRecommendCardWidth()
+})
+
 const skeletonCardCount = computed(() => {
   const width = Math.max(containerWidth.value, 0)
   const gap = viewportWidth.value <= 768 ? MOBILE_ROW_GAP : DESKTOP_ROW_GAP
-  const cardWidth = getRecommendCardWidth()
-  if (!width || !cardWidth) return 6
-  const estimatedCount = Math.ceil((width + gap) / (cardWidth + gap))
+  const cardWidthValue = resolvedCardWidth.value
+  if (!width || !cardWidthValue) return 6
+  const estimatedCount = Math.ceil((width + gap) / (cardWidthValue + gap))
   return Math.max(2, Math.min(HOME_SECTION_LIMIT, estimatedCount))
 })
 
@@ -559,7 +569,7 @@ onBeforeUnmount(() => {
     cursor: pointer;
     border: 1px solid var(--ms-border-color);
     background: var(--ms-glass-bg);
-    transition: all 0.3s ease;
+    transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
     overflow: hidden;
 
     &:hover {
@@ -578,11 +588,11 @@ onBeforeUnmount(() => {
         width: 100%;
         height: 100%;
         object-fit: cover;
-        transition: transform 0.4s ease;
       }
 
       &:hover img {
         transform: scale(1.05);
+        transition: transform 0.4s ease;
       }
 
       .emby-badge {

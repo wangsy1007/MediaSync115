@@ -46,6 +46,7 @@
             v-for="section in exploreSections"
             :key="section.key"
             :source="exploreSource"
+            :card-width="cardWidth"
             :section="section"
             :subscribed-id-map="subscribedIdMap"
             :subscribed-douban-ids="subscribedDoubanIds"
@@ -209,6 +210,12 @@ import {
   Star,
   FolderAdd
 } from '@element-plus/icons-vue'
+import {
+  EXPLORE_CARD_GAP,
+  estimateExploreContainerWidth,
+  getInitialExploreCardLayout,
+  resolveExploreCardLayout
+} from '@/utils/exploreCardLayout'
 
 const router = useRouter()
 const route = useRoute()
@@ -231,7 +238,8 @@ const exploreSections = ref([])
 const exploreContainerRef = ref(null)
 const sectionRowRefs = ref({})
 const sectionScrollStates = ref({})
-const cardWidth = ref(188)
+const initialExploreCardLayout = getInitialExploreCardLayout()
+const cardWidth = ref(initialExploreCardLayout.cardWidth)
 const dragState = ref({
   active: false,
   sectionKey: '',
@@ -558,7 +566,7 @@ const goToDoubanDetail = (item) => {
 }
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
-const CARD_GAP = 14
+const CARD_GAP = EXPLORE_CARD_GAP
 const resolveExploreSpeedMode = () => {
   if (typeof window === 'undefined') return 'extreme'
   try {
@@ -576,15 +584,12 @@ const EXPLORE_HERO_POSTER_COUNT = 6
 const HOME_SECTION_PREFETCH_ROUNDS = EXPLORE_SPEED_MODE === 'extreme' ? 3 : 1
 const HOME_SECTION_PREFETCH_DELAY_MS = EXPLORE_SPEED_MODE === 'extreme' ? 12 : 36
 const HOME_SECTION_CACHE_TTL_MS = 5 * 60 * 1000
-const HOME_CARD_MIN_WIDTH = 150
-const HOME_CARD_MAX_WIDTH = 210
-const HOME_CARD_MIN_PER_VIEW = 2
-const HOME_CARD_MAX_PER_VIEW = 9
+let exploreContainerResizeObserver = null
 let sectionResizeObserver = null
 let pressScrollTimer = null
 let scrollStateRafId = 0
 const pendingScrollStateKeys = new Set()
-const cardsPerViewRef = ref(4)
+const cardsPerViewRef = ref(initialExploreCardLayout.cardsPerView)
 const homeSectionBatchCache = new Map()
 const homeSectionBatchInflight = new Map()
 const homeSectionMetaMap = new Map()
@@ -592,25 +597,15 @@ const homeSectionLoadPromises = new Map()
 const homeSectionPrefetchTimers = new Map()
 
 const calculateCardWidth = () => {
-  const width = exploreContainerRef.value?.clientWidth || 0
-  if (!width) return
-
-  const currentViewportWidth = typeof window !== 'undefined' ? window.innerWidth : width
-  if (currentViewportWidth <= 768) {
-    const mobileGap = 10
-    const availableWidth = Math.max(width - 30, 0)
-    const mobileWidth = Math.floor((availableWidth - mobileGap * 1.5) / 2.5)
-    cardWidth.value = Math.max(96, Math.min(132, mobileWidth))
-    cardsPerViewRef.value = 2.5
+  const measuredWidth = exploreContainerRef.value?.clientWidth || 0
+  const width = measuredWidth > 0 ? measuredWidth : estimateExploreContainerWidth()
+  const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : width
+  const layout = resolveExploreCardLayout(width, viewportWidth)
+  if (layout.cardWidth === cardWidth.value && layout.cardsPerView === cardsPerViewRef.value) {
     return
   }
-
-  const estimated = Math.floor((width + CARD_GAP) / (HOME_CARD_MIN_WIDTH + CARD_GAP))
-  const cardsPerView = Math.max(HOME_CARD_MIN_PER_VIEW, Math.min(HOME_CARD_MAX_PER_VIEW, estimated))
-  cardsPerViewRef.value = cardsPerView
-
-  const raw = Math.floor((width - CARD_GAP * (cardsPerView - 1)) / cardsPerView)
-  cardWidth.value = Math.max(HOME_CARD_MIN_WIDTH, Math.min(HOME_CARD_MAX_WIDTH, raw))
+  cardWidth.value = layout.cardWidth
+  cardsPerViewRef.value = layout.cardsPerView
 }
 
 const setSectionRowRef = (sectionKey, el) => {
@@ -1256,6 +1251,8 @@ const initializeExploreHome = async () => {
   ]
   await Promise.allSettled(tasks)
   await nextTick()
+  calculateCardWidth()
+  setupExploreContainerResizeObserver()
   cleanupSectionResizeObserver()
   setupSectionResizeObserver()
   refreshAllSectionScrollStates()
@@ -1735,6 +1732,23 @@ const handleSave = async (item) => {
   processSaveQueue()
 }
 
+const setupExploreContainerResizeObserver = () => {
+  cleanupExploreContainerResizeObserver()
+  if (typeof ResizeObserver === 'undefined' || !exploreContainerRef.value) return
+  exploreContainerResizeObserver = new ResizeObserver(() => {
+    calculateCardWidth()
+    refreshAllSectionScrollStates()
+  })
+  exploreContainerResizeObserver.observe(exploreContainerRef.value)
+}
+
+const cleanupExploreContainerResizeObserver = () => {
+  if (exploreContainerResizeObserver) {
+    exploreContainerResizeObserver.disconnect()
+    exploreContainerResizeObserver = null
+  }
+}
+
 const setupSectionResizeObserver = () => {
   if (typeof ResizeObserver === 'undefined') return
   sectionResizeObserver = new ResizeObserver(() => {
@@ -1758,6 +1772,7 @@ const resetExploreState = () => {
 }
 
 onMounted(async () => {
+  calculateCardWidth()
   loadResourcePriority()
   const restored = await restoreSearchFromRoute()
   if (!restored) {
@@ -1802,6 +1817,7 @@ watch(exploreSource, async (newSource, oldSource) => {
 })
 
 onBeforeUnmount(() => {
+  cleanupExploreContainerResizeObserver()
   cleanupSectionResizeObserver()
   stopExploreQueuePolling()
 })
@@ -1809,7 +1825,7 @@ onBeforeUnmount(() => {
 
 <style lang="scss" scoped>
 .explore-page {
-  animation: fadeIn 0.4s ease;
+  animation: explorePageFadeIn 0.22s ease;
   
   .search-header {
     margin-bottom: 24px;
@@ -1923,7 +1939,8 @@ onBeforeUnmount(() => {
 
           .skeleton-card {
             flex: 0 0 auto;
-            width: 188px;
+            width: var(--recommend-card-width, 188px);
+            min-width: var(--recommend-card-width, 188px);
 
             .skeleton-poster {
               width: 100%;
@@ -2049,7 +2066,7 @@ onBeforeUnmount(() => {
         cursor: pointer;
         border: 1px solid var(--ms-border-color);
         background: var(--ms-glass-bg);
-        transition: all 0.3s ease;
+        transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
         overflow: hidden;
 
         &:hover {
@@ -2639,9 +2656,9 @@ onBeforeUnmount(() => {
   }
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+@keyframes explorePageFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @keyframes skeleton-loading {
