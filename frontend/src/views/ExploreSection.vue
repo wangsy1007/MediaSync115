@@ -101,6 +101,7 @@ import {
   setCachedExploreSectionBatch,
   setExploreSectionBatchInflight
 } from '@/utils/exploreSectionBatchCache'
+import { createExploreLibraryBadgeSyncer } from '@/utils/exploreLibraryBadgeSync'
 const resolveExploreSpeedMode = () => {
   if (typeof window === 'undefined') return 'extreme'
   try {
@@ -152,6 +153,7 @@ const subscribedDoubanIds = ref(new Set()) // 存储豆瓣ID订阅集合
 const subscribedImdbIds = ref(new Set()) // 存储IMDB ID订阅集合
 const embyStatusMap = ref(new Map())
 const feiniuStatusMap = ref(new Map())
+let libraryBadgeSyncer = null
 const EXPLORE_QUEUE_POLL_INTERVAL_MS = 1800
 const queueActiveSaveKeys = ref(new Set())
 let exploreQueuePollTimer = null
@@ -235,6 +237,13 @@ const mergeFeiniuStatusMap = (rawMap = {}) => {
   feiniuStatusMap.value = nextMap
   applySubscribedFlagsForTmdbKeys(touched)
 }
+
+libraryBadgeSyncer = createExploreLibraryBadgeSyncer({
+  getEmbyStatusMap: () => embyStatusMap.value,
+  getFeiniuStatusMap: () => feiniuStatusMap.value,
+  mergeEmbyStatusMap,
+  mergeFeiniuStatusMap
+})
 
 const normalizeExploreQueueMediaType = (rawType) => {
   return String(rawType || '').toLowerCase() === 'tv' ? 'tv' : 'movie'
@@ -401,6 +410,10 @@ const sectionMeta = reactive({
 })
 
 const visibleItems = computed(() => allItems.value.slice(0, displayCount.value))
+const scheduleLibraryBadgeSync = (items) => {
+  const target = Array.isArray(items) ? items : visibleItems.value
+  libraryBadgeSyncer?.schedule(target)
+}
 const hasHiddenLocal = computed(() => displayCount.value < allItems.value.length)
 const hasMoreRemote = computed(() => {
   if (remoteTotal.value <= 0) return false
@@ -765,6 +778,7 @@ const fetchNextBatch = async ({ refresh = false, silent = false } = {}) => {
     mergeEmbyStatusMap(payload?.emby_status_map || {})
     mergeFeiniuStatusMap(payload?.feiniu_status_map || {})
     const { batchItems, payloadStart, payloadCount } = updateSectionMetaFromPayload(payload, requestStart)
+    scheduleLibraryBadgeSync(batchItems)
     nextOffset.value = Math.max(nextOffset.value, payloadStart + payloadCount)
     prefetchCursor = Math.max(prefetchCursor, nextOffset.value)
     fetchedOnce.value = true
@@ -788,7 +802,10 @@ const queuePrefetchBatch = (sectionSource, sectionKey, start, sectionToken) => {
   requestSectionBatch(sectionSource, sectionKey, start, { refresh: false })
     .then((payload) => {
       if (sectionToken !== activeSectionToken) return
-      updateSectionMetaFromPayload(payload, start)
+      mergeEmbyStatusMap(payload?.emby_status_map || {})
+      mergeFeiniuStatusMap(payload?.feiniu_status_map || {})
+      const { batchItems } = updateSectionMetaFromPayload(payload, start)
+      scheduleLibraryBadgeSync(batchItems)
       prefetchedOffsets.add(start)
     })
     .catch(() => {
@@ -957,6 +974,11 @@ watch(() => hasMoreItems.value, async () => {
 watch(() => [displayCount.value, allItems.value.length, hasMoreRemote.value], () => {
   schedulePrefetch()
   scheduleAutoLoadMore()
+  scheduleLibraryBadgeSync()
+})
+
+watch(visibleItems, (items) => {
+  scheduleLibraryBadgeSync(items)
 })
 
 watch(loadAnchorRef, () => {
@@ -975,6 +997,7 @@ onBeforeUnmount(() => {
   stopExploreQueuePolling()
   clearPrefetchTimer()
   disconnectLoadObserver()
+  libraryBadgeSyncer?.dispose()
 })
 </script>
 
