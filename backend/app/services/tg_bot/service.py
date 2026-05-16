@@ -3,6 +3,7 @@ import logging
 from typing import Any
 
 from telegram import Bot
+from telegram.error import NetworkError, TelegramError, TimedOut
 from telegram.ext import Application
 
 logger = logging.getLogger(__name__)
@@ -79,20 +80,46 @@ class TgBotService:
                 )
                 self._running = True
                 logger.info("TG Bot started successfully")
-            except asyncio.TimeoutError:
-                logger.error("TG Bot start timed out (check token and Telegram network)")
-                if partial_app is not None:
-                    await self._shutdown_app(partial_app)
-                self._app = None
-                self._running = False
-                raise TimeoutError("TG Bot 启动超时，请检查 Token 与访问 Telegram 的网络") from None
+            except (asyncio.TimeoutError, TimedOut):
+                await self._abort_start(
+                    partial_app,
+                    "TG Bot 启动超时，主服务将继续运行；请检查 Token 与访问 Telegram 的网络，稍后在设置中重启 Bot",
+                )
+            except NetworkError as exc:
+                await self._abort_start(
+                    partial_app,
+                    "TG Bot 网络异常，主服务将继续运行：%s",
+                    exc,
+                )
+            except TelegramError:
+                await self._abort_start(
+                    partial_app,
+                    "TG Bot 启动失败（Token 或 Telegram API 异常），主服务将继续运行",
+                )
             except Exception:
-                logger.exception("Failed to start TG Bot")
-                if partial_app is not None:
-                    await self._shutdown_app(partial_app)
-                self._app = None
-                self._running = False
-                raise
+                await self._abort_start(
+                    partial_app,
+                    "TG Bot 启动出现未知错误，主服务将继续运行",
+                    exc_info=True,
+                )
+
+    async def _abort_start(
+        self,
+        partial_app: Application | None,
+        message: str,
+        *args: Any,
+        exc_info: bool = False,
+    ) -> None:
+        if exc_info:
+            logger.exception(message, *args)
+        elif args:
+            logger.error(message, *args)
+        else:
+            logger.error(message)
+        if partial_app is not None:
+            await self._shutdown_app(partial_app)
+        self._app = None
+        self._running = False
 
     async def _finish_start(self, app: Application) -> None:
         await app.initialize()
