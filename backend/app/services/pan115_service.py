@@ -690,6 +690,7 @@ class Pan115Service:
                 # 115 离线接口在短时间高频访问时可能返回 405，交由全局队列熔断处理
                 if "code=405" in error_text or "Method Not Allowed" in error_text:
                     if attempt < 2:
+                        await asyncio.sleep(0.5 + attempt * 0.4)
                         continue
                 raise
         else:
@@ -698,6 +699,14 @@ class Pan115Service:
         tasks = data.get("tasks") if isinstance(data, dict) else []
         if not isinstance(tasks, list):
             tasks = []
+        if (
+            not tasks
+            and isinstance(data, dict)
+            and isinstance(data.get("data"), dict)
+        ):
+            nested_tasks = data["data"].get("tasks")
+            if isinstance(nested_tasks, list):
+                tasks = nested_tasks
 
         normalized_tasks: list[dict[str, Any]] = []
         for task in tasks:

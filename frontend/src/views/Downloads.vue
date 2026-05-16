@@ -130,7 +130,7 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { pan115Api } from '@/api'
+import { isBackendUnavailableError, pan115Api, waitForBackendReady } from '@/api'
 import { Refresh } from '@element-plus/icons-vue'
 import { normalizePan115FolderOptions } from '@/utils/pan115'
 
@@ -218,7 +218,37 @@ const getRowPercent = (row) => {
 const normalizeTasks = (data) => {
   if (Array.isArray(data?.tasks)) return data.tasks
   if (Array.isArray(data?.data?.tasks)) return data.data.tasks
+  if (Array.isArray(data?.list)) return data.list
+  if (Array.isArray(data?.data?.list)) return data.data.list
+  if (Array.isArray(data?.data) && data?.data.length && typeof data.data[0] === 'object') {
+    return data.data
+  }
   return []
+}
+
+const OFFLINE_TASKS_TIMEOUT_MS = 75000
+
+const pickOfflineTasksErrorMessage = (error) => {
+  const detail = String(error.response?.data?.detail || '').trim()
+  if (detail) {
+    if (
+      detail.includes('离线任务列表请求过于频繁') ||
+      detail.includes('过于频繁') ||
+      detail.includes('限速')
+    ) {
+      return '115 离线接口限流，请几秒后再试'
+    }
+    return detail
+  }
+  if (error.code === 'ECONNABORTED' || String(error.message || '').toLowerCase().includes('timeout')) {
+    return '请求超时（后端可能在排队访问 115），请稍后重试或再点刷新'
+  }
+  return error.message || '获取离线任务失败'
+}
+
+const fetchOfflineTasksOnce = async () => {
+  const { data } = await pan115Api.getOfflineTasks(1, { timeout: OFFLINE_TASKS_TIMEOUT_MS })
+  return normalizeTasks(data)
 }
 
 const fetchFolders = async (cid = '0') => {
@@ -276,10 +306,38 @@ const fetchOfflineDefaultFolder = async () => {
 const fetchOfflineTasks = async () => {
   loading.value = true
   try {
-    const { data } = await pan115Api.getOfflineTasks()
-    offlineTasks.value = normalizeTasks(data)
+    offlineTasks.value = await fetchOfflineTasksOnce()
   } catch (error) {
-    ElMessage.error('获取离线任务失败')
+    const status = error.response?.status
+    const transient =
+      status === 429 ||
+      status === 502 ||
+      status === 503 ||
+      error.code === 'ECONNABORTED' ||
+      String(error.message || '').toLowerCase().includes('timeout')
+    if (transient) {
+      await new Promise((r) => setTimeout(r, 1500))
+      try {
+        offlineTasks.value = await fetchOfflineTasksOnce()
+        return
+      } catch (e2) {
+        ElMessage.error(pickOfflineTasksErrorMessage(e2))
+        return
+      }
+    }
+    if (isBackendUnavailableError(error)) {
+      const ready = await waitForBackendReady(25000, 1200)
+      if (ready) {
+        try {
+          offlineTasks.value = await fetchOfflineTasksOnce()
+          return
+        } catch (e3) {
+          ElMessage.error(pickOfflineTasksErrorMessage(e3))
+          return
+        }
+      }
+    }
+    ElMessage.error(pickOfflineTasksErrorMessage(error))
   } finally {
     loading.value = false
   }

@@ -433,8 +433,8 @@ export const pan115Api = {
   addOfflineTask: (url, wpPathId = '', title = '') =>
     api.post('/pan115/offline/task', { url, wp_path_id: wpPathId, title }),
   
-  getOfflineTasks: (page = 1) => 
-    api.get('/pan115/offline/tasks', { params: { page } }),
+  getOfflineTasks: (page = 1, config = {}) =>
+    api.get('/pan115/offline/tasks', { params: { page }, ...config }),
   
   deleteOfflineTasks: (hashList) => {
     const list = Array.isArray(hashList) ? hashList : [hashList]
