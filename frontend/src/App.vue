@@ -251,7 +251,7 @@ const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 12
 const showMoreMenu = ref(false)
 const showExploreMenu = ref(false)
 const lastExplorePage = ref('/explore/douban')
-const appVersionLabel = ref('v1.1.32')
+const appVersionLabel = ref('v1.1.33')
 const isLoginRoute = computed(() => route.path === '/login')
 
 const activeMenu = computed(() => {
