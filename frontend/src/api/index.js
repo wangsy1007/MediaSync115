@@ -270,6 +270,7 @@ export const settingsApi = {
   refreshTgIndexStatus: () => api.post('/settings/tg/index/status/refresh'),
   startTgIndexBackfill: (rebuild = false) => api.post('/settings/tg/index/backfill/start', { rebuild }),
   runTgIndexIncremental: () => api.post('/settings/tg/index/incremental/run'),
+  stopTgIndexJob: (jobType) => api.post('/settings/tg/index/stop', { job_type: jobType }),
   getTgIndexJob: (jobId) => api.get(`/settings/tg/index/jobs/${encodeURIComponent(jobId)}`),
   rebuildTgIndex: () => api.post('/settings/tg/index/rebuild'),
   // TG Bot

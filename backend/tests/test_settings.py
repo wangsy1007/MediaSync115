@@ -1,6 +1,8 @@
 """
 设置 API 测试
 """
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -76,3 +78,97 @@ class TestSettings:
         data = response.json()
         assert data["success"] is True
         assert data.get("accepted") is True
+
+    @pytest.mark.asyncio
+    async def test_stop_tg_index_job_keeps_single_flight_until_cancelled(self) -> None:
+        """TG 停止请求应先进入停止中，任务退出后再变为已停止，期间不能重复启动。"""
+        from app.services.tg_sync_service import TgSyncService
+
+        service = TgSyncService()
+        await service._ensure_tables()
+
+        first = await service._create_job(job_type="backfill")
+        first_job_id = str(first["job_id"])
+
+        class FakeTask:
+            def __init__(self) -> None:
+                self.cancelled_with = None
+
+            def done(self) -> bool:
+                return False
+
+            def cancel(self, message: str | None = None) -> None:
+                self.cancelled_with = message
+
+        fake_task = FakeTask()
+        service._job_tasks[first_job_id] = fake_task
+        await service._set_job(first_job_id, status="running", message="执行中")
+
+        stop_result = await service.stop_job("backfill")
+        assert stop_result["success"] is True
+        assert stop_result["job"]["status"] == "cancelling"
+        assert fake_task.cancelled_with == "TG 全量回填停止中"
+
+        second = await service._create_job(job_type="backfill")
+        assert second["already_running"] is True
+        assert second["status"] == "cancelling"
+
+        await service._mark_job_cancelled(first_job_id, "任务已停止")
+        cancelled_job = await service.get_job(first_job_id)
+        assert cancelled_job["status"] == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_tg_index_status_auto_recovers_stale_cancelling_job(self) -> None:
+        """TG 索引状态查询应自动收口没有活跃 task 的停止中任务。"""
+        from app.services.tg_sync_service import TgSyncService
+
+        service = TgSyncService()
+        await service._ensure_tables()
+
+        job = await service._create_job(job_type="incremental")
+        job_id = str(job["job_id"])
+        await service._set_job(job_id, status="cancelling", message="TG 增量同步停止中")
+
+        status = await service.get_status()
+        running_jobs = status.get("running_jobs") or []
+        latest_jobs = status.get("latest_jobs") or []
+
+        assert all(str(item.get("job_id") or "") != job_id for item in running_jobs)
+        recovered = next(item for item in latest_jobs if str(item.get("job_id") or "") == job_id)
+        assert recovered["status"] == "cancelled"
+        assert recovered["message"] == "任务已停止"
+
+    @pytest.mark.asyncio
+    async def test_stop_tg_rebuild_job_is_supported(self) -> None:
+        """TG 索引重建任务应支持停止。"""
+        from app.services.tg_sync_service import TgSyncService
+
+        service = TgSyncService()
+        await service._ensure_tables()
+
+        job = await service._create_job(job_type="backfill_rebuild")
+        job_id = str(job["job_id"])
+
+        class FakeTask:
+            def __init__(self) -> None:
+                self.cancelled_with = None
+
+            def done(self) -> bool:
+                return False
+
+            def cancel(self, message: str | None = None) -> None:
+                self.cancelled_with = message
+
+        fake_task = FakeTask()
+        service._job_tasks[job_id] = fake_task
+        await service._set_job(job_id, status="running", message="执行中")
+
+        stop_result = await service.stop_job("backfill_rebuild")
+        assert stop_result["success"] is True
+        assert stop_result["job"]["status"] == "cancelling"
+        assert fake_task.cancelled_with == "TG 索引重建停止中"
+
+    def test_stop_tg_index_job_requires_auth(self, client: TestClient) -> None:
+        """停止 TG 索引任务接口已注册，未登录时应走统一鉴权。"""
+        response = client.post("/api/settings/tg/index/stop", json={"job_type": "backfill"})
+        assert response.status_code == 401
