@@ -30,6 +30,9 @@
             @error="handleImageError"
           />
           <div class="rank">#{{ item.rank }}</div>
+          <div v-if="getExploreItemRating(item)" class="rating-badge">
+            {{ formatExploreItemRating(item) }}
+          </div>
           <LibraryBadge
             v-if="item.isInMediaLibrary"
             class="emby-badge"
@@ -427,6 +430,17 @@ const formatExploreCount = (value) => {
   const total = Number(value) || 0
   if (total > 100) return '100+'
   return String(total)
+}
+
+const getExploreItemRating = (item) => {
+  const rating = Number(item?.rating ?? item?.vote_average)
+  if (!Number.isFinite(rating) || rating <= 0) return null
+  return rating
+}
+
+const formatExploreItemRating = (item) => {
+  const rating = getExploreItemRating(item)
+  return rating ? rating.toFixed(1) : ''
 }
 
 const clearPrefetchTimer = () => {
@@ -1060,9 +1074,31 @@ onBeforeUnmount(() => {
 
       .emby-badge {
         position: absolute;
+        right: 8px;
+        bottom: 8px;
+        z-index: 4;
+      }
+
+      .rating-badge {
+        position: absolute;
         top: 8px;
         right: 8px;
         z-index: 4;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 48px;
+        height: 28px;
+        padding: 0 10px;
+        border: none;
+        border-radius: 999px;
+        background: rgba(14, 32, 54, 0.78);
+        color: var(--ms-accent-warning);
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1;
+        box-shadow: 0 4px 12px rgba(4, 16, 30, 0.22);
+        backdrop-filter: blur(6px);
       }
 
       img {
