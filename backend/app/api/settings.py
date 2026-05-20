@@ -203,6 +203,10 @@ class TgIndexBackfillRequest(BaseModel):
     rebuild: Optional[bool] = False
 
 
+class TgIndexStopRequest(BaseModel):
+    job_type: str
+
+
 class HDHiveCheckinRequest(BaseModel):
     mode: Optional[str] = None
     method: Optional[str] = None
@@ -1178,6 +1182,14 @@ async def run_tg_index_incremental():
             "success": True,
             "job": job,
         }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/tg/index/stop")
+async def stop_tg_index_job(payload: TgIndexStopRequest):
+    try:
+        return await tg_sync_service.stop_job(payload.job_type)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

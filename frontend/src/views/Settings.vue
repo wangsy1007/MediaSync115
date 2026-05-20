@@ -736,10 +736,29 @@
               <el-button :loading="refreshingTgIndexStatusTask" @click="handleRefreshTgIndexStatus">
                 刷新索引状态
               </el-button>
-              <el-button :loading="runningTgBackfill" @click="handleStartTgBackfill">开始全量回填</el-button>
-              <el-button :loading="runningTgIncremental" @click="handleRunTgIncremental">执行一次增量同步</el-button>
-              <el-button type="danger" plain :loading="rebuildingTgIndex" @click="handleRebuildTgIndex">
-                重建索引
+              <el-button
+                :type="runningTgBackfill ? 'danger' : 'default'"
+                :plain="runningTgBackfill"
+                :loading="stoppingTgBackfill"
+                @click="runningTgBackfill ? handleStopTgBackfill() : handleStartTgBackfill()"
+              >
+                {{ runningTgBackfill ? '停止全量回填' : '开始全量回填' }}
+              </el-button>
+              <el-button
+                :type="runningTgIncremental ? 'danger' : 'default'"
+                :plain="runningTgIncremental"
+                :loading="stoppingTgIncremental"
+                @click="runningTgIncremental ? handleStopTgIncremental() : handleRunTgIncremental()"
+              >
+                {{ runningTgIncremental ? '停止增量同步' : '执行一次增量同步' }}
+              </el-button>
+              <el-button
+                type="danger"
+                plain
+                :loading="stoppingTgRebuild"
+                @click="rebuildingTgIndex ? handleStopTgRebuild() : handleRebuildTgIndex()"
+              >
+                {{ rebuildingTgIndex ? '停止重建索引' : '重建索引' }}
               </el-button>
             </el-form-item>
           </el-form>
@@ -1974,6 +1993,9 @@ const refreshingTgIndexStatusTask = ref(false)
 const runningTgBackfill = ref(false)
 const runningTgIncremental = ref(false)
 const rebuildingTgIndex = ref(false)
+const stoppingTgBackfill = ref(false)
+const stoppingTgIncremental = ref(false)
+const stoppingTgRebuild = ref(false)
 const savingTmdb = ref(false)
 const savingScheduler = ref(false)
 const savingResourcePriority = ref(false)
@@ -2125,6 +2147,8 @@ const getTgIndexJobStatusText = (status) => {
   const value = String(status || '').trim()
   if (value === 'queued') return '排队中'
   if (value === 'running') return '执行中'
+  if (value === 'cancelling') return '停止中'
+  if (value === 'cancelled') return '已停止'
   if (value === 'success') return '成功'
   if (value === 'partial') return '部分成功'
   if (value === 'failed') return '失败'
@@ -2136,6 +2160,8 @@ const getTgIndexJobStatusType = (status) => {
   const value = String(status || '').trim()
   if (value === 'success') return 'success'
   if (value === 'partial') return 'warning'
+  if (value === 'cancelling') return 'warning'
+  if (value === 'cancelled') return 'warning'
   if (value === 'failed') return 'danger'
   if (value === 'running') return 'primary'
   return 'info'
@@ -3495,6 +3521,23 @@ const handleStartTgBackfill = async () => {
   }
 }
 
+const handleStopTgBackfill = async () => {
+  stoppingTgBackfill.value = true
+  try {
+    const { data } = await settingsApi.stopTgIndexJob('backfill')
+    await fetchTgIndexStatus(false)
+    if (data?.success) {
+      ElMessage.success(data.message || 'TG 全量回填停止中')
+    } else {
+      ElMessage.info(data?.message || '当前没有运行中的 TG 全量回填任务')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '停止 TG 全量回填失败')
+  } finally {
+    stoppingTgBackfill.value = false
+  }
+}
+
 const handleRunTgIncremental = async () => {
   try {
     const { data } = await settingsApi.runTgIndexIncremental()
@@ -3510,6 +3553,23 @@ const handleRunTgIncremental = async () => {
   }
 }
 
+const handleStopTgIncremental = async () => {
+  stoppingTgIncremental.value = true
+  try {
+    const { data } = await settingsApi.stopTgIndexJob('incremental')
+    await fetchTgIndexStatus(false)
+    if (data?.success) {
+      ElMessage.success(data.message || 'TG 增量同步停止中')
+    } else {
+      ElMessage.info(data?.message || '当前没有运行中的 TG 增量同步任务')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '停止 TG 增量同步失败')
+  } finally {
+    stoppingTgIncremental.value = false
+  }
+}
+
 const handleRebuildTgIndex = async () => {
   try {
     const { data } = await settingsApi.rebuildTgIndex()
@@ -3522,6 +3582,23 @@ const handleRebuildTgIndex = async () => {
     }
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '启动 TG 索引重建失败')
+  }
+}
+
+const handleStopTgRebuild = async () => {
+  stoppingTgRebuild.value = true
+  try {
+    const { data } = await settingsApi.stopTgIndexJob('backfill_rebuild')
+    await fetchTgIndexStatus(false)
+    if (data?.success) {
+      ElMessage.success(data.message || 'TG 索引重建停止中')
+    } else {
+      ElMessage.info(data?.message || '当前没有运行中的 TG 索引重建任务')
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '停止 TG 索引重建失败')
+  } finally {
+    stoppingTgRebuild.value = false
   }
 }
 

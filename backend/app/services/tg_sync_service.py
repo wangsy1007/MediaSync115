@@ -20,9 +20,15 @@ class TgSyncService:
     def __init__(self) -> None:
         self._job_lock = asyncio.Lock()
         self._mutating_job_types = {"backfill", "backfill_rebuild", "incremental"}
+        self._job_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._cancelled_job_ids: set[str] = set()
 
     async def _ensure_tables(self) -> None:
         await ensure_tables_exist("tg_message_index", "tg_sync_state", "tg_sync_jobs")
+
+    def _is_task_active(self, job_id: str) -> bool:
+        task = self._job_tasks.get(job_id)
+        return bool(task is not None and not task.done())
 
     @staticmethod
     def _serialize_job(job: TgSyncJob) -> dict[str, Any]:
@@ -86,6 +92,48 @@ class TgSyncService:
                 job.updated_at = beijing_now()
                 await db.commit()
 
+    def _register_job_task(self, job_id: str, task: asyncio.Task[Any]) -> None:
+        self._job_tasks[job_id] = task
+        self._cancelled_job_ids.discard(job_id)
+
+        def _cleanup(done_task: asyncio.Task[Any]) -> None:
+            current = self._job_tasks.get(job_id)
+            if current is done_task:
+                self._job_tasks.pop(job_id, None)
+            self._cancelled_job_ids.discard(job_id)
+
+        task.add_done_callback(_cleanup)
+
+    async def _mark_job_cancelling(self, job_id: str, message: str) -> None:
+        self._cancelled_job_ids.add(job_id)
+        await self._set_job(
+            job_id,
+            status="cancelling",
+            message=message,
+        )
+
+    async def _mark_job_cancelled(self, job_id: str, message: str) -> None:
+        self._cancelled_job_ids.discard(job_id)
+        await self._set_job(
+            job_id,
+            status="cancelled",
+            message=message,
+            finished_at=beijing_now(),
+        )
+
+    async def _check_cancelled(self, job_id: str) -> None:
+        task = asyncio.current_task()
+        if job_id in self._cancelled_job_ids or (task is not None and task.cancelling()):
+            raise asyncio.CancelledError("任务已停止")
+
+    @staticmethod
+    def _clear_current_task_cancellation() -> None:
+        task = asyncio.current_task()
+        if task is None:
+            return
+        while task.cancelling():
+            task.uncancel()
+
     async def _create_job(self, *, job_type: str) -> dict[str, Any]:
         async with self._job_lock:
             await self._ensure_tables()
@@ -94,7 +142,7 @@ class TgSyncService:
                     running_result = await db.execute(
                         select(TgSyncJob)
                         .where(
-                            TgSyncJob.status.in_(("queued", "running")),
+                            TgSyncJob.status.in_(("queued", "running", "cancelling")),
                             TgSyncJob.job_type.in_(tuple(self._mutating_job_types)),
                         )
                         .order_by(TgSyncJob.started_at.desc(), TgSyncJob.id.desc())
@@ -104,7 +152,7 @@ class TgSyncService:
                     running_result = await db.execute(
                         select(TgSyncJob)
                         .where(
-                            TgSyncJob.status.in_(("queued", "running")),
+                            TgSyncJob.status.in_(("queued", "running", "cancelling")),
                             TgSyncJob.job_type == job_type,
                         )
                         .order_by(TgSyncJob.started_at.desc(), TgSyncJob.id.desc())
@@ -227,6 +275,7 @@ class TgSyncService:
                 iter_kwargs["min_id"] = min_id
 
             async for message in client.iter_messages(entity, **iter_kwargs):
+                await self._check_cancelled(job_id)
                 processed_messages += 1
                 msg_id = int(getattr(message, "id", 0) or 0)
                 msg_date = getattr(message, "date", None)
@@ -269,8 +318,10 @@ class TgSyncService:
                         indexed_rows=indexed_rows,
                         message=f"同步中：{channel} 已处理 {processed_messages} 条消息",
                     )
+                    await self._check_cancelled(job_id)
 
             if rows_buffer:
+                await self._check_cancelled(job_id)
                 indexed_rows += await tg_index_service.upsert_rows(rows_buffer)
 
             await self._touch_state(
@@ -341,6 +392,7 @@ class TgSyncService:
             errors: list[str] = []
 
             for index, channel in enumerate(channels, start=1):
+                await self._check_cancelled(job_id)
                 await self._set_job(
                     job_id,
                     current_channel=channel,
@@ -362,6 +414,7 @@ class TgSyncService:
                     total_indexed += int(result["indexed_rows"])
                 except FloodWaitError as exc:
                     wait_seconds = int(getattr(exc, "seconds", 5) or 5)
+                    await self._check_cancelled(job_id)
                     await asyncio.sleep(wait_seconds)
                     errors.append(
                         f"{channel}: 触发 Telegram 频控，等待 {wait_seconds} 秒后继续"
@@ -393,6 +446,18 @@ class TgSyncService:
                     "indexed": total_indexed,
                     "errors": errors[:5],
                 },
+            )
+        except asyncio.CancelledError as exc:
+            message = str(exc) or "TG 全量回填已停止"
+            self._clear_current_task_cancellation()
+            await self._mark_job_cancelled(job_id, message)
+            await operation_log_service.log_background_event(
+                source_type="background_task",
+                module="tg_sync",
+                action="tg.sync.backfill.cancel",
+                status="warning",
+                message=message,
+                extra={"job_id": job_id},
             )
         except Exception as exc:
             await self._set_job(
@@ -435,6 +500,7 @@ class TgSyncService:
             errors: list[str] = []
 
             for index, channel in enumerate(channels, start=1):
+                await self._check_cancelled(job_id)
                 await self._set_job(
                     job_id,
                     current_channel=channel,
@@ -458,6 +524,7 @@ class TgSyncService:
                     total_indexed += int(result["indexed_rows"])
                 except FloodWaitError as exc:
                     wait_seconds = int(getattr(exc, "seconds", 5) or 5)
+                    await self._check_cancelled(job_id)
                     await asyncio.sleep(wait_seconds)
                     errors.append(
                         f"{channel}: 触发 Telegram 频控，等待 {wait_seconds} 秒后继续"
@@ -490,6 +557,18 @@ class TgSyncService:
                     "errors": errors[:5],
                 },
             )
+        except asyncio.CancelledError as exc:
+            message = str(exc) or "TG 增量同步已停止"
+            self._clear_current_task_cancellation()
+            await self._mark_job_cancelled(job_id, message)
+            await operation_log_service.log_background_event(
+                source_type="background_task",
+                module="tg_sync",
+                action="tg.sync.incremental.cancel",
+                status="warning",
+                message=message,
+                extra={"job_id": job_id},
+            )
         except Exception as exc:
             await self._set_job(
                 job_id,
@@ -510,7 +589,10 @@ class TgSyncService:
     async def start_status_refresh(self) -> dict[str, Any]:
         job = await self._create_job(job_type="status_refresh")
         if not job.get("already_running"):
-            asyncio.create_task(self._run_refresh_status(str(job.get("job_id") or "")))
+            task = asyncio.create_task(
+                self._run_refresh_status(str(job.get("job_id") or ""))
+            )
+            self._register_job_task(str(job.get("job_id") or ""), task)
         return job
 
     async def start_backfill(self, *, rebuild: bool = False) -> dict[str, Any]:
@@ -518,16 +600,64 @@ class TgSyncService:
             job_type="backfill_rebuild" if rebuild else "backfill"
         )
         if not job.get("already_running"):
-            asyncio.create_task(
+            task = asyncio.create_task(
                 self._run_backfill(str(job.get("job_id") or ""), rebuild)
             )
+            self._register_job_task(str(job.get("job_id") or ""), task)
         return job
 
     async def run_incremental_once(self) -> dict[str, Any]:
         job = await self._create_job(job_type="incremental")
         if not job.get("already_running"):
-            asyncio.create_task(self._run_incremental(str(job.get("job_id") or "")))
+            task = asyncio.create_task(
+                self._run_incremental(str(job.get("job_id") or ""))
+            )
+            self._register_job_task(str(job.get("job_id") or ""), task)
         return job
+
+    async def stop_job(self, job_type: str) -> dict[str, Any]:
+        normalized_job_type = str(job_type or "").strip().lower()
+        if normalized_job_type not in {"backfill", "backfill_rebuild", "incremental"}:
+            raise ValueError("仅支持停止 TG 全量回填、重建索引或增量同步任务")
+
+        await self._ensure_tables()
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(TgSyncJob)
+                .where(
+                    TgSyncJob.status.in_(("queued", "running", "cancelling")),
+                    TgSyncJob.job_type == normalized_job_type,
+                )
+                .order_by(TgSyncJob.started_at.desc(), TgSyncJob.id.desc())
+                .limit(1)
+            )
+            job = result.scalar_one_or_none()
+
+        if job is None:
+            return {
+                "success": False,
+                "message": "当前没有可停止的 TG 任务",
+                "job": None,
+            }
+
+        if normalized_job_type == "backfill":
+            stop_message = "TG 全量回填停止中"
+        elif normalized_job_type == "backfill_rebuild":
+            stop_message = "TG 索引重建停止中"
+        else:
+            stop_message = "TG 增量同步停止中"
+        await self._mark_job_cancelling(job.job_id, stop_message)
+        task = self._job_tasks.get(job.job_id)
+        if task and not task.done():
+            task.cancel(stop_message)
+        else:
+            await self._mark_job_cancelled(job.job_id, "任务已停止")
+
+        return {
+            "success": True,
+            "message": stop_message,
+            "job": await self.get_job(job.job_id),
+        }
 
     async def get_status(self) -> dict[str, Any]:
         await self._ensure_tables()
@@ -536,7 +666,7 @@ class TgSyncService:
         async with async_session_maker() as db:
             running_result = await db.execute(
                 select(TgSyncJob)
-                .where(TgSyncJob.status.in_(("queued", "running")))
+                .where(TgSyncJob.status.in_(("queued", "running", "cancelling")))
                 .order_by(TgSyncJob.started_at.desc(), TgSyncJob.id.desc())
             )
             latest_result = await db.execute(
@@ -551,10 +681,40 @@ class TgSyncService:
                 self._serialize_job(item) for item in latest_result.scalars().all()
             ]
 
+        normalized_running_jobs: list[dict[str, Any]] = []
+        for job in running_jobs:
+            job_id = str(job.get("job_id") or "").strip()
+            if (
+                str(job.get("status") or "").strip() == "cancelling"
+                and job_id
+                and not self._is_task_active(job_id)
+            ):
+                await self._mark_job_cancelled(job_id, "任务已停止")
+                continue
+            normalized_running_jobs.append(job)
+
+        normalized_latest_jobs: list[dict[str, Any]] = []
+        for job in latest_jobs:
+            job_id = str(job.get("job_id") or "").strip()
+            if (
+                str(job.get("status") or "").strip() == "cancelling"
+                and job_id
+                and not self._is_task_active(job_id)
+            ):
+                normalized_latest_jobs.append(
+                    {
+                        **job,
+                        "status": "cancelled",
+                        "message": "任务已停止",
+                    }
+                )
+                continue
+            normalized_latest_jobs.append(job)
+
         return {
             "index": index_status,
-            "running_jobs": running_jobs,
-            "latest_jobs": latest_jobs,
+            "running_jobs": normalized_running_jobs,
+            "latest_jobs": normalized_latest_jobs,
         }
 
     async def _prune_jobs(self, db) -> None:
