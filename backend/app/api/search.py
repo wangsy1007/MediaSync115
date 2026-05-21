@@ -372,6 +372,16 @@ async def _build_emby_status_map(
     if not candidates:
         return {}
 
+    # 检查 Emby 是否已配置
+    if not (
+        runtime_settings_service.get_emby_url().strip()
+        and runtime_settings_service.get_emby_api_key().strip()
+    ):
+        return {
+            key: {"exists_in_emby": False, "status": "not_configured", "matched_type": ""}
+            for key, _, _ in candidates
+        }
+
     status_map: dict[str, dict[str, Any]] = {}
     uncached: list[tuple[str, str, int]] = []
     for cache_key, media_type, tmdb_id in candidates:
@@ -381,23 +391,23 @@ async def _build_emby_status_map(
             continue
         uncached.append((cache_key, media_type, tmdb_id))
 
-    results = await asyncio.gather(
-        *(
-            _resolve_emby_status_payload(media_type, tmdb_id)
-            for _, media_type, tmdb_id in uncached
-        ),
-        return_exceptions=True,
-    )
-    for (cache_key, _, _), result in zip(uncached, results):
-        if isinstance(result, Exception):
-            payload = {
-                "exists_in_emby": False,
-                "status": "request_failed",
-                "matched_type": "",
-            }
-            logger.warning("resolve emby status failed for %s: %s", cache_key, result)
-        else:
-            payload = result
+    if not uncached:
+        return status_map
+
+    # 使用批量查询替代逐条 asyncio.gather，避免 N+1 DB 会话问题
+    try:
+        batch_results = await emby_sync_index_service.batch_check_status(uncached)
+    except Exception as exc:
+        logger.warning("emby batch_check_status failed, falling back: %s", exc)
+        batch_results = {
+            key: {"exists_in_emby": False, "status": "request_failed", "matched_type": ""}
+            for key, _, _ in uncached
+        }
+
+    for cache_key, _, _ in uncached:
+        payload = batch_results.get(cache_key, {
+            "exists_in_emby": False, "status": "request_failed", "matched_type": ""
+        })
         status_map[cache_key] = payload
         await _set_cached_emby_badge_status(cache_key, payload)
 
@@ -468,6 +478,13 @@ async def _build_feiniu_status_map(
     if not candidates:
         return {}
 
+    # 检查飞牛是否已配置
+    if not runtime_settings_service.get_feiniu_url().strip():
+        return {
+            key: {"exists_in_feiniu": False, "status": "not_configured", "matched_type": ""}
+            for key, _, _ in candidates
+        }
+
     status_map: dict[str, dict[str, Any]] = {}
     uncached: list[tuple[str, str, int]] = []
     for cache_key, media_type, tmdb_id in candidates:
@@ -477,23 +494,23 @@ async def _build_feiniu_status_map(
             continue
         uncached.append((cache_key, media_type, tmdb_id))
 
-    results = await asyncio.gather(
-        *(
-            _resolve_feiniu_status_payload(media_type, tmdb_id)
-            for _, media_type, tmdb_id in uncached
-        ),
-        return_exceptions=True,
-    )
-    for (cache_key, _, _), result in zip(uncached, results):
-        if isinstance(result, Exception):
-            payload = {
-                "exists_in_feiniu": False,
-                "status": "request_failed",
-                "matched_type": "",
-            }
-            logger.warning("resolve feiniu status failed for %s: %s", cache_key, result)
-        else:
-            payload = result
+    if not uncached:
+        return status_map
+
+    # 使用批量查询替代逐条 asyncio.gather，避免 N+1 DB 会话问题
+    try:
+        batch_results = await feiniu_sync_index_service.batch_check_status(uncached)
+    except Exception as exc:
+        logger.warning("feiniu batch_check_status failed, falling back: %s", exc)
+        batch_results = {
+            key: {"exists_in_feiniu": False, "status": "request_failed", "matched_type": ""}
+            for key, _, _ in uncached
+        }
+
+    for cache_key, _, _ in uncached:
+        payload = batch_results.get(cache_key, {
+            "exists_in_feiniu": False, "status": "request_failed", "matched_type": ""
+        })
         status_map[cache_key] = payload
         await _set_cached_feiniu_badge_status(cache_key, payload)
 

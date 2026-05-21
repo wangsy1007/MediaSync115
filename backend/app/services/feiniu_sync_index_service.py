@@ -98,6 +98,79 @@ class FeiniuSyncIndexService:
             await self._ensure_tables()
             return await self._get_movie_status(tmdb_id)
 
+    async def batch_check_status(
+        self, candidates: list[tuple[str, str, int]]
+    ) -> dict[str, dict[str, Any]]:
+        """批量查询飞牛在库状态，避免逐条开 session 的 N+1 问题。"""
+        if not candidates:
+            return {}
+
+        try:
+            has_snapshot = await self.has_successful_snapshot()
+        except Exception:
+            has_snapshot = False
+
+        if not has_snapshot:
+            return {
+                key: {"exists_in_feiniu": False, "status": "cache_unavailable", "matched_type": ""}
+                for key, _, _ in candidates
+            }
+
+        movie_candidates = [(key, tmdb_id) for key, mt, tmdb_id in candidates if mt == "movie" and tmdb_id > 0]
+        tv_candidates = [(key, tmdb_id) for key, mt, tmdb_id in candidates if mt == "tv" and tmdb_id > 0]
+
+        result_map: dict[str, dict[str, Any]] = {}
+
+        try:
+            async with async_session_maker() as db:
+                if movie_candidates:
+                    movie_tmdb_ids = [tmdb_id for _, tmdb_id in movie_candidates]
+                    rows = await db.execute(
+                        select(FeiniuMediaIndex).where(
+                            FeiniuMediaIndex.media_type == "movie",
+                            FeiniuMediaIndex.tmdb_id.in_(movie_tmdb_ids),
+                        )
+                    )
+                    found_movies = {row.tmdb_id: row for row in rows.scalars().all()}
+                    for key, tmdb_id in movie_candidates:
+                        row = found_movies.get(tmdb_id)
+                        item_ids = self._parse_json_list(row.feiniu_item_ids_json) if row else []
+                        exists = bool(item_ids)
+                        result_map[key] = {
+                            "exists_in_feiniu": exists,
+                            "status": "ok",
+                            "matched_type": "movie" if exists else "",
+                        }
+
+                if tv_candidates:
+                    tv_tmdb_ids = [tmdb_id for _, tmdb_id in tv_candidates]
+                    rows = await db.execute(
+                        select(FeiniuTvEpisodeIndex.tmdb_id).where(
+                            FeiniuTvEpisodeIndex.tmdb_id.in_(tv_tmdb_ids),
+                        ).distinct()
+                    )
+                    found_tv_ids = {row[0] for row in rows.all()}
+                    for key, tmdb_id in tv_candidates:
+                        exists = tmdb_id in found_tv_ids
+                        result_map[key] = {
+                            "exists_in_feiniu": exists,
+                            "status": "ok",
+                            "matched_type": "tv" if exists else "",
+                        }
+
+                await db.commit()
+        except Exception as exc:
+            logger.warning("feiniu batch_check_status failed: %s", exc)
+            for key, _, _ in candidates:
+                if key not in result_map:
+                    result_map[key] = {"exists_in_feiniu": False, "status": "request_failed", "matched_type": ""}
+
+        for key, _, _ in candidates:
+            if key not in result_map:
+                result_map[key] = {"exists_in_feiniu": False, "status": "ok", "matched_type": ""}
+
+        return result_map
+
     async def _get_movie_status(self, tmdb_id: int) -> dict[str, Any] | None:
         normalized_tmdb_id = int(tmdb_id or 0)
         if normalized_tmdb_id <= 0:
