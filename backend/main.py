@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -168,6 +169,21 @@ async def lifespan(app: FastAPI):
     await scheduler_manager.init()
     global _app_ready
     _app_ready = True
+
+    # 后台预热探索页 section 缓存，避免用户首次打开等 20~30 秒
+    async def _warm_explore_cache():
+        try:
+            from app.api.search import get_explore_sections
+            await get_explore_sections(source="douban", limit=12, refresh=False)
+        except Exception:
+            pass
+        try:
+            from app.api.search import get_explore_sections
+            await get_explore_sections(source="tmdb", limit=12, refresh=False)
+        except Exception:
+            pass
+
+    asyncio.create_task(_warm_explore_cache())
     await subscription_scheduler_service.ensure_subscription_tasks(
         run_immediately=False,
     )
