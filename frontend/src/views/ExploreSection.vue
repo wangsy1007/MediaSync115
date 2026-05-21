@@ -950,6 +950,8 @@ const fetchSection = async () => {
     prefetchCursor = Math.max(prefetchCursor, nextOffset.value)
     schedulePrefetch()
     await nextTick()
+    // 确保首批条目的角标状态被正确应用（emby/feiniu status map 已在 fetchNextBatch 中 merge）
+    applySubscribedFlags()
     setupLoadObserver()
   } catch (error) {
     resetSectionState()
