@@ -109,7 +109,9 @@
         <el-main class="app-main" :class="{ 'has-dock': isCompact }">
           <router-view v-slot="{ Component, route: currentRoute }">
             <transition name="page-fade" mode="out-in">
-              <component :is="Component" :key="currentRoute.fullPath" />
+              <keep-alive :include="keepAlivePages" :max="keepAliveMax">
+                <component :is="Component" :key="currentRoute.fullPath" />
+              </keep-alive>
             </transition>
           </router-view>
         </el-main>
@@ -253,6 +255,10 @@ const showExploreMenu = ref(false)
 const lastExplorePage = ref('/explore/douban')
 const appVersionLabel = ref('v1.1.33')
 const isLoginRoute = computed(() => route.path === '/login')
+
+// 需要缓存的页面组件名（探索首页 + 更多页），返回时保持滚动位置和数据状态
+const keepAlivePages = ['Search', 'ExploreSection']
+const keepAliveMax = 5
 
 const activeMenu = computed(() => {
   // 处理首页重定向

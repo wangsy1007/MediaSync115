@@ -98,7 +98,15 @@ const routes = [
 
 const router = createRouter({
   history: createWebHistory(),
-  routes
+  routes,
+  scrollBehavior(to, from, savedPosition) {
+    // 浏览器后退/前进时恢复之前的滚动位置
+    if (savedPosition) {
+      return savedPosition
+    }
+    // 新导航默认滚动到顶部
+    return { top: 0 }
+  }
 })
 
 let authSessionCache = readAuthSessionHint()

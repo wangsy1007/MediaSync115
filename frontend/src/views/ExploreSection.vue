@@ -95,6 +95,8 @@ import { searchApi, subscriptionApi } from '@/api'
 import { Star, FolderAdd } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import TmdbSetupPrompt from '@/components/explore/TmdbSetupPrompt.vue'
+
+defineOptions({ name: 'ExploreSection' })
 import {
   getCachedExploreSectionBatch,
   getExploreSectionBatchInflight,

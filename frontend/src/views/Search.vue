@@ -225,6 +225,8 @@ import {
   setExploreSectionBatchInflight
 } from '@/utils/exploreSectionBatchCache'
 
+defineOptions({ name: 'Search' })
+
 const router = useRouter()
 const route = useRoute()
 
