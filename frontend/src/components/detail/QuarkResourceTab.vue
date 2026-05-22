@@ -1,7 +1,8 @@
 <template>
   <div class="quark-resource-tab">
-    <el-tabs v-model="activeSubTab" class="source-tabs">
-      <el-tab-pane label="Pansou" name="pansou">
+    <el-tabs v-if="orderedQuarkSubTabs.length" v-model="activeSubTab" class="source-tabs">
+      <template v-for="key in orderedQuarkSubTabs" :key="key">
+      <el-tab-pane v-if="key === 'quark_pansou'" label="Pansou" name="pansou">
         <div class="resource-tools">
           <el-button size="small" type="primary" plain :loading="loading.pansou"
             @click="fetchResources('pansou', true)">
@@ -41,7 +42,7 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="HDHive" name="hdhive">
+      <el-tab-pane v-else-if="key === 'quark_hdhive'" label="HDHive" name="hdhive">
         <div class="resource-tools">
           <el-button size="small" type="primary" plain :loading="loading.hdhive"
             @click="fetchResources('hdhive', true)">
@@ -81,7 +82,7 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="Telegram" name="tg">
+      <el-tab-pane v-else-if="key === 'quark_tg'" label="Telegram" name="tg">
         <div class="resource-tools">
           <el-button size="small" type="primary" plain :loading="loading.tg"
             @click="fetchResources('tg', true)">
@@ -93,7 +94,9 @@
             description="TG 索引暂未支持夸克链接，将在后续版本扩展" />
         </div>
       </el-tab-pane>
+      </template>
     </el-tabs>
+    <el-empty v-else description="请在设置 → 界面设置中启用夸克网盘子标签页" />
 
     <el-alert v-if="!quarkConfigured" type="warning" :closable="false" class="cookie-warning">
       <template #title>
@@ -108,6 +111,11 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { searchApi, quarkApi } from '@/api'
+import {
+  getFirstVisibleSubTabName,
+  getOrderedVisibleSubTabs,
+  getVisibleTabs,
+} from '@/utils/detailTabs'
 
 defineOptions({ name: 'QuarkResourceTab' })
 
@@ -121,6 +129,8 @@ const props = defineProps({
 })
 
 const router = useRouter()
+const _visibleTabs = getVisibleTabs()
+const orderedQuarkSubTabs = computed(() => getOrderedVisibleSubTabs(_visibleTabs.value, 'quark'))
 
 const SOURCE_QUARK_APIS = {
   pansou: (type) => (type === 'tv' ? searchApi.getTvQuarkPansou : searchApi.getMovieQuarkPansou),
@@ -129,7 +139,7 @@ const SOURCE_QUARK_APIS = {
 }
 
 const pageSize = 8
-const activeSubTab = ref('pansou')
+const activeSubTab = ref(getFirstVisibleSubTabName(_visibleTabs.value, 'quark') || 'pansou')
 const resources = reactive({ pansou: [], hdhive: [], tg: [] })
 const loaded = reactive({ pansou: false, hdhive: false, tg: false })
 const tried = reactive({ pansou: false, hdhive: false, tg: false })
@@ -225,6 +235,14 @@ const saveResource = async (row) => {
     row.saving = false
   }
 }
+
+watch(orderedQuarkSubTabs, (tabs) => {
+  if (!tabs.length) return
+  const current = `quark_${activeSubTab.value}`
+  if (!tabs.includes(current)) {
+    activeSubTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'quark') || 'pansou'
+  }
+})
 
 // 懒加载：visible / activeSubTab 变化时按需触发
 watch(

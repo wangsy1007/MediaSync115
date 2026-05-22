@@ -1424,6 +1424,35 @@
               </div>
             </el-form-item>
 
+            <el-divider content-position="left">夸克网盘</el-divider>
+            <el-form-item label="夸克网盘">
+              <el-checkbox v-model="detailTabsForm.quark">显示整个夸克网盘标签页</el-checkbox>
+            </el-form-item>
+            <el-form-item label="子标签页" v-if="detailTabsForm.quark">
+              <div class="subtab-order-list">
+                <div v-for="(key, idx) in detailTabsForm.quark_children" :key="key" class="subtab-order-item">
+                  <el-button-group size="small" class="order-btn-group">
+                    <el-button :disabled="idx === 0" @click="moveQuarkChild(idx, -1)">
+                      <el-icon><ArrowUp /></el-icon>
+                    </el-button>
+                    <el-button :disabled="idx === detailTabsForm.quark_children.length - 1" @click="moveQuarkChild(idx, 1)">
+                      <el-icon><ArrowDown /></el-icon>
+                    </el-button>
+                  </el-button-group>
+                  <span class="subtab-label">{{ getSubTabLabel(key) }}</span>
+                  <el-button size="small" type="danger" plain circle @click="removeQuarkChild(key)">
+                    <el-icon><Close /></el-icon>
+                  </el-button>
+                </div>
+              </div>
+              <div v-if="hiddenQuarkChildren.length > 0" class="subtab-hidden-list">
+                <span class="text-muted">已隐藏：</span>
+                <el-button v-for="key in hiddenQuarkChildren" :key="key" size="small" plain @click="addQuarkChild(key)">
+                  {{ getSubTabLabel(key) }}
+                </el-button>
+              </div>
+            </el-form-item>
+
             <el-divider content-position="left">磁力链接</el-divider>
             <el-form-item label="磁力链接">
               <el-checkbox v-model="detailTabsForm.magnet">显示整个磁力链接标签页</el-checkbox>
@@ -1948,15 +1977,19 @@ const savingAccount = ref(false)
 
 // Detail tabs visibility
 const detailTabsForm = reactive({
-  main_order: ['pan115', 'magnet'],
+  main_order: ['pan115', 'quark', 'magnet'],
   pan115: true,
   pan115_children: ['pan115_pansou', 'pan115_hdhive', 'pan115_tg'],
+  quark: true,
+  quark_children: ['quark_pansou', 'quark_hdhive', 'quark_tg'],
   magnet: true,
   magnet_children: ['magnet_seedhub', 'magnet_butailing'],
 })
 
 const ALL_PAN115_CHILDREN = ['pan115_pansou', 'pan115_hdhive', 'pan115_tg']
+const ALL_QUARK_CHILDREN = ['quark_pansou', 'quark_hdhive', 'quark_tg']
 const ALL_MAGNET_CHILDREN = ['magnet_seedhub', 'magnet_butailing']
+const ALL_MAIN_TAB_KEYS = ['pan115', 'quark', 'magnet']
 
 const getSubTabLabel = (key) => {
   const tab = ALL_TABS.find(t => t.key === key)
@@ -1981,6 +2014,9 @@ const hiddenPan115Children = computed(() =>
 const hiddenMagnetChildren = computed(() =>
   ALL_MAGNET_CHILDREN.filter(k => !detailTabsForm.magnet_children.includes(k))
 )
+const hiddenQuarkChildren = computed(() =>
+  ALL_QUARK_CHILDREN.filter(k => !detailTabsForm.quark_children.includes(k))
+)
 
 const movePan115Child = (idx, dir) => {
   const arr = detailTabsForm.pan115_children
@@ -1990,6 +2026,12 @@ const movePan115Child = (idx, dir) => {
 }
 const moveMagnetChild = (idx, dir) => {
   const arr = detailTabsForm.magnet_children
+  const target = idx + dir
+  if (target < 0 || target >= arr.length) return
+  ;[arr[idx], arr[target]] = [arr[target], arr[idx]]
+}
+const moveQuarkChild = (idx, dir) => {
+  const arr = detailTabsForm.quark_children
   const target = idx + dir
   if (target < 0 || target >= arr.length) return
   ;[arr[idx], arr[target]] = [arr[target], arr[idx]]
@@ -2006,6 +2048,12 @@ const removeMagnetChild = (key) => {
 }
 const addMagnetChild = (key) => {
   detailTabsForm.magnet_children = [...detailTabsForm.magnet_children, key]
+}
+const removeQuarkChild = (key) => {
+  detailTabsForm.quark_children = detailTabsForm.quark_children.filter(k => k !== key)
+}
+const addQuarkChild = (key) => {
+  detailTabsForm.quark_children = [...detailTabsForm.quark_children, key]
 }
 
 // TG Bot state
@@ -4090,7 +4138,7 @@ const handleSaveDetailTabs = async () => {
   const order =
     detailTabsForm.main_order?.length > 0
       ? [...detailTabsForm.main_order]
-      : ['pan115', 'magnet']
+      : [...ALL_MAIN_TAB_KEYS]
 
   const keys = []
   for (const mainKey of order) {
@@ -4098,13 +4146,17 @@ const handleSaveDetailTabs = async () => {
       keys.push('pan115')
       keys.push(...detailTabsForm.pan115_children)
     }
+    if (mainKey === 'quark' && detailTabsForm.quark) {
+      keys.push('quark')
+      keys.push(...detailTabsForm.quark_children)
+    }
     if (mainKey === 'magnet' && detailTabsForm.magnet) {
       keys.push('magnet')
       keys.push(...detailTabsForm.magnet_children)
     }
   }
   if (!keys.length) {
-    ElMessage.warning('请至少勾选「115网盘」或「磁力链接」其中一个标签页后再保存')
+    ElMessage.warning('请至少勾选「115网盘」「夸克网盘」或「磁力链接」其中一个标签页后再保存')
     return
   }
 
@@ -4121,9 +4173,11 @@ const handleSaveDetailTabs = async () => {
 }
 
 const handleResetDetailTabs = async () => {
-  detailTabsForm.main_order = ['pan115', 'magnet']
+  detailTabsForm.main_order = [...ALL_MAIN_TAB_KEYS]
   detailTabsForm.pan115 = true
   detailTabsForm.pan115_children = [...ALL_PAN115_CHILDREN]
+  detailTabsForm.quark = true
+  detailTabsForm.quark_children = [...ALL_QUARK_CHILDREN]
   detailTabsForm.magnet = true
   detailTabsForm.magnet_children = [...ALL_MAGNET_CHILDREN]
   savingDetailTabs.value = true
@@ -4192,12 +4246,14 @@ const fetchRuntimeSettings = async () => {
     // Detail tabs visibility (order preserved from backend array)
     if (Array.isArray(data.detail_visible_tabs)) {
       const arr = data.detail_visible_tabs
-      detailTabsForm.main_order = arr.filter(k => k === 'pan115' || k === 'magnet')
+      detailTabsForm.main_order = arr.filter(k => ALL_MAIN_TAB_KEYS.includes(k))
       if (!detailTabsForm.main_order.length) {
-        detailTabsForm.main_order = ['pan115', 'magnet']
+        detailTabsForm.main_order = [...ALL_MAIN_TAB_KEYS]
       }
       detailTabsForm.pan115 = arr.includes('pan115')
       detailTabsForm.pan115_children = arr.filter(k => ALL_PAN115_CHILDREN.includes(k))
+      detailTabsForm.quark = arr.includes('quark')
+      detailTabsForm.quark_children = arr.filter(k => ALL_QUARK_CHILDREN.includes(k))
       detailTabsForm.magnet = arr.includes('magnet')
       detailTabsForm.magnet_children = arr.filter(k => ALL_MAGNET_CHILDREN.includes(k))
     }

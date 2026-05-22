@@ -4,8 +4,16 @@
 """
 
 import ipaddress
+import logging
+import socket
+import time
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
+
+logger = logging.getLogger(__name__)
+
+PROXY_REACHABILITY_TTL_SECONDS = 60
+PROXY_REACHABILITY_TIMEOUT_SECONDS = 1.5
 
 from app.core.config import settings
 
@@ -210,6 +218,8 @@ class ProxyManager:
         self._https_proxy: Optional[str] = None
         self._all_proxy: Optional[str] = None
         self._socks_proxy: Optional[str] = None
+        self._proxy_reachability_cache: dict[str, tuple[float, bool]] = {}
+        self._proxy_unreachable_logged = False
         self._reload()
 
     def _reload(self) -> None:
@@ -247,6 +257,67 @@ class ProxyManager:
         if socks_proxy is not None:
             self._socks_proxy = socks_proxy if socks_proxy.strip() else None
             settings.SOCKS_PROXY = self._socks_proxy
+        self._proxy_reachability_cache.clear()
+        self._proxy_unreachable_logged = False
+
+    def _collect_proxy_urls(self) -> list[str]:
+        urls: list[str] = []
+        for value in (
+            self._http_proxy,
+            self._https_proxy,
+            self._all_proxy,
+            self._socks_proxy,
+        ):
+            cleaned = _normalize_proxy_url(value)
+            if cleaned and cleaned not in urls:
+                urls.append(cleaned)
+        return urls
+
+    def _parse_proxy_endpoint(self, proxy_url: str) -> Optional[tuple[str, int]]:
+        parsed = urlparse(str(proxy_url or "").strip())
+        host = parsed.hostname
+        if not host:
+            return None
+        if parsed.port:
+            port = parsed.port
+        elif parsed.scheme in {"https", "socks5", "socks5h"}:
+            port = 443
+        else:
+            port = 80
+        return host, port
+
+    def _is_proxy_endpoint_reachable(self, proxy_url: str) -> bool:
+        now = time.time()
+        cached = self._proxy_reachability_cache.get(proxy_url)
+        if cached and now < cached[0]:
+            return cached[1]
+
+        endpoint = self._parse_proxy_endpoint(proxy_url)
+        if endpoint is None:
+            reachable = False
+        else:
+            host, port = endpoint
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(PROXY_REACHABILITY_TIMEOUT_SECONDS)
+            try:
+                sock.connect((host, port))
+                reachable = True
+            except OSError:
+                reachable = False
+            finally:
+                sock.close()
+
+        self._proxy_reachability_cache[proxy_url] = (
+            now + PROXY_REACHABILITY_TTL_SECONDS,
+            reachable,
+        )
+        return reachable
+
+    def _should_apply_proxy_mounts(self) -> bool:
+        proxy_urls = self._collect_proxy_urls()
+        if not proxy_urls:
+            return False
+        return any(self._is_proxy_endpoint_reachable(url) for url in proxy_urls)
 
     def get_proxy_for_scheme(self, scheme: str) -> Optional[str]:
         """
@@ -285,6 +356,15 @@ class ProxyManager:
         if should_bypass_proxy_for_url(base_url):
             return httpx_module.AsyncClient(**client_kwargs)
 
+        if not self._should_apply_proxy_mounts():
+            if self._collect_proxy_urls() and not self._proxy_unreachable_logged:
+                logger.warning(
+                    "已配置代理但当前不可达，HTTP 客户端将自动改用直连；"
+                    "请检查设置中的代理地址/端口，或确保代理监听 host.docker.internal"
+                )
+                self._proxy_unreachable_logged = True
+            return httpx_module.AsyncClient(**client_kwargs)
+
         http_proxy = self.get_proxy_for_scheme("http")
         https_proxy = self.get_proxy_for_scheme("https")
 
@@ -315,6 +395,15 @@ class ProxyManager:
         base_url = client_kwargs.get("base_url")
 
         if should_bypass_proxy_for_url(base_url):
+            return httpx_module.Client(**client_kwargs)
+
+        if not self._should_apply_proxy_mounts():
+            if self._collect_proxy_urls() and not self._proxy_unreachable_logged:
+                logger.warning(
+                    "已配置代理但当前不可达，HTTP 客户端将自动改用直连；"
+                    "请检查设置中的代理地址/端口，或确保代理监听 host.docker.internal"
+                )
+                self._proxy_unreachable_logged = True
             return httpx_module.Client(**client_kwargs)
 
         http_proxy = self.get_proxy_for_scheme("http")

@@ -218,6 +218,44 @@ def test_health_all_reports_missing_proxy_without_direct_connect(
         _restore_proxy_config(original_config)
 
 
+def test_create_httpx_client_skips_unreachable_proxy_mounts(monkeypatch) -> None:
+    manager = ProxyManager()
+    original_config = dict(proxy_manager.get_current_config())
+    unreachable_proxy = "http://127.0.0.1:65520"
+    manager.update_proxy(
+        http_proxy=unreachable_proxy,
+        https_proxy=unreachable_proxy,
+        all_proxy="",
+        socks_proxy="",
+    )
+
+    class DummyAsyncTransport:
+        def __init__(self, proxy: str) -> None:
+            self.proxy = proxy
+
+    class DummyAsyncClient:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    fake_httpx = SimpleNamespace(
+        AsyncHTTPTransport=DummyAsyncTransport,
+        AsyncClient=DummyAsyncClient,
+    )
+    monkeypatch.setattr(proxy_module, "_get_httpx", lambda: fake_httpx)
+    monkeypatch.setattr(manager, "_is_proxy_endpoint_reachable", lambda _url: False)
+
+    try:
+        client = manager.create_httpx_client(timeout=5.0)
+        assert "mounts" not in client.kwargs
+    finally:
+        manager.update_proxy(
+            http_proxy=original_config.get("http_proxy") or "",
+            https_proxy=original_config.get("https_proxy") or "",
+            all_proxy=original_config.get("all_proxy") or "",
+            socks_proxy=original_config.get("socks_proxy") or "",
+        )
+
+
 def test_tg_transport_parser_supports_authenticated_http_proxy() -> None:
     tg_module = importlib.import_module("app.services.tg_service")
     parsed = tg_module.TgService._build_proxy("http://user:pass@127.0.0.1:7890")

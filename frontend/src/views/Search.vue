@@ -1217,6 +1217,11 @@ const fetchExploreSections = async () => {
     mergeEmbyStatusMap(data?.emby_status_map || {})
     mergeFeiniuStatusMap(data?.feiniu_status_map || {})
 
+    const responseSource = String(data?.source || '')
+    if (exploreSource.value === 'douban' && responseSource.startsWith('fallback:')) {
+      ElMessage.warning('豆瓣榜单暂不可用，已展示备用榜单。请检查设置中的代理地址/端口是否正确。')
+    }
+
     exploreSections.value = sourceSections.map((section) => {
       const items = Array.isArray(section?.items) ? section.items : []
       return {
@@ -1233,6 +1238,12 @@ const fetchExploreSections = async () => {
         exploreSections.value = []
         return
       }
+    }
+    const detail = String(error?.response?.data?.detail || error?.message || '')
+    if (exploreSource.value === 'tmdb') {
+      ElMessage.error(detail.includes('TMDB') ? detail : `TMDB 榜单加载失败：${detail || '请检查代理或 API Key 配置'}`)
+    } else {
+      ElMessage.error(detail || '探索榜单加载失败')
     }
     console.error('Failed to fetch explore sections:', error)
   } finally {
