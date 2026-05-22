@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from sqlalchemy import and_, delete, or_, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.timezone_utils import beijing_now
@@ -1185,6 +1186,8 @@ class SubscriptionService:
             .order_by(Subscription.id.asc())
         )
 
+        # 收集所有命中的订阅，先不立即写操作日志（避免 commit 失败导致日志/数据不一致）
+        pending_log_payloads: list[dict[str, Any]] = []
         for row in subs_result.all():
             sub_id = int(row.id)
             title = str(row.title or "")
@@ -1199,35 +1202,59 @@ class SubscriptionService:
             if should_delete:
                 await self._delete_subscription_with_records(db, sub_id)
                 result["deleted_count"] += 1
-                result["details"].append(
+                detail = {
+                    "subscription_id": sub_id,
+                    "title": title,
+                    "media_type": str(media_type.value)
+                    if hasattr(media_type, "value")
+                    else str(media_type),
+                    "reason": reason,
+                }
+                result["details"].append(detail)
+                pending_log_payloads.append(
                     {
                         "subscription_id": sub_id,
                         "title": title,
-                        "media_type": str(media_type.value)
-                        if hasattr(media_type, "value")
-                        else str(media_type),
                         "reason": reason,
                     }
                 )
-                await operation_log_service.log_background_event(
-                    source_type="background_task",
-                    module="subscriptions",
-                    action="subscription.item.cleanup_offline_completed",
-                    status="success",
-                    message=f"[{title}] 离线完成触发清理：{reason}，自动删除订阅",
-                    extra={
-                        "subscription_id": sub_id,
-                        "title": title,
-                        "reason": reason,
-                    },
-                )
 
         if result["deleted_count"] > 0:
-            await db.commit()
+            # 带退避重试的 commit，应对 emby/feiniu 全量同步刚完成时的 SQLite "database is locked"
+            for retry in range(3):
+                try:
+                    await db.commit()
+                    break
+                except OperationalError as exc:
+                    if "database is locked" not in str(exc).lower() or retry >= 2:
+                        await db.rollback()
+                        raise
+                    delay = 1.0 * (2 ** retry)
+                    logger.warning(
+                        "订阅清理 commit 时数据库锁定，%0.1fs 后重试（%d/3）",
+                        delay,
+                        retry + 1,
+                    )
+                    await asyncio.sleep(delay)
+
             logger.info(
                 "离线完成触发订阅清理，共删除 %d 项订阅",
                 result["deleted_count"],
             )
+
+            # commit 成功后再写操作日志（独立 session，不影响主事务）
+            for payload in pending_log_payloads:
+                try:
+                    await operation_log_service.log_background_event(
+                        source_type="background_task",
+                        module="subscriptions",
+                        action="subscription.item.cleanup_offline_completed",
+                        status="success",
+                        message=f"[{payload['title']}] 离线完成触发清理：{payload['reason']}，自动删除订阅",
+                        extra=payload,
+                    )
+                except Exception:
+                    logger.exception("写订阅清理操作日志失败: %s", payload.get("title"))
         return result
 
     async def _check_feiniu_movie_status(

@@ -279,6 +279,8 @@ class EmbySyncIndexService:
 
                 await self._clear_runtime_caches()
                 # 同步完成后清理已在影视库中的订阅
+                # 给 SQLite WAL checkpoint 一点时间释放写锁，避免 cleanup commit 时 "database is locked"
+                await asyncio.sleep(2.0)
                 try:
                     from app.services.subscription_service import subscription_service
                     async with async_session_maker() as cleanup_db:
