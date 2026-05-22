@@ -147,6 +147,10 @@ class RuntimeSettingsService:
                 "pan115_pansou",
                 "pan115_hdhive",
                 "pan115_tg",
+                "quark",
+                "quark_pansou",
+                "quark_hdhive",
+                "quark_tg",
                 "magnet",
                 "magnet_seedhub",
                 "magnet_butailing",
@@ -180,7 +184,32 @@ class RuntimeSettingsService:
         self._load()
         self._merge_settings_backed_values()
         self._ensure_auth_defaults()
+        self._migrate_detail_visible_tabs()
         self.apply_runtime_overrides()
+
+    def _migrate_detail_visible_tabs(self) -> None:
+        """老配置里没有 quark 相关 tab key 时自动补全，让新增功能默认可见"""
+        current = self._data.get("detail_visible_tabs")
+        if not isinstance(current, list) or not current:
+            return
+        quark_keys = ["quark", "quark_pansou", "quark_hdhive", "quark_tg"]
+        if any(k in current for k in quark_keys):
+            return
+        # 把 quark 系列插入到 magnet 之前；找不到 magnet 就追加到末尾
+        new_list = []
+        inserted = False
+        for key in current:
+            if key == "magnet" and not inserted:
+                new_list.extend(quark_keys)
+                inserted = True
+            new_list.append(key)
+        if not inserted:
+            new_list.extend(quark_keys)
+        self._data["detail_visible_tabs"] = new_list
+        try:
+            self._save()
+        except Exception:
+            pass
 
     def _get_persisted_data(self) -> dict[str, Any]:
         return dict(self._data)
