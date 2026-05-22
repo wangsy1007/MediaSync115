@@ -83,6 +83,8 @@ _popular_sections_cache = {
 }
 _movie_pan115_cache: dict[str, dict] = {}
 _tv_pan115_cache: dict[str, dict] = {}
+_movie_quark_cache: dict[str, dict] = {}
+_tv_quark_cache: dict[str, dict] = {}
 _image_proxy_user_agent = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
@@ -1030,6 +1032,98 @@ def _normalize_pansou_pan115_list(payload: Any) -> list[dict]:
                 "resolution": resolution,
                 "quality": quality,
                 "share_link": share_link,
+                "source_service": "pansou",
+                "raw_item": row,
+            }
+        )
+
+    return items
+
+
+_QUARK_SHARE_URL_PATTERN_API = re.compile(
+    r"https?://pan\.quark\.cn/s/[A-Za-z0-9_-]+(?:[^\s\"'<>]*)?",
+    re.IGNORECASE,
+)
+
+
+def _extract_quark_share_link_from_text(text: str) -> str:
+    """从文本中提取夸克分享链接"""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    match = _QUARK_SHARE_URL_PATTERN_API.search(raw)
+    return match.group(0).strip() if match else ""
+
+
+def _extract_pansou_quark_share_link(row: dict) -> str:
+    """从 pansou 单行结果中提取夸克链接"""
+    candidate = _extract_first_string_value(
+        row,
+        [
+            "share_link",
+            "share_url",
+            "url",
+            "link",
+            "resource_url",
+            "source_url",
+            "href",
+        ],
+    )
+    if candidate:
+        link = _extract_quark_share_link_from_text(candidate)
+        if link:
+            return link
+    # 兜底全局扫描所有字符串字段
+    for text in _iter_string_values(row):
+        link = _extract_quark_share_link_from_text(text)
+        if link:
+            return link
+    return ""
+
+
+def _normalize_pansou_quark_list(payload: Any) -> list[dict]:
+    """从 pansou 返回中提取夸克网盘资源"""
+    rows = _extract_pansou_rows(payload)
+    items: list[dict] = []
+    seen_links: set[str] = set()
+
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+
+        share_link = _extract_pansou_quark_share_link(row)
+        if not share_link:
+            continue
+
+        link_key = share_link.strip().lower()
+        if link_key in seen_links:
+            continue
+        seen_links.add(link_key)
+
+        title = _extract_first_string_value(
+            row,
+            ["title", "name", "resource_name", "file_name", "filename", "text"],
+        )
+        if not title or title == "盘搜资源":
+            title = f"夸克资源 #{len(items) + 1}"
+
+        size = _extract_first_string_value(row, ["size"])
+        resolution = _extract_first_string_value(row, ["resolution"])
+        quality = _extract_first_string_value(row, ["quality"])
+
+        resource_id = row.get("id")
+        if resource_id is None:
+            resource_id = f"pansou-quark-{hashlib.md5(link_key.encode('utf-8')).hexdigest()[:12]}-{index}"
+
+        items.append(
+            {
+                "id": resource_id,
+                "title": title,
+                "size": size,
+                "resolution": resolution,
+                "quality": quality,
+                "share_link": share_link,
+                "cloud_type": "quark",
                 "source_service": "pansou",
                 "raw_item": row,
             }
@@ -2256,6 +2350,86 @@ async def _search_pansou_pan115_resources(
     }
 
 
+async def _search_pansou_quark_resources(
+    tmdb_id: int, media_type: str, season: int | None = None
+) -> dict[str, Any]:
+    """通过 pansou 搜索夸克网盘资源（与 _search_pansou_pan115_resources 同结构）"""
+    pansou_service.set_base_url(runtime_settings_service.get_pansou_base_url())
+    media_payload = await _load_media_payload(tmdb_id, media_type)
+
+    keyword_candidates = _build_pansou_keyword_candidates(
+        media_payload, media_type, tmdb_id, season
+    )
+    selected_keyword = (
+        keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
+    )
+    attempted_keywords: list[str] = []
+    attempts: list[dict[str, Any]] = []
+
+    async def _try_pansou_quark_keyword(kw: str) -> dict[str, Any] | None:
+        try:
+            pansou_payload = await pansou_service.search(
+                keyword=kw,
+                cloud_types=["quark"],
+                res="results",
+            )
+            quark_list = _normalize_pansou_quark_list(pansou_payload)
+            return {
+                "keyword": kw,
+                "list": quark_list,
+                "status": "ok",
+                "count": len(quark_list),
+            }
+        except Exception as exc:
+            attempts.append(
+                {
+                    "service": "pansou",
+                    "keyword": kw,
+                    "status": "error",
+                    "error": str(exc),
+                }
+            )
+            return None
+
+    tasks = [_try_pansou_quark_keyword(kw) for kw in keyword_candidates]
+    attempted_keywords = list(keyword_candidates)
+    for coro in asyncio.as_completed(tasks):
+        result = await coro
+        if result and result["list"]:
+            attempts.append(
+                {
+                    "service": "pansou",
+                    "keyword": result["keyword"],
+                    "status": "ok",
+                    "count": result["count"],
+                }
+            )
+            return {
+                "keyword": result["keyword"],
+                "list": result["list"],
+                "attempted_keywords": attempted_keywords,
+                "keyword_hit_index": keyword_candidates.index(result["keyword"]),
+                "attempts": attempts,
+            }
+        if result:
+            attempts.append(
+                {
+                    "service": "pansou",
+                    "keyword": result["keyword"],
+                    "status": "ok",
+                    "count": 0,
+                }
+            )
+
+    return {
+        "keyword": selected_keyword,
+        "list": [],
+        "attempted_keywords": attempted_keywords,
+        "keyword_hit_index": None,
+        "attempts": attempts,
+    }
+
+
 async def _search_tg_pan115_resources(
     tmdb_id: int, media_type: str, season: int | None = None
 ) -> dict[str, Any]:
@@ -2886,6 +3060,261 @@ async def get_tv_pan115_with_tg(
     )
     _set_pan115_cached_payload(_tv_pan115_cache, cache_key, result)
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 夸克网盘资源接口（与 115 系列同结构，cloud_type=quark）
+# TG 渠道暂未支持夸克链接索引，返回空列表（Phase 2 扩展）
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def _build_quark_response(
+    tmdb_id: int,
+    media_type: str,
+    page: int,
+    resource_list: list[dict],
+    search_service: str,
+    source_counts: Optional[dict[str, int]] = None,
+    attempts: Optional[list[dict[str, Any]]] = None,
+    keyword: str = "",
+    attempted_keywords: Optional[list[str]] = None,
+    keyword_hit_index: Optional[int] = None,
+) -> dict[str, Any]:
+    """构建夸克资源响应。结构与 115 一致，每条记录额外含 cloud_type='quark'。"""
+    quark_cookie_configured = bool(runtime_settings_service.get_quark_cookie())
+    enriched_list = []
+    for row in resource_list:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        item.setdefault("cloud_type", "quark")
+        item.setdefault("cloud_savable", quark_cookie_configured)
+        if not quark_cookie_configured:
+            item["cloud_save_disabled_reason"] = "quark_cookie_missing"
+        # 兼容字段（前端通用渲染）
+        item.setdefault("pan115_share_link", "")
+        item.setdefault("pan115_savable", False)
+        enriched_list.append(item)
+
+    return {
+        "id": tmdb_id,
+        "media_type": media_type,
+        "page": page,
+        "total_page": 1,
+        "list": enriched_list,
+        "resource_order": [search_service],
+        "search_service": search_service,
+        "source_counts": source_counts or {},
+        "attempts": attempts or [],
+        "keyword": keyword,
+        "attempted_keywords": attempted_keywords or [],
+        "keyword_hit_index": keyword_hit_index,
+        "cloud_type": "quark",
+        "quark_cookie_configured": quark_cookie_configured,
+    }
+
+
+@router.get("/movie/{tmdb_id}/quark/pansou")
+async def get_movie_quark_with_pansou(
+    tmdb_id: int,
+    page: int = Query(1, ge=1),
+    refresh: bool = Query(False, description="是否绕过缓存"),
+):
+    cache_key = f"{tmdb_id}:{page}:pansou"
+    if not refresh:
+        cached_payload, is_fresh = _get_cached_payload(_movie_quark_cache, cache_key)
+        if is_fresh:
+            return cached_payload
+
+    search_result = await _search_pansou_quark_resources(tmdb_id, "movie")
+    quark_list = list(search_result.get("list") or [])
+    source_counts = {"pansou": len(quark_list)} if quark_list else {}
+    result = _build_quark_response(
+        tmdb_id=tmdb_id,
+        media_type="movie",
+        page=page,
+        resource_list=quark_list,
+        search_service="pansou",
+        source_counts=source_counts,
+        attempts=list(search_result.get("attempts") or []),
+        keyword=str(search_result.get("keyword") or ""),
+        attempted_keywords=list(search_result.get("attempted_keywords") or []),
+        keyword_hit_index=search_result.get("keyword_hit_index"),
+    )
+    _set_pan115_cached_payload(_movie_quark_cache, cache_key, result)
+    return result
+
+
+@router.get("/movie/{tmdb_id}/quark/hdhive")
+async def get_movie_quark_with_hdhive(
+    tmdb_id: int,
+    page: int = Query(1, ge=1),
+    refresh: bool = Query(False, description="是否绕过缓存"),
+):
+    cache_key = f"{tmdb_id}:{page}:hdhive"
+    if not refresh:
+        cached_payload, is_fresh = _get_cached_payload(_movie_quark_cache, cache_key)
+        if is_fresh:
+            return cached_payload
+
+    attempts: list[dict[str, Any]] = []
+    quark_list: list[dict] = []
+    diagnostics: dict[str, Any] = {}
+    try:
+        hdhive_payload = await hdhive_service.get_movie_quark_result(tmdb_id)
+        quark_list = list(hdhive_payload.get("items") or [])
+        diagnostics = {
+            "raw_total": int(hdhive_payload.get("raw_total") or 0),
+            "filtered_quark_total": int(
+                hdhive_payload.get("filtered_total") or len(quark_list)
+            ),
+            "pan_type_counts": dict(hdhive_payload.get("pan_type_counts") or {}),
+        }
+        attempts.append({"service": "hdhive", "status": "ok", "count": len(quark_list)})
+    except Exception as exc:
+        attempts.append({"service": "hdhive", "status": "error", "error": str(exc)})
+
+    source_counts = {"hdhive": len(quark_list)} if quark_list else {}
+    result = _build_quark_response(
+        tmdb_id=tmdb_id,
+        media_type="movie",
+        page=page,
+        resource_list=quark_list,
+        search_service="hdhive",
+        source_counts=source_counts,
+        attempts=attempts,
+    )
+    if diagnostics:
+        result["quark_diagnostics"] = diagnostics
+    _set_pan115_cached_payload(_movie_quark_cache, cache_key, result)
+    return result
+
+
+@router.get("/movie/{tmdb_id}/quark/tg")
+async def get_movie_quark_with_tg(
+    tmdb_id: int,
+    page: int = Query(1, ge=1),
+    refresh: bool = Query(False, description="是否绕过缓存"),
+):
+    """TG 渠道夸克资源（暂未实现 TG 索引夸克识别，返回空列表）"""
+    return _build_quark_response(
+        tmdb_id=tmdb_id,
+        media_type="movie",
+        page=page,
+        resource_list=[],
+        search_service="tg",
+        source_counts={},
+        attempts=[
+            {
+                "service": "tg",
+                "status": "not_supported",
+                "error": "TG 索引暂未支持夸克链接，将在后续版本扩展",
+            }
+        ],
+    )
+
+
+@router.get("/tv/{tmdb_id}/quark/pansou")
+async def get_tv_quark_with_pansou(
+    tmdb_id: int,
+    page: int = Query(1, ge=1),
+    refresh: bool = Query(False, description="是否绕过缓存"),
+    season: int | None = Query(None, description="季数"),
+):
+    cache_key = f"{tmdb_id}:{page}:pansou:s{season or 'all'}"
+    if not refresh:
+        cached_payload, is_fresh = _get_cached_payload(_tv_quark_cache, cache_key)
+        if is_fresh:
+            return cached_payload
+
+    search_result = await _search_pansou_quark_resources(tmdb_id, "tv", season)
+    quark_list = list(search_result.get("list") or [])
+    source_counts = {"pansou": len(quark_list)} if quark_list else {}
+    result = _build_quark_response(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        page=page,
+        resource_list=quark_list,
+        search_service="pansou",
+        source_counts=source_counts,
+        attempts=list(search_result.get("attempts") or []),
+        keyword=str(search_result.get("keyword") or ""),
+        attempted_keywords=list(search_result.get("attempted_keywords") or []),
+        keyword_hit_index=search_result.get("keyword_hit_index"),
+    )
+    _set_pan115_cached_payload(_tv_quark_cache, cache_key, result)
+    return result
+
+
+@router.get("/tv/{tmdb_id}/quark/hdhive")
+async def get_tv_quark_with_hdhive(
+    tmdb_id: int,
+    page: int = Query(1, ge=1),
+    refresh: bool = Query(False, description="是否绕过缓存"),
+    season: int | None = Query(None, description="季数"),
+):
+    cache_key = f"{tmdb_id}:{page}:hdhive:s{season or 'all'}"
+    if not refresh:
+        cached_payload, is_fresh = _get_cached_payload(_tv_quark_cache, cache_key)
+        if is_fresh:
+            return cached_payload
+
+    attempts: list[dict[str, Any]] = []
+    quark_list: list[dict] = []
+    diagnostics: dict[str, Any] = {}
+    try:
+        hdhive_payload = await hdhive_service.get_tv_quark_result(tmdb_id)
+        quark_list = list(hdhive_payload.get("items") or [])
+        diagnostics = {
+            "raw_total": int(hdhive_payload.get("raw_total") or 0),
+            "filtered_quark_total": int(
+                hdhive_payload.get("filtered_total") or len(quark_list)
+            ),
+            "pan_type_counts": dict(hdhive_payload.get("pan_type_counts") or {}),
+        }
+        attempts.append({"service": "hdhive", "status": "ok", "count": len(quark_list)})
+    except Exception as exc:
+        attempts.append({"service": "hdhive", "status": "error", "error": str(exc)})
+
+    source_counts = {"hdhive": len(quark_list)} if quark_list else {}
+    result = _build_quark_response(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        page=page,
+        resource_list=quark_list,
+        search_service="hdhive",
+        source_counts=source_counts,
+        attempts=attempts,
+    )
+    if diagnostics:
+        result["quark_diagnostics"] = diagnostics
+    _set_pan115_cached_payload(_tv_quark_cache, cache_key, result)
+    return result
+
+
+@router.get("/tv/{tmdb_id}/quark/tg")
+async def get_tv_quark_with_tg(
+    tmdb_id: int,
+    page: int = Query(1, ge=1),
+    refresh: bool = Query(False, description="是否绕过缓存"),
+    season: int | None = Query(None, description="季数"),
+):
+    """TG 渠道夸克资源（暂未实现 TG 索引夸克识别，返回空列表）"""
+    return _build_quark_response(
+        tmdb_id=tmdb_id,
+        media_type="tv",
+        page=page,
+        resource_list=[],
+        search_service="tg",
+        source_counts={},
+        attempts=[
+            {
+                "service": "tg",
+                "status": "not_supported",
+                "error": "TG 索引暂未支持夸克链接，将在后续版本扩展",
+            }
+        ],
+    )
 
 
 @router.get("/{media_type}/{tmdb_id}/resources")

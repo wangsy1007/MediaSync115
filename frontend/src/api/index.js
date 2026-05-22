@@ -207,6 +207,19 @@ export const searchApi = {
     api.get(`/search/tv/${tmdbId}/115/hdhive`, { params: { page, refresh, season } }),
   getTvPan115Tg: (tmdbId, page = 1, refresh = false, season = null) =>
     api.get(`/search/tv/${tmdbId}/115/tg`, { params: { page, refresh, season } }),
+  // 夸克网盘资源接口（与 115 同结构）
+  getMovieQuarkPansou: (tmdbId, page = 1, refresh = false) =>
+    api.get(`/search/movie/${tmdbId}/quark/pansou`, { params: { page, refresh } }),
+  getMovieQuarkHdhive: (tmdbId, page = 1, refresh = false) =>
+    api.get(`/search/movie/${tmdbId}/quark/hdhive`, { params: { page, refresh } }),
+  getMovieQuarkTg: (tmdbId, page = 1, refresh = false) =>
+    api.get(`/search/movie/${tmdbId}/quark/tg`, { params: { page, refresh } }),
+  getTvQuarkPansou: (tmdbId, page = 1, refresh = false, season = null) =>
+    api.get(`/search/tv/${tmdbId}/quark/pansou`, { params: { page, refresh, season } }),
+  getTvQuarkHdhive: (tmdbId, page = 1, refresh = false, season = null) =>
+    api.get(`/search/tv/${tmdbId}/quark/hdhive`, { params: { page, refresh, season } }),
+  getTvQuarkTg: (tmdbId, page = 1, refresh = false, season = null) =>
+    api.get(`/search/tv/${tmdbId}/quark/tg`, { params: { page, refresh, season } }),
   // 统一资源获取，复用订阅的 _fetch_resources 管道
   getMediaResources: (tmdbId, mediaType, season = null, refresh = false) =>
     api.get(`/search/${mediaType}/${tmdbId}/resources`, { params: { season, refresh } }),
@@ -496,6 +509,20 @@ export const pan115Api = {
   getDefaultFolder: () => api.get('/pan115/default-folder'),
   setDefaultFolder: (folderId, folderName = '') => 
     api.post('/pan115/default-folder', { folder_id: folderId, folder_name: folderName })
+}
+
+export const quarkApi = {
+  getCookieInfo: () => api.get('/quark/cookie'),
+  checkCookie: () => api.get('/quark/cookie/check'),
+  updateCookie: (cookie) => api.post('/quark/cookie/update', { cookie }),
+  checkConnectivity: () => api.get('/quark/connectivity/check'),
+  listFolders: (parentFid = '0', page = 1, size = 200) =>
+    api.get('/quark/folders', { params: { parent_fid: parentFid, page, size } }),
+  getDefaultFolder: () => api.get('/quark/default-folder'),
+  setDefaultFolder: (folderId, folderName = '') =>
+    api.post('/quark/default-folder', { folder_id: folderId, folder_name: folderName }),
+  saveShareToFolder: (payload) =>
+    api.post('/quark/share/save-to-folder', payload, { timeout: SAVE_OPERATION_TIMEOUT }),
 }
 
 export default api

@@ -218,6 +218,102 @@
         </el-card>
       </el-tab-pane>
 
+      <el-tab-pane label="夸克网盘" name="quark">
+        <el-card class="settings-card">
+          <template #header>
+            <div class="card-header">
+              <span>夸克网盘配置</span>
+              <div class="status-tags">
+                <el-tag v-if="quarkStatus.valid" type="success" size="small">已连接</el-tag>
+                <el-tag v-else-if="quarkStatus.is_configured" type="warning" size="small">未验证</el-tag>
+                <el-tag v-else type="info" size="small">未配置</el-tag>
+              </div>
+            </div>
+          </template>
+
+          <el-form label-width="120px">
+            <el-form-item label="Cookie">
+              <el-input
+                v-model="quarkCookieDraft"
+                type="textarea"
+                :rows="3"
+                placeholder="从浏览器复制夸克网盘 Cookie..."
+                :show-password="!showQuarkCookiePlain"
+              />
+              <div style="margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap;">
+                <el-button @click="showQuarkCookiePlain = !showQuarkCookiePlain">
+                  {{ showQuarkCookiePlain ? '隐藏明文' : '显示明文' }}
+                </el-button>
+                <el-button type="primary" :loading="savingQuarkCookie" @click="handleSaveQuarkCookie">
+                  保存
+                </el-button>
+                <el-button :loading="checkingQuark" @click="handleCheckQuark" :disabled="!quarkStatus.is_configured">
+                  连通性检查
+                </el-button>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="默认转存目录">
+              <div class="folder-display">
+                <span>{{ quarkDefaultFolder.folder_name || '未选择' }}</span>
+                <el-button
+                  size="small"
+                  type="primary"
+                  plain
+                  :disabled="!quarkStatus.is_configured"
+                  @click="openQuarkFolderPicker"
+                >浏览</el-button>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="状态信息" v-if="quarkStatus.user_info">
+              <el-descriptions :column="2" size="small" border>
+                <el-descriptions-item label="总容量">
+                  {{ formatQuarkBytes(quarkStatus.user_info.total_capacity) }}
+                </el-descriptions-item>
+                <el-descriptions-item label="已用容量">
+                  {{ formatQuarkBytes(quarkStatus.user_info.use_capacity) }}
+                </el-descriptions-item>
+              </el-descriptions>
+            </el-form-item>
+
+            <el-alert type="warning" :closable="false">
+              夸克网盘转存能力依赖逆向接口，可能因官方接口调整而失效。
+              若发现连通性检查失败，请重新从浏览器获取 Cookie 后保存。
+            </el-alert>
+          </el-form>
+        </el-card>
+
+        <!-- 夸克目录选择对话框 -->
+        <el-dialog v-model="quarkFolderPickerVisible" title="选择夸克网盘目录" width="600px">
+          <div class="quark-folder-tree" v-loading="quarkFolderLoading">
+            <div class="quark-folder-breadcrumb">
+              <el-button v-for="(crumb, idx) in quarkFolderCrumbs" :key="`${crumb.folder_id}-${idx}`"
+                size="small" type="primary" link
+                @click="navigateQuarkFolder(crumb, idx)">
+                {{ crumb.folder_name }}
+              </el-button>
+            </div>
+            <el-table v-if="quarkFolderList.length" :data="quarkFolderList" stripe size="small">
+              <el-table-column label="文件夹">
+                <template #default="{ row }">
+                  <el-button type="primary" link @click="enterQuarkFolder(row)">
+                    📁 {{ row.file_name }}
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty v-else description="此目录下没有子文件夹" />
+          </div>
+          <template #footer>
+            <el-button @click="quarkFolderPickerVisible = false">取消</el-button>
+            <el-button type="primary" @click="confirmQuarkFolder">
+              选择当前目录：{{ currentQuarkFolderName }}
+            </el-button>
+          </template>
+        </el-dialog>
+      </el-tab-pane>
+
       <el-tab-pane label="HDHive" name="hdhive">
         <el-card class="settings-card">
           <template #header>
@@ -1688,6 +1784,7 @@ import { ArrowUp, ArrowDown, Close } from '@element-plus/icons-vue'
 import {
   authApi,
   pan115Api,
+  quarkApi,
   pansouApi,
   settingsApi,
   subscriptionApi,
@@ -2032,6 +2129,147 @@ const cookieStatus = reactive({
   checked: false,
   user_info: null
 })
+
+// 夸克网盘相关
+const quarkCookieDraft = ref('')
+const showQuarkCookiePlain = ref(false)
+const savingQuarkCookie = ref(false)
+const checkingQuark = ref(false)
+const quarkStatus = reactive({
+  is_configured: false,
+  valid: false,
+  user_info: null,
+})
+const quarkDefaultFolder = reactive({
+  folder_id: '0',
+  folder_name: '根目录',
+})
+const quarkFolderPickerVisible = ref(false)
+const quarkFolderLoading = ref(false)
+const quarkFolderList = ref([])
+const quarkFolderCrumbs = ref([{ folder_id: '0', folder_name: '根目录' }])
+const currentQuarkFolderName = computed(() => {
+  const last = quarkFolderCrumbs.value[quarkFolderCrumbs.value.length - 1]
+  return last?.folder_name || '根目录'
+})
+
+const formatQuarkBytes = (bytes) => {
+  const num = Number(bytes || 0)
+  if (!num) return '—'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+  let v = num
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v.toFixed(2)} ${units[i]}`
+}
+
+const refreshQuarkInfo = async () => {
+  try {
+    const { data } = await quarkApi.getCookieInfo()
+    quarkStatus.is_configured = Boolean(data?.is_configured)
+  } catch {
+    quarkStatus.is_configured = false
+  }
+  try {
+    const { data } = await quarkApi.getDefaultFolder()
+    quarkDefaultFolder.folder_id = String(data?.folder_id || '0')
+    quarkDefaultFolder.folder_name = String(data?.folder_name || '根目录')
+  } catch { /* ignore */ }
+}
+
+const handleSaveQuarkCookie = async () => {
+  const trimmed = quarkCookieDraft.value.trim()
+  if (!trimmed) {
+    ElMessage.warning('请输入夸克 Cookie')
+    return
+  }
+  savingQuarkCookie.value = true
+  try {
+    await quarkApi.updateCookie(trimmed)
+    quarkCookieDraft.value = ''
+    quarkStatus.is_configured = true
+    quarkStatus.valid = false
+    ElMessage.success('夸克 Cookie 已保存')
+    await refreshQuarkInfo()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '保存失败')
+  } finally {
+    savingQuarkCookie.value = false
+  }
+}
+
+const handleCheckQuark = async () => {
+  checkingQuark.value = true
+  try {
+    const { data } = await quarkApi.checkConnectivity()
+    quarkStatus.valid = Boolean(data?.valid)
+    quarkStatus.user_info = data?.user_info || null
+    ElMessage.success(data?.message || '连接成功')
+  } catch (e) {
+    quarkStatus.valid = false
+    const detail = e.response?.data?.detail
+    const msg = typeof detail === 'string' ? detail : detail?.message || e.message
+    ElMessage.error(msg || '夸克连接失败')
+  } finally {
+    checkingQuark.value = false
+  }
+}
+
+const loadQuarkFolders = async (parentFid = '0') => {
+  quarkFolderLoading.value = true
+  try {
+    const { data } = await quarkApi.listFolders(parentFid, 1, 200)
+    quarkFolderList.value = Array.isArray(data?.folders) ? data.folders : []
+  } catch (e) {
+    const detail = e.response?.data?.detail
+    const msg = typeof detail === 'string' ? detail : detail?.message || e.message
+    ElMessage.error(msg || '加载夸克目录失败')
+    quarkFolderList.value = []
+  } finally {
+    quarkFolderLoading.value = false
+  }
+}
+
+const openQuarkFolderPicker = async () => {
+  if (!quarkStatus.is_configured) {
+    ElMessage.warning('请先配置夸克 Cookie')
+    return
+  }
+  quarkFolderCrumbs.value = [{ folder_id: '0', folder_name: '根目录' }]
+  quarkFolderPickerVisible.value = true
+  await loadQuarkFolders('0')
+}
+
+const enterQuarkFolder = async (folder) => {
+  const fid = String(folder?.fid || folder?.folder_id || '0')
+  const name = String(folder?.file_name || folder?.folder_name || '')
+  quarkFolderCrumbs.value.push({ folder_id: fid, folder_name: name })
+  await loadQuarkFolders(fid)
+}
+
+const navigateQuarkFolder = async (crumb, idx) => {
+  quarkFolderCrumbs.value = quarkFolderCrumbs.value.slice(0, idx + 1)
+  const target = quarkFolderCrumbs.value[idx]
+  await loadQuarkFolders(target.folder_id)
+}
+
+const confirmQuarkFolder = async () => {
+  const last = quarkFolderCrumbs.value[quarkFolderCrumbs.value.length - 1]
+  if (!last) return
+  try {
+    const { data } = await quarkApi.setDefaultFolder(last.folder_id, last.folder_name)
+    quarkDefaultFolder.folder_id = String(data?.folder_id || last.folder_id)
+    quarkDefaultFolder.folder_name = String(data?.folder_name || last.folder_name)
+    ElMessage.success('默认转存目录已更新')
+    quarkFolderPickerVisible.value = false
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '保存失败')
+  }
+}
+
 const offlineQuotaStatus = reactive({
   valid: false,
   checked: false,
@@ -4434,6 +4672,7 @@ onMounted(() => {
   loadPan115QrApps()
   fetchDefaultFolder()
   fetchOfflineDefaultFolder()
+  refreshQuarkInfo()
   fetchPansouConfig()
   fetchTgIndexStatus()
   fetchSubscriptionLogs()

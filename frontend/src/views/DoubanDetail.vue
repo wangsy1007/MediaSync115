@@ -343,6 +343,23 @@
           </el-tabs>
         </el-tab-pane>
 
+        <el-tab-pane v-else-if="key === 'quark'" name="quark">
+          <template #label>
+            <span>夸克网盘<el-tag v-if="!quarkConfigured" type="info" size="small" style="margin-left: 6px">未配置</el-tag></span>
+          </template>
+          <div v-if="!mappedTmdbId" class="quark-empty-tip">
+            <el-empty description="请先匹配 TMDB 后再查看夸克资源" />
+          </div>
+          <QuarkResourceTab
+            v-else
+            :media-type="mediaType"
+            :tmdb-id="mappedTmdbId"
+            :visible="activeTab === 'quark'"
+            :quark-configured="quarkConfigured"
+            :title="detail?.title || ''"
+          />
+        </el-tab-pane>
+
         <el-tab-pane v-else-if="key === 'magnet'" label="磁力链接" name="magnet">
           <el-tabs v-model="magnetSourceTab" class="source-tabs">
             <template v-for="key in orderedMagnetSubTabs" :key="key">
@@ -510,9 +527,10 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { pansouApi, pan115Api, searchApi, subscriptionApi } from '@/api'
+import { pansouApi, pan115Api, searchApi, subscriptionApi, quarkApi } from '@/api'
 import { ArrowLeft, VideoCamera } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
+import QuarkResourceTab from '@/components/detail/QuarkResourceTab.vue'
 import { getVisibleTabs, loadVisibleTabs, isTabVisible, getOrderedVisibleSubTabs, getFirstVisibleSubTabName, getOrderedVisibleMainTabs } from '@/utils/detailTabs'
 import { extractTags } from '@/utils/resourceTags'
 import { navigateBackFromDetail } from '@/utils/navigation'
@@ -543,6 +561,16 @@ const loading = ref(false)
 const mappingLoading = ref(false)
 const subscribing = ref(false)
 const detail = ref(null)
+const quarkConfigured = ref(false)
+
+const refreshQuarkConfigured = async () => {
+  try {
+    const { data } = await quarkApi.getCookieInfo()
+    quarkConfigured.value = Boolean(data?.is_configured)
+  } catch {
+    quarkConfigured.value = false
+  }
+}
 
 const activeTab = ref(getOrderedVisibleMainTabs(_visibleTabs.value)[0] || 'pan115')
 const pan115SourceTab = ref(getFirstVisibleSubTabName(_visibleTabs.value, 'pan115') || 'pansou')
@@ -1602,6 +1630,7 @@ onMounted(async () => {
   pan115SourceTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'pan115') || 'pansou'
   magnetSourceTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'magnet') || 'seedhub'
   await loadDetail()
+  refreshQuarkConfigured()
 })
 </script>
 

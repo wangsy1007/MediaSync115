@@ -19,6 +19,7 @@ from app.api import (
     logs as logs_api,
     pan115,
     pansou,
+    quark,
     scheduler,
     search,
     settings as runtime_settings_api,
@@ -421,6 +422,7 @@ app.include_router(archive_api.router, prefix="/api")
 app.include_router(auth_api.router, prefix="/api")
 app.include_router(subscriptions.router, prefix="/api")
 app.include_router(pan115.router, prefix="/api")
+app.include_router(quark.router, prefix="/api")
 app.include_router(pansou.router, prefix="/api")
 app.include_router(runtime_settings_api.router, prefix="/api")
 app.include_router(strm_api.router, prefix="/api")

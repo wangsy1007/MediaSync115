@@ -386,6 +386,18 @@
             </template>
           </el-tabs>
         </el-tab-pane>
+          <el-tab-pane v-else-if="key === 'quark'" name="quark">
+            <template #label>
+              <span>夸克网盘<el-tag v-if="!quarkConfigured" type="info" size="small" style="margin-left: 6px">未配置</el-tag></span>
+            </template>
+            <QuarkResourceTab
+              :media-type="'movie'"
+              :tmdb-id="movieId"
+              :visible="activeTab === 'quark'"
+              :quark-configured="quarkConfigured"
+              :title="movie?.title || movie?.name || ''"
+            />
+          </el-tab-pane>
           <el-tab-pane v-else-if="key === 'magnet'" label="磁力链接" name="magnet">
           <el-tabs v-model="magnetSourceTab" class="source-tabs">
             <template v-for="key in orderedMagnetSubTabs" :key="key">
@@ -546,9 +558,10 @@
 import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { searchApi, subscriptionApi, pan115Api } from '@/api'
+import { searchApi, subscriptionApi, pan115Api, quarkApi } from '@/api'
 import { Star, Plus, ArrowLeft, VideoCamera } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
+import QuarkResourceTab from '@/components/detail/QuarkResourceTab.vue'
 import { getVisibleTabs, loadVisibleTabs, isTabVisible, getOrderedVisibleSubTabs, getFirstVisibleSubTabName, getOrderedVisibleMainTabs } from '@/utils/detailTabs'
 import { extractTags } from '@/utils/resourceTags'
 import { navigateBackFromDetail } from '@/utils/navigation'
@@ -578,6 +591,18 @@ const handleBack = () => {
 const movie = ref(null)
 const loading = ref(true)
 const activeTab = ref(getOrderedVisibleMainTabs(_visibleTabs.value)[0] || 'pan115')
+
+const movieId = computed(() => route.params.id)
+const quarkConfigured = ref(false)
+
+const refreshQuarkConfigured = async () => {
+  try {
+    const { data } = await quarkApi.getCookieInfo()
+    quarkConfigured.value = Boolean(data?.is_configured)
+  } catch {
+    quarkConfigured.value = false
+  }
+}
 
 const pan115Resources = ref([])
 const pan115SourceTab = ref(getFirstVisibleSubTabName(_visibleTabs.value, 'pan115') || 'pansou')
@@ -1456,6 +1481,7 @@ onMounted(() => {
   magnetSourceTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'magnet') || 'seedhub'
   resetPan115Diagnostics()
   fetchMovie()
+  refreshQuarkConfigured()
   checkSubscribed()
 })
 </script>
