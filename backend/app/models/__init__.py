@@ -19,6 +19,10 @@ from app.models.feiniu_sync_index import (
     FeiniuTvEpisodeIndex,
     FeiniuSyncState,
 )
+from app.models.douban_tmdb_mapping import (
+    DoubanSubjectTmdbMapping,
+    DoubanTitleTmdbMapping,
+)
 
 __all__ = [
     "Subscription",
@@ -41,4 +45,6 @@ __all__ = [
     "FeiniuMediaIndex",
     "FeiniuTvEpisodeIndex",
     "FeiniuSyncState",
+    "DoubanSubjectTmdbMapping",
+    "DoubanTitleTmdbMapping",
 ]

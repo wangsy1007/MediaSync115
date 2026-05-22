@@ -172,6 +172,41 @@ async def lifespan(app: FastAPI):
 
     # 后台预热探索页 section 缓存，避免用户首次打开等 20~30 秒
     async def _warm_explore_cache():
+        # 先把订阅表里现成的 (douban_id, tmdb_id) 映射导入持久化缓存，
+        # 让首次预热时就能命中 DB，避免重新调用 TMDB 搜索
+        try:
+            from app.services.douban_tmdb_mapping_service import (
+                douban_tmdb_mapping_service,
+            )
+            from app.core.database import async_session_maker
+            from app.models.models import Subscription
+            from sqlalchemy import select
+
+            async with async_session_maker() as db:
+                rows = await db.execute(
+                    select(
+                        Subscription.douban_id,
+                        Subscription.tmdb_id,
+                        Subscription.media_type,
+                    ).where(
+                        Subscription.douban_id.is_not(None),
+                        Subscription.tmdb_id.is_not(None),
+                    )
+                )
+                subs = rows.all()
+
+            for douban_id, tmdb_id, media_type in subs:
+                try:
+                    await douban_tmdb_mapping_service.set_subject_mapping(
+                        str(douban_id), str(media_type or "movie"),
+                        int(tmdb_id),
+                        resolution_source="subscription_seed",
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         try:
             from app.api.search import get_explore_sections
             await get_explore_sections(source="douban", limit=12, refresh=False)

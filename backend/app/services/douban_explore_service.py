@@ -13,6 +13,11 @@ from urllib.parse import quote
 import httpx
 
 from app.services.tmdb_service import tmdb_service
+from app.services.douban_tmdb_mapping_service import (
+    douban_tmdb_mapping_service,
+    schedule_persist_subject_mapping,
+    schedule_persist_title_mapping,
+)
 from app.utils.proxy import proxy_manager
 
 from app.core.timezone_utils import beijing_now
@@ -305,7 +310,8 @@ def _get_cached_tmdb_id(cache_key: str) -> tuple[bool, Optional[int]]:
 
 
 def _set_tmdb_id_cache(
-    cache_key: str, tmdb_id: Optional[int], ttl_seconds: Optional[int] = None
+    cache_key: str, tmdb_id: Optional[int], ttl_seconds: Optional[int] = None,
+    *, persist: bool = True, resolution_source: Optional[str] = None,
 ) -> None:
     effective_ttl = ttl_seconds
     if effective_ttl is None:
@@ -316,6 +322,15 @@ def _set_tmdb_id_cache(
         "tmdb_id": tmdb_id,
         "expires_at": time.time() + effective_ttl,
     }
+    if persist:
+        # cache_key 格式：{media_type}|{title_lower}|{year}
+        parts = cache_key.split("|", 2)
+        if len(parts) == 3:
+            media_type, title_lower, year = parts
+            schedule_persist_title_mapping(
+                title_lower, year, media_type, tmdb_id,
+                resolution_source=resolution_source,
+            )
 
 
 def _get_cached_subject_tmdb_id(cache_key: str) -> tuple[bool, Optional[int]]:
@@ -332,7 +347,8 @@ def _get_cached_subject_tmdb_id(cache_key: str) -> tuple[bool, Optional[int]]:
 
 
 def _set_subject_tmdb_cache(
-    cache_key: str, tmdb_id: Optional[int], ttl_seconds: Optional[int] = None
+    cache_key: str, tmdb_id: Optional[int], ttl_seconds: Optional[int] = None,
+    *, persist: bool = True, resolution_source: Optional[str] = None,
 ) -> None:
     effective_ttl = ttl_seconds
     if effective_ttl is None:
@@ -343,6 +359,15 @@ def _set_subject_tmdb_cache(
         "tmdb_id": tmdb_id,
         "expires_at": time.time() + effective_ttl,
     }
+    if persist:
+        # cache_key 格式：{media_type}|{douban_id}
+        parts = cache_key.split("|", 1)
+        if len(parts) == 2:
+            media_type, douban_id = parts
+            schedule_persist_subject_mapping(
+                douban_id, media_type, tmdb_id,
+                resolution_source=resolution_source,
+            )
 
 
 def _get_cached_wikidata_bridge(cache_key: str) -> tuple[bool, dict[str, Any]]:
@@ -1473,6 +1498,8 @@ async def prepare_douban_items_for_library_status(
     if not items:
         return
     _hydrate_tmdb_ids_from_cache(items)
+    # 内存缓存未命中的条目，从 DB 持久化映射回填（覆盖容器重启场景）
+    await _hydrate_tmdb_ids_from_db(items)
     effective_limit = (
         library_status_sync_prime_limit(limit)
         if limit is not None
@@ -1513,6 +1540,80 @@ def _hydrate_tmdb_ids_from_cache(items: list[dict[str, Any]]) -> None:
         if cache_hit:
             item["tmdb_id"] = cached_tmdb_id
             item["mapping_status"] = "resolved" if cached_tmdb_id else "unresolved"
+
+
+async def _hydrate_tmdb_ids_from_db(items: list[dict[str, Any]]) -> int:
+    """对内存缓存未命中的条目，从 DB 持久化映射查询并回填。
+
+    一次性收集所有未解析条目的 (media_type, douban_id) 与 (media_type, title, year)，
+    批量查 DB 后回填到 items 与内存缓存。
+
+    Returns:
+        命中的条目数量。
+    """
+    pending: list[tuple[dict[str, Any], str, str | None, str, str | None]] = []
+    # (item, douban_id_or_empty, media_type, title, year)
+    for item in items:
+        if item.get("tmdb_id") is not None:
+            continue
+        media_type = item.get("media_type")
+        if media_type not in {"movie", "tv"}:
+            continue
+        title = item.get("title")
+        if not isinstance(title, str) or not title:
+            continue
+        douban_id = str(item.get("douban_id") or item.get("id") or "").strip()
+        year = item.get("year") if isinstance(item.get("year"), str) else None
+        pending.append((item, douban_id, media_type, title, year))
+
+    if not pending:
+        return 0
+
+    # 并行查 DB（每个查询都是独立的 SELECT；SQLite 会串行化但不会阻塞 event loop）
+    async def _query_one(
+        douban_id: str, media_type: str, title: str, year: str | None
+    ) -> tuple[bool, int | None]:
+        if douban_id:
+            hit, tmdb = await douban_tmdb_mapping_service.get_subject_mapping(
+                douban_id, media_type
+            )
+            if hit:
+                return True, tmdb
+        if title:
+            hit, tmdb = await douban_tmdb_mapping_service.get_title_mapping(
+                title.strip().lower(), year or "", media_type
+            )
+            if hit:
+                return True, tmdb
+        return False, None
+
+    results = await asyncio.gather(
+        *[_query_one(douban_id, mt, title, year)
+          for _, douban_id, mt, title, year in pending],
+        return_exceptions=True,
+    )
+
+    hits = 0
+    for (item, douban_id, media_type, title, year), result in zip(pending, results):
+        if isinstance(result, Exception):
+            continue
+        cache_hit, tmdb_id = result
+        if not cache_hit:
+            continue
+        item["tmdb_id"] = tmdb_id
+        item["mapping_status"] = "resolved" if tmdb_id else "unresolved"
+        hits += 1
+        # 回填内存缓存（不再 persist 回 DB，避免 churn）
+        if douban_id:
+            subject_key = _build_subject_tmdb_cache_key(douban_id, media_type)
+            _set_subject_tmdb_cache(subject_key, tmdb_id, persist=False)
+        if title:
+            title_key = _build_tmdb_cache_key(
+                title=title, year=year, media_type=media_type
+            )
+            _set_tmdb_id_cache(title_key, tmdb_id, persist=False)
+
+    return hits
 
 
 async def _backfill_tmdb_ids(candidates: list[dict[str, Any]]) -> None:
@@ -1878,6 +1979,11 @@ async def fetch_douban_section(
             enqueue_tmdb_backfill=True,
             rank_start=start + 1,
         )
+
+        # 内存缓存 miss 时从 DB 持久化映射回填，避免重复在线解析
+        await _hydrate_tmdb_ids_from_db(items)
+        # 重新构建候选列表，剔除从 DB 命中的条目
+        backfill_candidates = _build_backfill_candidates_from_items(items)
 
         if sync_prime_limit is not None:
             await _prime_tmdb_ids_for_home_screen(
