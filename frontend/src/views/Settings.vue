@@ -297,31 +297,57 @@
         </el-card>
 
         <!-- 夸克目录选择对话框 -->
-        <el-dialog v-model="quarkFolderPickerVisible" title="选择夸克网盘目录" width="600px">
-          <div class="quark-folder-tree" v-loading="quarkFolderLoading">
-            <div class="quark-folder-breadcrumb">
-              <el-button v-for="(crumb, idx) in quarkFolderCrumbs" :key="`${crumb.folder_id}-${idx}`"
-                size="small" type="primary" link
-                @click="navigateQuarkFolder(crumb, idx)">
-                {{ crumb.folder_name }}
-              </el-button>
+        <el-dialog
+          v-model="quarkFolderPickerVisible"
+          title="选择夸克网盘目录"
+          width="600px"
+          :close-on-click-modal="false"
+        >
+          <div class="folder-picker-header">
+            <div class="folder-picker-breadcrumb">
+              <el-breadcrumb separator="/">
+                <el-breadcrumb-item
+                  v-for="(crumb, idx) in quarkFolderCrumbs"
+                  :key="`${crumb.folder_id}-${idx}`"
+                >
+                  <a @click.prevent="navigateQuarkFolder(crumb, idx)">{{ crumb.folder_name }}</a>
+                </el-breadcrumb-item>
+              </el-breadcrumb>
             </div>
-            <el-table v-if="quarkFolderList.length" :data="quarkFolderList" stripe size="small">
-              <el-table-column label="文件夹">
-                <template #default="{ row }">
-                  <el-button type="primary" link @click="enterQuarkFolder(row)">
-                    📁 {{ row.file_name }}
-                  </el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-            <el-empty v-else description="此目录下没有子文件夹" />
           </div>
+
+          <el-table
+            :data="quarkFolderList"
+            v-loading="quarkFolderLoading"
+            size="small"
+            stripe
+            max-height="360px"
+            @row-click="handleQuarkFolderRowClick"
+          >
+            <el-table-column label="文件夹名称" min-width="300">
+              <template #default="{ row }">
+                <span class="quark-folder-name">{{ row.file_name || row.folder_name || '未命名' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="88" align="center" fixed="right">
+              <template #default="{ row }">
+                <el-button size="small" type="primary" text @click.stop="enterQuarkFolder(row)">进入</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty
+            v-if="!quarkFolderLoading && !quarkFolderList.length"
+            description="此目录下没有子文件夹"
+          />
+
           <template #footer>
-            <el-button @click="quarkFolderPickerVisible = false">取消</el-button>
-            <el-button type="primary" @click="confirmQuarkFolder">
-              选择当前目录：{{ currentQuarkFolderName }}
-            </el-button>
+            <div class="folder-picker-footer">
+              <span>当前目录：{{ currentQuarkFolderName }}</span>
+              <div>
+                <el-button @click="quarkFolderPickerVisible = false">取消</el-button>
+                <el-button type="primary" @click="confirmQuarkFolder">选择当前目录</el-button>
+              </div>
+            </div>
           </template>
         </el-dialog>
       </el-tab-pane>
@@ -994,7 +1020,7 @@
               代理配置说明
             </template>
             <template #default>
-                配置代理后，可用于检测 TMDB、HDHive、Telegram 这些目标地址的连通性。保存后会写入后端运行时配置，并持久化到 data 目录。
+              可手动填写 HTTP/HTTPS/SOCKS 代理；若使用路由器全局代理、透明代理或未填写应用代理，检测时会自动走<strong>系统网络</strong>探测 TMDB、HDHive、Telegram 连通性。保存后写入后端运行时配置并持久化到 data 目录。
             </template>
           </el-alert>
 
@@ -2321,6 +2347,10 @@ const enterQuarkFolder = async (folder) => {
   await loadQuarkFolders(fid)
 }
 
+const handleQuarkFolderRowClick = (row) => {
+  enterQuarkFolder(row)
+}
+
 const navigateQuarkFolder = async (crumb, idx) => {
   quarkFolderCrumbs.value = quarkFolderCrumbs.value.slice(0, idx + 1)
   const target = quarkFolderCrumbs.value[idx]
@@ -3012,10 +3042,14 @@ const getHealthStatusText = (service) => {
 
 const getHealthAppliedProxyText = (service) => {
   const appliedProxy = String(service?.applied_proxy || '').trim()
-  if (!appliedProxy) {
-    return '未命中代理'
+  if (appliedProxy) {
+    return appliedProxy
   }
-  return appliedProxy
+  const scheme = String(service?.proxy_scheme || '').trim().toLowerCase()
+  if (scheme === 'system') {
+    return '系统网络（路由器/全局代理或未配置应用代理）'
+  }
+  return '未配置应用代理'
 }
 
 const getHealthLatencyText = (service) => {
@@ -3023,7 +3057,9 @@ const getHealthLatencyText = (service) => {
   if (latency == null) {
     return ''
   }
-  return `代理延迟：${latency} ms`
+  const scheme = String(service?.proxy_scheme || '').trim().toLowerCase()
+  const label = scheme === 'system' ? '网络延迟' : '代理延迟'
+  return `${label}：${latency} ms`
 }
 
 const handleSaveProxy = async () => {
@@ -4952,6 +4988,19 @@ onBeforeUnmount(() => {
       }
     }
 
+    .folder-display {
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      min-height: 32px;
+
+      > span {
+        color: var(--ms-text-primary);
+        line-height: 1.5;
+      }
+    }
+
     .default-folder-section {
       h4 {
         margin: 0 0 12px;
@@ -5234,6 +5283,15 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.quark-folder-name {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ms-text-primary);
 }
 
 .subtab-order-list {

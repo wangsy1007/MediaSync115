@@ -468,6 +468,32 @@ def _extract_proxy_scheme(proxy_url: str) -> str:
     return str(urlparse(str(proxy_url or "").strip()).scheme or "").strip().lower()
 
 
+def _resolve_health_probe_route(scheme: str) -> dict[str, str]:
+    """解析健康检查实际走应用代理还是系统网络（含路由器全局代理）。"""
+    configured_proxy = str(proxy_manager.get_proxy_for_scheme(scheme) or "").strip()
+    uses_app_proxy = bool(configured_proxy) and proxy_manager._should_apply_proxy_mounts()
+    if uses_app_proxy:
+        return {
+            "route_mode": "configured",
+            "applied_proxy": configured_proxy,
+            "proxy_scheme": _extract_proxy_scheme(configured_proxy),
+            "route_hint": "应用代理",
+        }
+    if configured_proxy:
+        return {
+            "route_mode": "system",
+            "applied_proxy": "",
+            "proxy_scheme": "system",
+            "route_hint": "系统网络（应用代理不可达，已改走系统路由）",
+        }
+    return {
+        "route_mode": "system",
+        "applied_proxy": "",
+        "proxy_scheme": "system",
+        "route_hint": "系统网络（未配置应用代理，含路由器全局代理）",
+    }
+
+
 async def _probe_target_health(
     *,
     target: str,
@@ -492,18 +518,14 @@ async def _probe_target_health(
             target=normalized_target,
         )
 
-    applied_proxy = str(proxy_manager.get_proxy_for_scheme(scheme) or "").strip()
-    if not applied_proxy:
-        return _build_proxy_health_payload(
-            status="error",
-            valid=False,
-            message="未命中代理",
-            target=normalized_target,
-        )
+    route = _resolve_health_probe_route(scheme)
+    applied_proxy = route["applied_proxy"]
+    proxy_scheme = route["proxy_scheme"]
+    route_hint = route["route_hint"]
 
     try:
-        async with httpx.AsyncClient(
-            timeout=10.0, follow_redirects=False, proxy=applied_proxy
+        async with proxy_manager.create_httpx_client(
+            timeout=10.0, follow_redirects=False
         ) as client:
             start = time.perf_counter()
             response = await client.get(normalized_target)
@@ -513,20 +535,20 @@ async def _probe_target_health(
             return _build_proxy_health_payload(
                 status="ok",
                 valid=True,
-                message=f"连接正常 (HTTP {status_code})",
+                message=f"连接正常 (HTTP {status_code}，{route_hint})",
                 target=normalized_target,
                 applied_proxy=applied_proxy,
-                proxy_scheme=_extract_proxy_scheme(applied_proxy),
+                proxy_scheme=proxy_scheme,
                 status_code=status_code,
                 latency_ms=latency_ms,
             )
         return _build_proxy_health_payload(
             status="error",
             valid=False,
-            message=f"连接异常 (HTTP {status_code})",
+            message=f"连接异常 (HTTP {status_code}，{route_hint})",
             target=normalized_target,
             applied_proxy=applied_proxy,
-            proxy_scheme=_extract_proxy_scheme(applied_proxy),
+            proxy_scheme=proxy_scheme,
             status_code=status_code,
             latency_ms=latency_ms,
         )
@@ -534,10 +556,10 @@ async def _probe_target_health(
         return _build_proxy_health_payload(
             status="error",
             valid=False,
-            message=str(exc) or "连接失败",
+            message=f"{str(exc) or '连接失败'}（{route_hint}）",
             target=normalized_target,
             applied_proxy=applied_proxy,
-            proxy_scheme=_extract_proxy_scheme(applied_proxy),
+            proxy_scheme=proxy_scheme,
         )
 
 
@@ -1018,7 +1040,7 @@ async def get_proxy_config():
 
 @router.get("/health/all")
 async def check_all_services_health():
-    """Check whether proxy settings are applied to fixed probe targets."""
+    """检测固定目标连通性：优先走应用内代理，否则走系统网络（含路由器全局代理）。"""
     tmdb_target = runtime_settings_service.get_tmdb_base_url()
 
     hdhive_result, tmdb_result, tg_result = await asyncio.gather(

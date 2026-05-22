@@ -119,7 +119,12 @@ def test_health_all_uses_configured_proxy_for_fixed_targets(
             )
             return DummyResponse(status_map[url])
 
-    monkeypatch.setattr(settings_api.httpx, "AsyncClient", DummyAsyncClient)
+    monkeypatch.setattr(
+        settings_api.proxy_manager, "create_httpx_client", DummyAsyncClient
+    )
+    monkeypatch.setattr(
+        settings_api.proxy_manager, "_should_apply_proxy_mounts", lambda: True
+    )
 
     try:
         login_response = client.post(
@@ -134,41 +139,21 @@ def test_health_all_uses_configured_proxy_for_fixed_targets(
         assert payload["valid_count"] == 3
         assert payload["total_count"] == 3
         assert payload["all_valid"] is True
-        assert payload["services"]["hdhive"] == {
-            "status": "ok",
-            "valid": True,
-            "message": "连接正常 (HTTP 302)",
-            "target": "https://hdhive.com/",
-            "applied_proxy": "socks5://127.0.0.1:7890",
-            "proxy_scheme": "socks5",
-            "status_code": 302,
-        }
-        assert payload["services"]["tmdb"] == {
-            "status": "ok",
-            "valid": True,
-            "message": "连接正常 (HTTP 204)",
-            "target": "https://api.themoviedb.org/3",
-            "applied_proxy": "socks5://127.0.0.1:7890",
-            "proxy_scheme": "socks5",
-            "status_code": 204,
-        }
-        assert payload["services"]["tg"] == {
-            "status": "ok",
-            "valid": True,
-            "message": "连接正常 (HTTP 200)",
-            "target": "https://api.telegram.org",
-            "applied_proxy": "socks5://127.0.0.1:7890",
-            "proxy_scheme": "socks5",
-            "status_code": 200,
-        }
+        assert payload["services"]["hdhive"]["status"] == "ok"
+        assert payload["services"]["hdhive"]["valid"] is True
+        assert payload["services"]["hdhive"]["applied_proxy"] == "socks5://127.0.0.1:7890"
+        assert payload["services"]["hdhive"]["proxy_scheme"] == "socks5"
+        assert payload["services"]["tmdb"]["status"] == "ok"
+        assert payload["services"]["tmdb"]["applied_proxy"] == "socks5://127.0.0.1:7890"
+        assert payload["services"]["tg"]["status"] == "ok"
+        assert payload["services"]["tg"]["applied_proxy"] == "socks5://127.0.0.1:7890"
         assert len(calls) == 3
-        assert {call["proxy"] for call in calls} == {"socks5://127.0.0.1:7890"}
         assert {call["follow_redirects"] for call in calls} == {False}
     finally:
         _restore_proxy_config(original_config)
 
 
-def test_health_all_reports_missing_proxy_without_direct_connect(
+def test_health_all_uses_system_network_without_app_proxy(
     client: TestClient, monkeypatch
 ) -> None:
     settings_api = importlib.import_module("app.api.settings")
@@ -186,13 +171,35 @@ def test_health_all_reports_missing_proxy_without_direct_connect(
         lambda: "https://api.themoviedb.org/3",
     )
 
+    status_map = {
+        "https://hdhive.com/": 302,
+        "https://api.themoviedb.org/3": 204,
+        "https://api.telegram.org": 200,
+    }
+
+    class DummyResponse:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
     class DummyAsyncClient:
         def __init__(self, **kwargs) -> None:
-            raise AssertionError(
-                "AsyncClient should not be created when no proxy is matched"
-            )
+            self.kwargs = kwargs
 
-    monkeypatch.setattr(settings_api.httpx, "AsyncClient", DummyAsyncClient)
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def get(self, url: str) -> DummyResponse:
+            return DummyResponse(status_map[url])
+
+    monkeypatch.setattr(
+        settings_api.proxy_manager, "create_httpx_client", DummyAsyncClient
+    )
+    monkeypatch.setattr(
+        settings_api.proxy_manager, "_should_apply_proxy_mounts", lambda: False
+    )
 
     try:
         login_response = client.post(
@@ -204,16 +211,15 @@ def test_health_all_reports_missing_proxy_without_direct_connect(
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["valid_count"] == 0
+        assert payload["valid_count"] == 3
         assert payload["total_count"] == 3
-        assert payload["all_valid"] is False
+        assert payload["all_valid"] is True
         for service_key in ("hdhive", "tmdb", "tg"):
-            assert payload["services"][service_key]["status"] == "error"
-            assert payload["services"][service_key]["valid"] is False
-            assert payload["services"][service_key]["message"] == "未命中代理"
+            assert payload["services"][service_key]["status"] == "ok"
+            assert payload["services"][service_key]["valid"] is True
             assert payload["services"][service_key]["applied_proxy"] == ""
-            assert payload["services"][service_key]["proxy_scheme"] == ""
-            assert payload["services"][service_key]["status_code"] is None
+            assert payload["services"][service_key]["proxy_scheme"] == "system"
+            assert "系统网络" in payload["services"][service_key]["message"]
     finally:
         _restore_proxy_config(original_config)
 
