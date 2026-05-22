@@ -92,11 +92,15 @@ class DoubanTmdbMappingService:
         if row is None:
             return False, None
 
-        # 负缓存检查过期
+        # 负缓存检查过期（兼容 SQLite 取出的 naive datetime）
         if row.tmdb_id is None:
             cutoff = beijing_now() - timedelta(days=NEGATIVE_CACHE_VALID_DAYS)
-            if row.updated_at and row.updated_at < cutoff:
-                return False, None
+            row_updated = row.updated_at
+            if row_updated is not None:
+                if row_updated.tzinfo is None and cutoff.tzinfo is not None:
+                    row_updated = row_updated.replace(tzinfo=cutoff.tzinfo)
+                if row_updated < cutoff:
+                    return False, None
 
         return True, row.tmdb_id
 
@@ -218,8 +222,12 @@ class DoubanTmdbMappingService:
 
         if row.tmdb_id is None:
             cutoff = beijing_now() - timedelta(days=NEGATIVE_CACHE_VALID_DAYS)
-            if row.updated_at and row.updated_at < cutoff:
-                return False, None
+            row_updated = row.updated_at
+            if row_updated is not None:
+                if row_updated.tzinfo is None and cutoff.tzinfo is not None:
+                    row_updated = row_updated.replace(tzinfo=cutoff.tzinfo)
+                if row_updated < cutoff:
+                    return False, None
 
         return True, row.tmdb_id
 
