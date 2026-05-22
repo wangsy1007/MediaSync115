@@ -680,7 +680,7 @@ class HDHiveService:
             "user": row.get("user") if isinstance(row.get("user"), dict) else None,
         }
 
-    async def _collect_tmdb_resources(self, tmdb_id: int, media_type: str) -> dict[str, Any]:
+    async def _collect_tmdb_resources(self, tmdb_id: int, media_type: str, *, target_pan_type: str = "115") -> dict[str, Any]:
         normalized_media_type = self._normalize_media_type(media_type)
         _, payload = await self._request_open_api(
             "GET",
@@ -698,7 +698,7 @@ class HDHiveService:
                 continue
             pan_type = self._normalize_pan_type(row.get("pan_type")) or "unknown"
             pan_type_counts[pan_type] = pan_type_counts.get(pan_type, 0) + 1
-            if pan_type != "115":
+            if pan_type != target_pan_type:
                 continue
             filtered_rows.append(self._map_resource_row(row, idx))
         return {
@@ -792,10 +792,18 @@ class HDHiveService:
         return await self._list_resources_by_tmdb(tmdb_id, "tv")
 
     async def get_movie_pan115_result(self, tmdb_id: int) -> dict[str, Any]:
-        return await self._collect_tmdb_resources(tmdb_id, "movie")
+        return await self._collect_tmdb_resources(tmdb_id, "movie", target_pan_type="115")
 
     async def get_tv_pan115_result(self, tmdb_id: int) -> dict[str, Any]:
-        return await self._collect_tmdb_resources(tmdb_id, "tv")
+        return await self._collect_tmdb_resources(tmdb_id, "tv", target_pan_type="115")
+
+    async def get_movie_quark_result(self, tmdb_id: int) -> dict[str, Any]:
+        """获取 HDHive 上的夸克网盘资源"""
+        return await self._collect_tmdb_resources(tmdb_id, "movie", target_pan_type="quark")
+
+    async def get_tv_quark_result(self, tmdb_id: int) -> dict[str, Any]:
+        """获取 HDHive 上的夸克网盘资源"""
+        return await self._collect_tmdb_resources(tmdb_id, "tv", target_pan_type="quark")
 
 
     @staticmethod

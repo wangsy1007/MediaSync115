@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     TMDB_REGION: str = "CN"
 
     PAN115_COOKIE: Optional[str] = None
+    QUARK_COOKIE: Optional[str] = None
     HDHIVE_COOKIE: Optional[str] = None
     HDHIVE_API_KEY: Optional[str] = None
     HDHIVE_BASE_URL: str = "https://hdhive.com/"

@@ -20,6 +20,7 @@ class RuntimeSettingsService:
         "all_proxy": "ALL_PROXY",
         "socks_proxy": "SOCKS_PROXY",
         "pan115_cookie": "PAN115_COOKIE",
+        "quark_cookie": "QUARK_COOKIE",
         "hdhive_cookie": "HDHIVE_COOKIE",
         "hdhive_api_key": "HDHIVE_API_KEY",
         "hdhive_base_url": "HDHIVE_BASE_URL",
@@ -71,6 +72,9 @@ class RuntimeSettingsService:
             "pan115_default_folder_name": "根目录",
             "pan115_offline_folder_id": "0",
             "pan115_offline_folder_name": "根目录",
+            "quark_cookie": settings.QUARK_COOKIE or "",
+            "quark_default_folder_id": "0",
+            "quark_default_folder_name": "根目录",
             "hdhive_cookie": settings.HDHIVE_COOKIE or "",
             "hdhive_api_key": settings.HDHIVE_API_KEY or "",
             "hdhive_base_url": settings.HDHIVE_BASE_URL,
@@ -396,6 +400,36 @@ class RuntimeSettingsService:
         self._save()
         self.apply_runtime_overrides()
         return self.get_pan115_cookie()
+
+    def get_quark_cookie(self) -> str:
+        return str(self._data.get("quark_cookie") or "")
+
+    def update_quark_cookie(self, cookie: str) -> str:
+        cleaned = str(cookie or "").strip()
+        if not cleaned:
+            raise ValueError("夸克 Cookie 不能为空")
+
+        self._persist_env_backed_fields({"quark_cookie": cleaned})
+        self._save()
+        self.apply_runtime_overrides()
+        return self.get_quark_cookie()
+
+    def get_quark_default_folder(self) -> dict[str, str]:
+        folder_id = str(self._data.get("quark_default_folder_id") or "0")
+        folder_name = str(self._data.get("quark_default_folder_name") or "")
+        if folder_id == "0" and not folder_name:
+            folder_name = "根目录"
+        return {"folder_id": folder_id, "folder_name": folder_name}
+
+    def update_quark_default_folder(self, folder_id: str, folder_name: str = "") -> dict[str, str]:
+        normalized_id = str(folder_id or "0").strip()
+        normalized_name = str(folder_name or "").strip()
+        if normalized_id == "0" and not normalized_name:
+            normalized_name = "根目录"
+        self._data["quark_default_folder_id"] = normalized_id
+        self._data["quark_default_folder_name"] = normalized_name
+        self._save()
+        return self.get_quark_default_folder()
 
     def update_pansou_base_url(self, base_url: str) -> str:
         cleaned = str(base_url or "").strip()
@@ -1047,6 +1081,7 @@ class RuntimeSettingsService:
         settings.ALL_PROXY = str(self._data.get("all_proxy") or "").strip() or None
         settings.SOCKS_PROXY = str(self._data.get("socks_proxy") or "").strip() or None
         settings.PAN115_COOKIE = self.get_pan115_cookie() or None
+        settings.QUARK_COOKIE = self.get_quark_cookie() or None
         settings.HDHIVE_COOKIE = self.get_hdhive_cookie() or None
         settings.HDHIVE_API_KEY = self.get_hdhive_api_key() or None
         settings.HDHIVE_BASE_URL = self.get_hdhive_base_url()
@@ -1081,6 +1116,8 @@ class RuntimeSettingsService:
         from app.services.pan115_service import pan115_service
 
         pan115_service.update_cookie(self.get_pan115_cookie())
+        from app.services.quark_service import quark_service
+        quark_service.update_cookie(self.get_quark_cookie())
         hdhive_service.set_cookie(self.get_hdhive_cookie())
         hdhive_service.set_api_key(self.get_hdhive_api_key())
         hdhive_service.set_base_url(self.get_hdhive_base_url())
