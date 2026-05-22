@@ -268,11 +268,23 @@
 
             <el-form-item label="状态信息" v-if="quarkStatus.user_info">
               <el-descriptions :column="2" size="small" border>
+                <el-descriptions-item label="昵称">
+                  {{ quarkStatus.user_info.nickname || '—' }}
+                </el-descriptions-item>
+                <el-descriptions-item label="会员类型">
+                  <el-tag v-if="quarkStatus.user_info.member_type && quarkStatus.user_info.member_type !== 'NORMAL'" type="warning" size="small">
+                    {{ quarkStatus.user_info.member_label || quarkStatus.user_info.member_type }}
+                  </el-tag>
+                  <el-tag v-else type="info" size="small">普通用户</el-tag>
+                </el-descriptions-item>
                 <el-descriptions-item label="总容量">
                   {{ formatQuarkBytes(quarkStatus.user_info.total_capacity) }}
                 </el-descriptions-item>
                 <el-descriptions-item label="已用容量">
                   {{ formatQuarkBytes(quarkStatus.user_info.use_capacity) }}
+                </el-descriptions-item>
+                <el-descriptions-item label="剩余转存次数">
+                  {{ quarkStatus.user_info.file_save_to_remains ?? '—' }}
                 </el-descriptions-item>
               </el-descriptions>
             </el-form-item>
@@ -2172,6 +2184,17 @@ const refreshQuarkInfo = async () => {
     quarkStatus.is_configured = Boolean(data?.is_configured)
   } catch {
     quarkStatus.is_configured = false
+  }
+  // 如果已配置 cookie，自动获取连通性和容量信息
+  if (quarkStatus.is_configured) {
+    try {
+      const { data } = await quarkApi.checkConnectivity()
+      quarkStatus.valid = Boolean(data?.valid)
+      quarkStatus.user_info = data?.user_info || null
+    } catch {
+      quarkStatus.valid = false
+      quarkStatus.user_info = null
+    }
   }
   try {
     const { data } = await quarkApi.getDefaultFolder()

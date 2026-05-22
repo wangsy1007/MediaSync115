@@ -131,20 +131,43 @@ class QuarkService:
     # ───── 连通性 / 用户 ─────
 
     async def check_cookie_valid(self) -> dict[str, Any]:
-        """检查 Cookie 是否有效，返回用户信息"""
+        """检查 Cookie 是否有效，返回用户信息（容量、会员等）"""
         try:
             payload = await self._request(
                 "GET",
-                "/1/clouddrive/capacity/growth/info",
+                "/1/clouddrive/member",
                 params={"pr": "ucpro", "fr": "pc"},
             )
             data = payload.get("data") or {}
+            if not data:
+                return {"valid": False, "user_info": None, "message": "无法获取账号信息"}
+
+            # 会员类型映射
+            member_type_map = {
+                "NORMAL": "普通用户",
+                "VIP": "VIP",
+                "SUPER_VIP": "SVIP",
+                "Z_VIP": "SVIP+",
+                "EXP_SVIP": "88VIP",
+                "MINI_VIP": "Mini VIP",
+            }
+            raw_member_type = data.get("member_type") or "NORMAL"
+            member_label = member_type_map.get(raw_member_type, raw_member_type)
+
+            # 获取昵称（从 account/info）
+            nickname = await self._fetch_nickname()
+
+            user_info = {
+                "nickname": nickname,
+                "total_capacity": data.get("total_capacity"),
+                "use_capacity": data.get("use_capacity"),
+                "member_type": raw_member_type,
+                "member_label": member_label,
+                "file_save_to_remains": (data.get("member_info") or {}).get("file_save_to_remains"),
+            }
             return {
                 "valid": True,
-                "user_info": {
-                    "total_capacity": data.get("total_capacity"),
-                    "use_capacity": data.get("use_capacity"),
-                },
+                "user_info": user_info,
                 "message": "连接成功",
             }
         except ValueError as exc:
@@ -155,11 +178,30 @@ class QuarkService:
         except Exception as exc:
             return {"valid": False, "user_info": None, "message": f"连接失败: {str(exc)[:100]}"}
 
+    async def _fetch_nickname(self) -> str:
+        """从 pan.quark.cn/account/info 获取昵称"""
+        try:
+            client = proxy_manager.create_httpx_client(timeout=self._CONNECT_TIMEOUT)
+            try:
+                resp = await client.get(
+                    "https://pan.quark.cn/account/info",
+                    params={"fr": "pc", "platform": "pc"},
+                    headers=self._build_headers(),
+                )
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    return str((payload.get("data") or {}).get("nickname") or "")
+            finally:
+                await client.aclose()
+        except Exception:
+            pass
+        return ""
+
     async def get_account_info(self) -> dict[str, Any]:
-        """获取账号信息"""
+        """获取账号信息（会员、容量等）"""
         payload = await self._request(
             "GET",
-            "/1/clouddrive/capacity/growth/info",
+            "/1/clouddrive/member",
             params={"pr": "ucpro", "fr": "pc"},
         )
         return payload.get("data") or {}
