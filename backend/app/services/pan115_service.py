@@ -936,13 +936,13 @@ class Pan115Service:
                     continue
 
                 # web share_snap 返回中，目录通常没有 fid，文件包含 fid
-                fid = item.get("fid")
+                fid = self._share_item_fid(item)
                 if fid:
                     all_files.append(
                         {
-                            "fid": str(fid),
-                            "name": item.get("n", ""),
-                            "size": item.get("s", 0),
+                            "fid": fid,
+                            "name": self._share_item_name(item),
+                            "size": self._share_item_size(item),
                         }
                     )
                     continue
@@ -1095,17 +1095,61 @@ class Pan115Service:
 
         if file_list:
             selected_files = self._select_files_for_best_quality_transfer(file_list)
-            file_ids = []
-            for f in selected_files:
-                if isinstance(f, dict):
-                    fid = f.get("fid") or f.get("id", "")
-                    if fid:
-                        file_ids.append(str(fid))
+            file_ids = self._collect_share_file_ids(selected_files)
+            if not file_ids:
+                file_ids = self._collect_share_file_ids(
+                    [f for f in file_list if isinstance(f, dict)]
+                )
             return await self.save_share_files(share_code, file_ids, pid, receive_code)
 
         return {"state": False, "error": "分享内容为空或无法获取"}
 
     # ==================== Cookie管理 ====================
+
+    @staticmethod
+    def _share_item_name(item: dict[str, Any]) -> str:
+        """统一分享列表中的文件名（web 用 n，proapi 常用 fn）。"""
+        return str(
+            item.get("name")
+            or item.get("n")
+            or item.get("fn")
+            or item.get("file_name")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _share_item_size(item: dict[str, Any]) -> int:
+        """统一分享列表中的文件大小（web 用 s，proapi 常用 fs）。"""
+        raw = item.get("size")
+        if raw in (None, ""):
+            raw = item.get("s")
+        if raw in (None, ""):
+            raw = item.get("fs")
+        try:
+            return int(raw or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _share_item_fid(item: dict[str, Any]) -> str:
+        """统一分享列表中的文件 ID。"""
+        raw = item.get("fid") or item.get("id") or item.get("file_id")
+        if raw in (None, "", 0, "0"):
+            return ""
+        return str(raw).strip()
+
+    @classmethod
+    def _collect_share_file_ids(cls, files: list[dict[str, Any]]) -> list[str]:
+        """从分享文件列表中提取去重后的 file_id。"""
+        return list(
+            dict.fromkeys(
+                fid
+                for item in files
+                if isinstance(item, dict)
+                for fid in [cls._share_item_fid(item)]
+                if fid
+            )
+        )
 
     @staticmethod
     def _is_video_file_name(filename: str) -> bool:
@@ -1222,7 +1266,7 @@ class Pan115Service:
     def _score_video_file(cls, item: dict[str, Any]) -> tuple[int, int, int, int, int]:
         """给视频文件打分，分数越高表示画质越优"""
 
-        name = str(item.get("name") or item.get("n") or "")
+        name = cls._share_item_name(item)
         lowered = name.lower()
 
         resolution_score = 0
@@ -1293,7 +1337,7 @@ class Pan115Service:
             item
             for item in files
             if isinstance(item, dict)
-            and cls._is_video_file_name(str(item.get("name") or item.get("n") or ""))
+            and cls._is_video_file_name(cls._share_item_name(item))
         ]
         if not video_files:
             return None
@@ -1323,17 +1367,17 @@ class Pan115Service:
             item
             for item in files
             if isinstance(item, dict)
-            and cls._is_video_file_name(str(item.get("name") or item.get("n") or ""))
+            and cls._is_video_file_name(cls._share_item_name(item))
         ]
         if len(video_files) <= 1:
             return video_files
 
         core_names = {
-            cls._extract_core_name(str(v.get("name") or v.get("n") or "")): []
+            cls._extract_core_name(cls._share_item_name(v)): []
             for v in video_files
         }
         for v in video_files:
-            name = str(v.get("name") or v.get("n") or "")
+            name = cls._share_item_name(v)
             core_names.setdefault(cls._extract_core_name(name), []).append(v)
 
         if len(core_names) <= 1:
@@ -2121,10 +2165,11 @@ class Pan115Service:
 
         selected_files = self._select_files_for_best_quality_transfer(all_files, quality_filter)
 
-        # 批量转存所有文件（去重）
-        file_ids = list(
-            dict.fromkeys([str(f["fid"]) for f in selected_files if f.get("fid")])
-        )
+        file_ids = self._collect_share_file_ids(selected_files)
+        if not file_ids:
+            file_ids = self._collect_share_file_ids(all_files)
+        if not file_ids:
+            raise ValueError("分享中未找到可转存的视频文件")
         result = await self.save_share_files(
             share_code, file_ids, target_folder_id, receive_code
         )
@@ -2178,9 +2223,11 @@ class Pan115Service:
             raise ValueError("分享中没有可转存的文件")
 
         selected_files = self._select_files_for_best_quality_transfer(all_files, quality_filter)
-        file_ids = list(
-            dict.fromkeys([str(f["fid"]) for f in selected_files if f.get("fid")])
-        )
+        file_ids = self._collect_share_file_ids(selected_files)
+        if not file_ids:
+            file_ids = self._collect_share_file_ids(all_files)
+        if not file_ids:
+            raise ValueError("分享中未找到可转存的视频文件")
         result = await self.save_share_files(
             share_code, file_ids, str(parent_id or "0"), receive_code
         )
