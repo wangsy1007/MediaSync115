@@ -769,6 +769,47 @@ class Pan115Service:
         result = await self._async_call("share_info", {"share_code": share_code})
         return check_response(result)
 
+    @staticmethod
+    def _build_share_snap_payload(
+        share_code: str,
+        receive_code: str,
+        cid: str,
+        offset: int,
+        limit: int,
+    ) -> dict[str, Any]:
+        return {
+            "share_code": share_code,
+            "receive_code": receive_code,
+            "cid": cid,
+            "offset": offset,
+            "limit": limit,
+        }
+
+    async def _fetch_share_snap_raw(self, payload: dict[str, Any], *, mode: str) -> Any:
+        """按多种 115 分享目录接口拉取 snap 数据（proapi / webapi POST / webapi GET）。"""
+        if mode == "proapi":
+            return await self._async_call(
+                "share_snap_app",
+                payload,
+                app="android",
+                base_url="https://proapi.115.com",
+            )
+        if mode == "webapi_post":
+            snap_payload = {"cid": 0, "limit": 32, "offset": 0, **payload}
+            return await self._async_call(
+                "request",
+                "https://webapi.115.com/share/snap",
+                "POST",
+                snap_payload,
+            )
+        if mode == "webapi_get":
+            return await self._async_call(
+                "share_snap",
+                payload,
+                base_url="https://webapi.115.com",
+            )
+        raise ValueError(f"unsupported share snap mode: {mode}")
+
     async def get_share_file_list(
         self,
         share_code: str,
@@ -790,38 +831,24 @@ class Pan115Service:
         Returns:
             文件列表
         """
-        payload = {
-            "share_code": share_code,
-            "receive_code": receive_code,
-            "cid": cid,
-            "offset": offset,
-            "limit": limit,
-        }
+        payload = self._build_share_snap_payload(
+            share_code, receive_code, cid, offset, limit
+        )
+        # 115 已逐步禁用 webapi GET /share/snap；登录态下 proapi 最稳，其次尝试 POST。
         attempts = (
-            (
-                "share_snap",
-                {"base_url": "https://webapi.115.com"},
-                "webapi.115.com/share/snap",
-            ),
-            ("share_snap", {}, "default/share_snap"),
-            # proapi 的正确端点是 /{app}/2.0/share/snap，需调用 share_snap_app
-            (
-                "share_snap_app",
-                {"app": "android", "base_url": "https://proapi.115.com"},
-                "proapi.115.com/android/2.0/share/snap",
-            ),
+            ("proapi", "proapi.115.com/android/2.0/share/snap"),
+            ("webapi_post", "webapi.115.com/share/snap POST"),
+            ("webapi_get", "webapi.115.com/share/snap GET"),
         )
 
         max_retries_per_attempt = 3
         last_error: Exception | None = None
         last_error_endpoint = ""
         data: Any | None = None
-        for method_name, extra_kwargs, endpoint in attempts:
+        for mode, endpoint in attempts:
             for retry in range(max_retries_per_attempt):
                 try:
-                    result = await self._async_call(
-                        method_name, payload, **extra_kwargs
-                    )
+                    result = await self._fetch_share_snap_raw(payload, mode=mode)
                     data = check_response(result)
                     break
                 except Exception as exc:
@@ -834,12 +861,10 @@ class Pan115Service:
                     # 业务错误（如“请输入访问码/访问码错误/分享失效”）应直接抛出，避免被后续端点错误覆盖。
                     if not self._is_method_not_allowed_error(error_text):
                         raise
-                    if self._is_method_not_allowed_error(error_text):
-                        if retry < max_retries_per_attempt - 1:
-                            continue
+                    if retry < max_retries_per_attempt - 1:
+                        continue
                     break
 
-            # 请求成功后直接返回
             if data is not None:
                 break
 
@@ -852,12 +877,18 @@ class Pan115Service:
                 )
             raise last_error or Exception("获取分享文件列表失败")
 
-        # 确保返回的是字典格式，包含 list 字段
+        return self._normalize_share_snap_response(data)
+
+    @staticmethod
+    def _normalize_share_snap_response(data: Any) -> dict[str, Any]:
+        """确保返回的是字典格式，包含 list 字段"""
         if isinstance(data, list):
             return {"list": data}
-        elif isinstance(data, dict):
+        if isinstance(data, dict):
             if "list" not in data and "data" in data:
-                return {"list": data["data"].get("list", [])}
+                nested = data.get("data")
+                if isinstance(nested, dict) and "list" in nested:
+                    return {"list": nested.get("list", [])}
             return data
         return {"list": []}
 
@@ -1895,7 +1926,12 @@ class Pan115Service:
         text = str(error_text or "").lower()
         if not text:
             return False
-        return "code=405" in text or "method not allowed" in text
+        return (
+            "code=405" in text
+            or "method not allowed" in text
+            or "method is invalid" in text
+            or "invalid for this resource" in text
+        )
 
     @staticmethod
     def _is_retryable_save_error(error_text: str) -> bool:
