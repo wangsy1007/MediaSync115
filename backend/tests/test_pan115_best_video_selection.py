@@ -33,6 +33,39 @@ class TestPan115BestVideoSelection:
         assert best is not None
         assert best["fid"] == "2"
 
+    def test_share_item_name_reads_proapi_fn_field(self) -> None:
+        """proapi share/snap 使用 fn 字段表示文件名"""
+
+        item = {
+            "fid": "3413434513370655131",
+            "fn": "偏偏遇见你.2026 - S01E17.mkv",
+            "fs": "307122081",
+        }
+
+        assert Pan115Service._share_item_name(item).endswith(".mkv")
+        assert Pan115Service._share_item_size(item) == 307122081
+        assert Pan115Service._share_item_fid(item) == "3413434513370655131"
+
+    def test_select_files_recognizes_proapi_fn_as_video(self) -> None:
+        """分享列表仅有 fn 时也应识别为视频并参与择优"""
+
+        files = [
+            {
+                "fid": "1",
+                "fn": "Movie.720p.mkv",
+                "fs": 5_000,
+            },
+            {
+                "fid": "2",
+                "fn": "Movie.1080p.mkv",
+                "fs": 8_000,
+            },
+        ]
+
+        selected = Pan115Service._select_files_for_best_quality_transfer(files)
+
+        assert [item["fid"] for item in selected] == ["2"]
+
     def test_select_files_only_when_multiple_videos(self) -> None:
         """测试多个视频时只保留最佳视频"""
 
