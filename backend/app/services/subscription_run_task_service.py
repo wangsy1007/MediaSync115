@@ -88,12 +88,15 @@ class SubscriptionRunTaskService:
             },
         )
 
-        task = asyncio.create_task(
+        async with self._lock:
+            queued_task = dict(self._tasks[task_id])
+
+        background_task = asyncio.create_task(
             self._run_task(task_id, normalized_channel, bool(force_auto_download))
         )
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
-        return dict(task)
+        self._background_tasks.add(background_task)
+        background_task.add_done_callback(self._background_tasks.discard)
+        return queued_task
 
     async def get(self, task_id: str) -> dict[str, Any] | None:
         async with self._lock:
