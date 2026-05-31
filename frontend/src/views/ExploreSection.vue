@@ -1,11 +1,18 @@
 <template>
-  <div class="explore-section-page" v-loading="loading">
+  <div class="explore-section-page">
     <div class="page-header">
       <el-button text @click="goBack">返回探索</el-button>
       <div class="title-wrap">
         <h2>{{ sectionMeta.title || '完整榜单' }}</h2>
         <el-tag size="small" type="info">{{ sectionMeta.tag || '' }}</el-tag>
         <span class="count">{{ formatExploreCount(remoteTotal) }} 部</span>
+      </div>
+    </div>
+
+    <div v-if="loading && !visibleItems.length" class="skeleton-grid">
+      <div v-for="n in 12" :key="`skeleton-${n}`" class="skeleton-card">
+        <div class="skeleton-poster" />
+        <div class="skeleton-title" />
       </div>
     </div>
 
@@ -1043,6 +1050,45 @@ onBeforeUnmount(() => {
     }
   }
 
+  .skeleton-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 14px;
+
+    .skeleton-card {
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid var(--ms-border-color);
+      background: var(--ms-glass-bg);
+    }
+
+    .skeleton-poster {
+      aspect-ratio: 2 / 3;
+      background: linear-gradient(
+        90deg,
+        var(--ms-bg-elevated) 25%,
+        var(--ms-bg-hover) 50%,
+        var(--ms-bg-elevated) 75%
+      );
+      background-size: 300% 100%;
+      animation: explore-skeleton-shimmer 1.2s ease-in-out infinite;
+    }
+
+    .skeleton-title {
+      height: 14px;
+      margin: 10px 12px 12px;
+      border-radius: 6px;
+      background: linear-gradient(
+        90deg,
+        var(--ms-bg-elevated) 25%,
+        var(--ms-bg-hover) 50%,
+        var(--ms-bg-elevated) 75%
+      );
+      background-size: 300% 100%;
+      animation: explore-skeleton-shimmer 1.2s ease-in-out infinite;
+    }
+  }
+
   .cards-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -1186,6 +1232,15 @@ onBeforeUnmount(() => {
   }
   100% {
     box-shadow: 0 0 0 1px rgba(52, 199, 89, 0), 0 0 0 rgba(52, 199, 89, 0);
+  }
+}
+
+@keyframes explore-skeleton-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
   }
 }
 
