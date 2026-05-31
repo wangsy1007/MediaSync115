@@ -315,8 +315,8 @@ function handleGoHome() {
 function handleSideMenuSelect(index) {
   const path = String(index || '').trim()
   if (!path.startsWith('/')) return
-  if (path === route.path) return
-  router.push(path).catch(() => {})
+  if (path === route.path && !Object.keys(route.query).length) return
+  router.push({ path, query: {} }).catch(() => {})
 }
 
 const dockTabs = computed(() => {
