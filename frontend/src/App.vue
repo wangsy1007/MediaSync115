@@ -7,7 +7,7 @@
     </router-view>
 
     <el-container v-else class="app-container" :class="{ 'is-compact': isCompact }">
-      <el-aside v-if="!isCompact" width="240px" class="app-aside">
+      <el-aside v-if="!isCompact" width="auto" class="app-aside">
         <div
           class="logo"
           role="button"
@@ -464,13 +464,19 @@ html, body, #app {
 .app-aside {
   position: relative;
   z-index: 30;
+  width: auto !important;
+  flex: 0 0 auto;
   background: var(--ms-bg-secondary);
   border-right: 1px solid var(--ms-border-color);
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: max-content;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   contain: layout style;
 
   .logo {
+    grid-column: 1;
+    width: max-content;
+    max-width: 100%;
     min-height: 64px;
     height: auto;
     display: flex;
@@ -481,7 +487,6 @@ html, body, #app {
     position: relative;
     cursor: pointer;
     box-sizing: border-box;
-    overflow: hidden;
 
     &:focus-visible {
       outline: 2px solid var(--ms-accent-primary);
@@ -525,15 +530,13 @@ html, body, #app {
       flex-direction: column;
       justify-content: center;
       gap: 3px;
-      flex: 1;
-      min-width: 0;
+      flex: 0 0 auto;
 
       .logo-heading {
         display: flex;
         align-items: center;
         gap: 8px;
         line-height: 1.15;
-        min-width: 0;
       }
 
       .logo-title {
@@ -572,16 +575,32 @@ html, body, #app {
 
   .side-menu,
   .el-menu {
-    flex: 1;
+    grid-column: 1;
+    min-width: 0;
     min-height: 0;
+    overflow-x: hidden;
     overflow-y: auto;
     border-right: none;
     background: transparent;
-    padding: 16px 0;
+    padding: 12px 0;
+    --el-menu-base-level-padding: 12px;
+
+    .el-menu-item,
+    .el-sub-menu__title {
+      padding-right: 12px;
+
+      span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    }
   }
 
   .aside-footer {
-    padding: 16px 20px;
+    grid-column: 1;
+    min-width: 0;
+    padding: 12px 14px;
     border-top: 1px solid var(--ms-border-color);
 
     .theme-mode-group {
@@ -594,14 +613,16 @@ html, body, #app {
 
       .el-radio-button__inner {
         width: 100%;
+        padding: 6px 0;
       }
     }
 
     .timezone-info {
       margin-bottom: 8px;
       display: flex;
-      justify-content: space-between;
-      align-items: center;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
       font-size: 12px;
 
       .timezone-label {
