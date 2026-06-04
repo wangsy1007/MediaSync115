@@ -1,15 +1,38 @@
+# MediaSync115 + 盘搜（Pansou）一体化部署
+# 盘搜对外端口 38080；MediaSync115 容器内通过 http://pansou:8888/ 连接，无需在设置页填写 Pansou 地址
 services:
+  pansou:
+    image: ghcr.io/fish2018/pansou:latest
+    container_name: pansou
+    restart: unless-stopped
+    ports:
+      - "38080:8888"
+    env_file:
+      - ./docker/pansou.env
+    volumes:
+      - pansou-cache:/app/cache
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8888/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   mediasync115:
     build: .
     image: mediasync115:latest
     container_name: mediasync115
     restart: unless-stopped
+    depends_on:
+      pansou:
+        condition: service_healthy
     ports:
       - "5173:5173"
       - "9008:9008"
       - "8099:8099"
     environment:
       TZ: Asia/Shanghai
+      PANSOU_BASE_URL: http://pansou:8888/
       STRM_HOST_IP: ${STRM_HOST_IP:-}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-}
       EMBY_PROXY_HOST: ${EMBY_PROXY_HOST:-host.docker.internal}
@@ -29,3 +52,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
+
+volumes:
+  pansou-cache:
