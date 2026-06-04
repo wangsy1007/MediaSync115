@@ -304,7 +304,7 @@ class TgService:
             "api_hash": self._api_hash,
             "device_model": "MediaSync115",
             "system_version": "Linux",
-            "app_version": "1.1.39",
+            "app_version": "1.2.0",
             "system_lang_code": "zh-CN",
             "lang_code": "zh-CN",
         }
