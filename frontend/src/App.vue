@@ -464,30 +464,11 @@ html, body, #app {
 .app-aside {
   position: relative;
   z-index: 30;
-  background: var(--ms-glass-bg-heavy);
-  border-right: 1px solid transparent;
-  /* 性能优化：条件启用 backdrop-filter */
-  @supports (backdrop-filter: blur(20px)) {
-    backdrop-filter: blur(20px);
-  }
+  background: var(--ms-bg-secondary);
+  border-right: 1px solid var(--ms-border-color);
   display: flex;
   flex-direction: column;
-  position: relative;
-  /* CSS Containment 优化 */
   contain: layout style;
-
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 200px;
-    background: radial-gradient(ellipse at 50% 0%, rgba(45, 153, 255, 0.22) 0%, transparent 70%);
-    pointer-events: none;
-    /* 减少重绘 */
-    will-change: transform;
-  }
 
   .logo {
     min-height: 64px;
@@ -496,7 +477,7 @@ html, body, #app {
     align-items: center;
     padding: 12px 14px;
     gap: 11px;
-    border-bottom: 1px solid var(--ms-glass-border);
+    border-bottom: 1px solid var(--ms-border-color);
     position: relative;
     cursor: pointer;
     box-sizing: border-box;
@@ -514,11 +495,9 @@ html, body, #app {
       display: flex;
       align-items: center;
       justify-content: center;
-      background:
-        radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.2), transparent 45%),
-        linear-gradient(145deg, #1f78ff 0%, #0f4cb7 100%);
-      border-radius: 12px;
-      box-shadow: 0 10px 24px rgba(12, 62, 148, 0.2);
+      background: var(--ms-accent-primary);
+      border-radius: var(--ms-radius-md, 8px);
+      box-shadow: none;
 
       .brand-mark {
         width: 26px;
@@ -569,13 +548,13 @@ html, body, #app {
       .logo-badge {
         flex-shrink: 0;
         font-size: 10px;
-        font-weight: 800;
+        font-weight: 700;
         line-height: 1;
         padding: 3px 7px;
-        background: rgba(43, 123, 255, 0.1);
+        background: var(--ms-bg-subtle);
         color: var(--ms-accent-primary);
-        border: 1px solid rgba(43, 123, 255, 0.18);
-        border-radius: 999px;
+        border: 1px solid var(--ms-border-color);
+        border-radius: 4px;
       }
 
       .logo-subtitle {
@@ -603,7 +582,7 @@ html, body, #app {
 
   .aside-footer {
     padding: 16px 20px;
-    border-top: 1px solid var(--ms-glass-border);
+    border-top: 1px solid var(--ms-border-color);
 
     .theme-mode-group {
       width: 100%;
@@ -659,28 +638,6 @@ html, body, #app {
   padding: 24px 32px;
   overflow-y: auto;
   position: relative;
-
-  &::before {
-    content: '';
-    position: fixed;
-    top: -50%;
-    right: -20%;
-    width: 60%;
-    height: 100%;
-    background: radial-gradient(ellipse, rgba(36, 137, 255, 0.16) 0%, transparent 60%);
-    pointer-events: none;
-  }
-
-  &::after {
-    content: '';
-    position: fixed;
-    bottom: -30%;
-    left: -10%;
-    width: 50%;
-    height: 80%;
-    background: radial-gradient(ellipse, rgba(116, 188, 255, 0.15) 0%, transparent 60%);
-    pointer-events: none;
-  }
 }
 
 /* 手机端顶部标题栏 */
@@ -691,11 +648,8 @@ html, body, #app {
   height: 48px;
   min-height: 48px;
   padding: 0 16px;
-  border-bottom: 1px solid var(--ms-glass-border);
-  background: var(--ms-glass-bg-heavy);
-  @supports (backdrop-filter: blur(12px)) {
-    backdrop-filter: blur(12px);
-  }
+  border-bottom: 1px solid var(--ms-border-color);
+  background: var(--ms-bg-secondary);
 
   .compact-brand {
     display: flex;
@@ -746,11 +700,8 @@ html, body, #app {
   align-items: center;
   height: 64px;
   padding-bottom: env(safe-area-inset-bottom);
-  background: var(--ms-glass-bg-heavy);
-  border-top: 1px solid var(--ms-glass-border);
-  @supports (backdrop-filter: blur(20px)) {
-    backdrop-filter: blur(20px);
-  }
+  background: var(--ms-bg-secondary);
+  border-top: 1px solid var(--ms-border-color);
 }
 
 .dock-tab {
@@ -801,17 +752,16 @@ html, body, #app {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.35);
-  @supports (backdrop-filter: blur(6px)) {
-    backdrop-filter: blur(6px);
-  }
+  background: rgba(15, 23, 42, 0.4);
 }
 
 .more-sheet {
   width: 100%;
   max-width: 480px;
-  background: var(--ms-bg-secondary);
-  border-radius: 20px 20px 0 0;
+  background: var(--ms-bg-card);
+  border: 1px solid var(--ms-border-color);
+  border-bottom: none;
+  border-radius: 12px 12px 0 0;
   padding: 8px 16px calc(16px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
@@ -870,17 +820,17 @@ html, body, #app {
   }
 
   &.more-item-active {
-    background: var(--ms-glass-bg-heavy);
-    color: var(--ms-primary);
+    background: var(--ms-bg-hover);
+    color: var(--ms-accent-primary);
 
     .el-icon {
-      color: var(--ms-primary);
+      color: var(--ms-accent-primary);
     }
   }
 }
 
 .more-sheet-footer {
-  border-top: 1px solid var(--ms-glass-border);
+  border-top: 1px solid var(--ms-border-color);
   padding-top: 12px;
   margin-top: 4px;
   display: flex;
@@ -905,9 +855,9 @@ html, body, #app {
   width: 100%;
   padding: 14px;
   margin-top: 8px;
-  border: none;
-  border-radius: 12px;
-  background: var(--ms-glass-bg-heavy);
+  border: 1px solid var(--ms-border-color);
+  border-radius: var(--ms-radius-md, 8px);
+  background: var(--ms-bg-control);
   color: var(--ms-text-secondary);
   font-size: 16px;
   font-weight: 600;

@@ -1926,7 +1926,7 @@ onBeforeUnmount(() => {
       }
 
       &.is-focus .el-input__wrapper {
-        box-shadow: 0 0 0 1px rgba(45, 153, 255, 0.35), 0 0 20px rgba(45, 153, 255, 0.14);
+        box-shadow: 0 0 0 1px var(--ms-accent-primary);
       }
 
       .el-input-group__append {
@@ -1954,22 +1954,10 @@ onBeforeUnmount(() => {
   .explore-section {
     margin-bottom: 28px;
     padding: 24px;
-    border: 1px solid var(--ms-glass-border);
-    border-radius: 20px;
-    background: var(--ms-gradient-card);
+    border: 1px solid var(--ms-border-color);
+    border-radius: var(--ms-radius-lg, 10px);
+    background: var(--ms-bg-card);
     position: relative;
-    overflow: hidden;
-    
-    // 顶部装饰光效
-    &::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 1px;
-      background: linear-gradient(90deg, transparent, rgba(45, 153, 255, 0.4), transparent);
-    }
 
     .section-header {
       margin-bottom: 20px;
@@ -1983,10 +1971,7 @@ onBeforeUnmount(() => {
           margin: 0;
           font-size: 22px;
           font-weight: 700;
-          background: linear-gradient(135deg, var(--ms-text-primary) 0%, var(--ms-text-secondary) 100%);
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
+          color: var(--ms-text-primary);
         }
       }
 
@@ -2042,14 +2027,8 @@ onBeforeUnmount(() => {
       }
 
       .skeleton-line {
-        border-radius: 8px;
-        background: linear-gradient(
-          90deg,
-          rgba(89, 151, 226, 0.18) 25%,
-          rgba(148, 205, 255, 0.3) 37%,
-          rgba(89, 151, 226, 0.18) 63%
-        );
-        background-size: 300% 100%;
+        border-radius: 6px;
+        background: var(--ms-bg-hover);
         animation: explore-skeleton-shimmer 1.2s ease-in-out infinite;
       }
 
@@ -2066,28 +2045,16 @@ onBeforeUnmount(() => {
 
         .skeleton-poster {
           aspect-ratio: 2 / 3;
-          border-radius: 14px;
-          background: linear-gradient(
-            90deg,
-            rgba(89, 151, 226, 0.22) 25%,
-            rgba(148, 205, 255, 0.34) 37%,
-            rgba(89, 151, 226, 0.22) 63%
-          );
-          background-size: 300% 100%;
+          border-radius: var(--ms-radius-md, 8px);
+          background: var(--ms-bg-hover);
           animation: explore-skeleton-shimmer 1.2s ease-in-out infinite;
         }
 
         .skeleton-title {
           height: 14px;
           margin: 10px 12px 0;
-          border-radius: 6px;
-          background: linear-gradient(
-            90deg,
-            rgba(89, 151, 226, 0.22) 25%,
-            rgba(148, 205, 255, 0.34) 37%,
-            rgba(89, 151, 226, 0.22) 63%
-          );
-          background-size: 300% 100%;
+          border-radius: 4px;
+          background: var(--ms-bg-hover);
           animation: explore-skeleton-shimmer 1.2s ease-in-out infinite;
         }
       }
@@ -2140,15 +2107,14 @@ onBeforeUnmount(() => {
           top: 50%;
           transform: translateY(-50%);
           z-index: 3;
-          border-color: rgba(45, 153, 255, 0.34);
-          background: rgba(13, 35, 69, 0.85);
+          border-color: var(--ms-border-color);
+          background: var(--ms-bg-card);
           color: var(--ms-text-primary);
-          backdrop-filter: blur(8px);
-          transition: all 0.2s ease;
+          transition: border-color 0.2s ease, background-color 0.2s ease;
           
           &:hover {
-            border-color: rgba(45, 153, 255, 0.5);
-            background: rgba(45, 153, 255, 0.18);
+            border-color: var(--ms-border-light);
+            background: var(--ms-bg-elevated);
           }
         }
 
@@ -2190,23 +2156,21 @@ onBeforeUnmount(() => {
       .recommend-card {
         width: var(--recommend-card-width, 188px);
         min-width: var(--recommend-card-width, 188px);
-        border-radius: 14px;
+        border-radius: var(--ms-radius-md, 8px);
         cursor: pointer;
         border: 1px solid var(--ms-border-color);
-        background: var(--ms-glass-bg);
-        transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+        background: var(--ms-bg-card);
+        transition: border-color 0.2s ease, background-color 0.2s ease;
         overflow: hidden;
 
         &:hover {
-          transform: translateY(-6px);
-          border-color: rgba(45, 153, 255, 0.35);
-          box-shadow: var(--ms-shadow-md), 0 0 20px rgba(45, 153, 255, 0.2);
+          border-color: var(--ms-border-light);
+          background: var(--ms-bg-elevated);
         }
 
         &.just-saved {
-          border-color: rgba(52, 199, 89, 0.78);
-          box-shadow: 0 0 0 1px rgba(52, 199, 89, 0.6), 0 0 26px rgba(52, 199, 89, 0.35);
-          animation: card-save-flash 1.5s ease;
+          border-color: var(--ms-accent-success);
+          animation: none;
         }
 
         .poster-wrapper {
@@ -2228,11 +2192,6 @@ onBeforeUnmount(() => {
             object-fit: cover;
             user-select: none;
             -webkit-user-drag: none;
-            transition: transform 0.4s ease;
-          }
-          
-          &:hover img {
-            transform: scale(1.05);
           }
 
           .explore-card-actions {
@@ -2254,7 +2213,6 @@ onBeforeUnmount(() => {
               height: 38px;
               padding: 0;
               pointer-events: auto;
-            box-shadow: var(--ms-shadow-sm);
             }
           }
 
@@ -2269,12 +2227,11 @@ onBeforeUnmount(() => {
             top: 10px;
             left: 10px;
             padding: 4px 10px;
-            border-radius: 8px;
-            background: linear-gradient(135deg, rgba(245, 158, 11, 0.9) 0%, rgba(251, 191, 36, 0.9) 100%);
-            color: #062040;
+            border-radius: 4px;
+            background: var(--ms-accent-warning);
+            color: #fff;
             font-size: 12px;
             font-weight: 700;
-            box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
           }
         }
 
@@ -2305,10 +2262,10 @@ onBeforeUnmount(() => {
 
   .search-results {
     min-height: 220px;
-    border: 1px solid var(--ms-glass-border);
-    border-radius: 20px;
+    border: 1px solid var(--ms-border-color);
+    border-radius: var(--ms-radius-lg, 10px);
     padding: 20px;
-    background: var(--ms-gradient-card);
+    background: var(--ms-bg-card);
 
     .results-skeleton-grid {
       display: grid;
@@ -2317,35 +2274,23 @@ onBeforeUnmount(() => {
     }
 
     .skeleton-card {
-      border-radius: 10px;
+      border-radius: var(--ms-radius-md, 8px);
       overflow: hidden;
       border: 1px solid var(--ms-border-color);
-      background: var(--ms-glass-bg);
+      background: var(--ms-bg-card);
     }
 
     .skeleton-poster {
       aspect-ratio: 2 / 3;
-      background: linear-gradient(
-        90deg,
-        rgba(89, 151, 226, 0.22) 25%,
-        rgba(148, 205, 255, 0.34) 37%,
-        rgba(89, 151, 226, 0.22) 63%
-      );
-      background-size: 300% 100%;
+      background: var(--ms-bg-hover);
       animation: search-skeleton-shimmer 1.2s ease-in-out infinite;
     }
 
     .skeleton-title {
       height: 14px;
       margin: 10px 12px 12px;
-      border-radius: 6px;
-      background: linear-gradient(
-        90deg,
-        rgba(89, 151, 226, 0.22) 25%,
-        rgba(148, 205, 255, 0.34) 37%,
-        rgba(89, 151, 226, 0.22) 63%
-      );
-      background-size: 300% 100%;
+      border-radius: 4px;
+      background: var(--ms-bg-hover);
       animation: search-skeleton-shimmer 1.2s ease-in-out infinite;
     }
 
@@ -2378,10 +2323,10 @@ onBeforeUnmount(() => {
 
   .media-card {
     cursor: pointer;
-    border-radius: 14px;
+    border-radius: var(--ms-radius-md, 8px);
     border: 1px solid var(--ms-border-color);
-    background: var(--ms-glass-bg);
-    transition: all 0.3s ease;
+    background: var(--ms-bg-card);
+    transition: border-color 0.2s ease, background-color 0.2s ease;
     overflow: hidden;
 
     &.pansou-card {
@@ -2389,16 +2334,11 @@ onBeforeUnmount(() => {
     }
 
     &:hover {
-      transform: translateY(-6px);
-      border-color: rgba(45, 153, 255, 0.35);
-      box-shadow: var(--ms-shadow-md), 0 0 20px rgba(45, 153, 255, 0.2);
+      border-color: var(--ms-border-light);
+      background: var(--ms-bg-elevated);
 
       .action-buttons {
         opacity: 1;
-      }
-      
-      .poster-wrapper img {
-        transform: scale(1.05);
       }
     }
 
@@ -2419,7 +2359,6 @@ onBeforeUnmount(() => {
         width: 100%;
         height: 100%;
         object-fit: cover;
-        transition: transform 0.4s ease;
       }
 
       .media-type-tag {
@@ -2432,13 +2371,12 @@ onBeforeUnmount(() => {
         position: absolute;
         top: 10px;
         right: 10px;
-        background: linear-gradient(135deg, rgba(245, 158, 11, 0.9) 0%, rgba(251, 191, 36, 0.9) 100%);
-        color: #062040;
+        background: var(--ms-accent-warning);
+        color: #fff;
         padding: 4px 8px;
-        border-radius: 6px;
+        border-radius: 4px;
         font-size: 12px;
         font-weight: 700;
-        box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
 
         &.has-emby {
           top: 46px;
@@ -2453,9 +2391,9 @@ onBeforeUnmount(() => {
         display: flex;
         justify-content: space-between;
         padding: 12px;
-        background: linear-gradient(transparent, rgba(7, 18, 36, 0.84));
+        background: rgba(17, 24, 39, 0.88);
         opacity: 1;
-        transition: opacity 0.3s ease;
+        transition: opacity 0.2s ease;
 
         .action-btn {
           padding: 6px 12px;
@@ -2513,21 +2451,13 @@ onBeforeUnmount(() => {
 }
 
 @keyframes search-skeleton-shimmer {
-  0% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0 50%;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
-@keyframes card-save-flash {
-  0% {
-    box-shadow: 0 0 0 1px rgba(52, 199, 89, 0.8), 0 0 30px rgba(52, 199, 89, 0.42);
-  }
-  100% {
-    box-shadow: 0 0 0 1px rgba(52, 199, 89, 0), 0 0 0 rgba(52, 199, 89, 0);
-  }
+@keyframes explore-skeleton-shimmer {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
 @media (max-width: 1024px) {
@@ -2789,13 +2719,8 @@ onBeforeUnmount(() => {
   to { opacity: 1; }
 }
 
-@keyframes explore-skeleton-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
 @keyframes skeleton-loading {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 </style>

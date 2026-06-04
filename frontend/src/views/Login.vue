@@ -83,17 +83,15 @@ const handleLogin = async () => {
   display: grid;
   place-items: center;
   padding: 24px;
-  background:
-    radial-gradient(circle at top, rgba(24, 144, 255, 0.14), transparent 35%),
-    linear-gradient(180deg, rgba(16, 24, 40, 0.02), rgba(16, 24, 40, 0.08));
+  background: var(--ms-bg-primary);
 
   .login-card {
     width: min(420px, 100%);
     padding: 28px;
-    border-radius: 20px;
+    border-radius: var(--ms-radius-lg, 10px);
     border: 1px solid var(--ms-border-color);
-    background: var(--ms-glass-bg);
-    box-shadow: 0 20px 60px rgba(15, 23, 42, 0.14);
+    background: var(--ms-bg-card);
+    box-shadow: none;
   }
 
   .login-brand {
@@ -121,8 +119,9 @@ const handleLogin = async () => {
 
     code {
       padding: 2px 6px;
-      border-radius: 6px;
-      background: rgba(15, 23, 42, 0.08);
+      border-radius: 4px;
+      background: var(--ms-bg-subtle);
+      border: 1px solid var(--ms-border-color);
     }
   }
 }

@@ -551,28 +551,16 @@ onBeforeUnmount(() => {
 
     .skeleton-poster {
       aspect-ratio: 2 / 3;
-      border-radius: 14px;
-      background: linear-gradient(
-        90deg,
-        rgba(89, 151, 226, 0.22) 25%,
-        rgba(148, 205, 255, 0.34) 37%,
-        rgba(89, 151, 226, 0.22) 63%
-      );
-      background-size: 300% 100%;
+      border-radius: var(--ms-radius-md, 8px);
+      background: var(--ms-bg-hover);
       animation: shimmer 1.2s ease-in-out infinite;
     }
 
     .skeleton-title {
       height: 14px;
       margin: 10px 12px 0;
-      border-radius: 6px;
-      background: linear-gradient(
-        90deg,
-        rgba(89, 151, 226, 0.22) 25%,
-        rgba(148, 205, 255, 0.34) 37%,
-        rgba(89, 151, 226, 0.22) 63%
-      );
-      background-size: 300% 100%;
+      border-radius: 4px;
+      background: var(--ms-bg-hover);
       animation: shimmer 1.2s ease-in-out infinite;
     }
   }
@@ -592,10 +580,9 @@ onBeforeUnmount(() => {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      border-color: rgba(45, 153, 255, 0.34);
-      background: rgba(13, 35, 69, 0.85);
+      border-color: var(--ms-border-color);
+      background: var(--ms-bg-card);
       color: var(--ms-text-primary);
-      backdrop-filter: blur(8px);
     }
 
     .side-scroll-btn.left {
@@ -627,17 +614,16 @@ onBeforeUnmount(() => {
   .recommend-card {
     width: var(--recommend-card-width, 188px);
     min-width: var(--recommend-card-width, 188px);
-    border-radius: 14px;
+    border-radius: var(--ms-radius-md, 8px);
     cursor: pointer;
     border: 1px solid var(--ms-border-color);
-    background: var(--ms-glass-bg);
-    transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+    background: var(--ms-bg-card);
+    transition: border-color 0.2s ease, background-color 0.2s ease;
     overflow: hidden;
 
     &:hover {
-      transform: translateY(-6px);
-      border-color: rgba(45, 153, 255, 0.35);
-      box-shadow: var(--ms-shadow-md), 0 0 20px rgba(45, 153, 255, 0.2);
+      border-color: var(--ms-border-light);
+      background: var(--ms-bg-elevated);
     }
 
     .poster-wrapper {
@@ -650,11 +636,6 @@ onBeforeUnmount(() => {
         width: 100%;
         height: 100%;
         object-fit: cover;
-      }
-
-      &:hover img {
-        transform: scale(1.05);
-        transition: transform 0.4s ease;
       }
 
       .emby-badge {
@@ -676,14 +657,12 @@ onBeforeUnmount(() => {
         height: 28px;
         padding: 0 10px;
         border: none;
-        border-radius: 999px;
-        background: linear-gradient(135deg, rgba(255, 205, 96, 0.92) 0%, rgba(245, 174, 66, 0.9) 100%);
-        color: #062040;
+        border-radius: 4px;
+        background: var(--ms-accent-warning);
+        color: #fff;
         font-size: 13px;
         font-weight: 700;
         line-height: 1;
-        box-shadow: 0 4px 12px rgba(245, 158, 11, 0.28);
-        backdrop-filter: blur(6px);
       }
 
       .explore-card-actions {
@@ -705,7 +684,6 @@ onBeforeUnmount(() => {
           height: 38px;
           padding: 0;
           pointer-events: auto;
-          box-shadow: var(--ms-shadow-sm);
         }
       }
 
@@ -720,12 +698,11 @@ onBeforeUnmount(() => {
         top: 10px;
         left: 10px;
         padding: 4px 10px;
-        border-radius: 8px;
-        background: linear-gradient(135deg, rgba(245, 158, 11, 0.9) 0%, rgba(251, 191, 36, 0.9) 100%);
-        color: #062040;
+        border-radius: 4px;
+        background: var(--ms-accent-warning);
+        color: #fff;
         font-size: 12px;
         font-weight: 700;
-        box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
       }
     }
 
@@ -783,11 +760,7 @@ onBeforeUnmount(() => {
 }
 
 @keyframes shimmer {
-  0% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0 50%;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 </style>
