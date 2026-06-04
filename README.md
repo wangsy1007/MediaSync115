@@ -154,22 +154,45 @@ docker pull --platform linux/amd64 wangsy1007/mediasync115:latest
 docker pull --platform linux/arm64 wangsy1007/mediasync115:latest
 ```
 
-### 3. 使用 Docker Compose 部署
+### 3. 使用 Docker Compose 部署（含盘搜）
 
-仓库根目录已经提供官方 [`compose.yaml`](./compose.yaml)，默认使用 `latest`，适合 NAS 手动点击更新。你也可以直接使用下面这份配置：
+仓库根目录提供 [`compose.yaml`](./compose.yaml)，**已集成 [Pansou 盘搜](https://github.com/fish2018/pansou)**：盘搜对外端口为 **38080**，MediaSync115 在容器内通过 `http://pansou:8888/` 自动连接。
+
+NAS 用户可使用 [`compose.nas.yaml`](./compose.nas.yaml)（拉取 Docker Hub 镜像，配置等效）。
 
 ```yaml
 services:
+  pansou:
+    image: ghcr.io/fish2018/pansou:latest
+    container_name: pansou
+    restart: unless-stopped
+    ports:
+      - "38080:8888"
+    env_file:
+      - ./docker/pansou.env
+    volumes:
+      - pansou-cache:/app/cache
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8888/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   mediasync115:
     image: wangsy1007/mediasync115:latest
     container_name: mediasync115
     restart: unless-stopped
+    depends_on:
+      pansou:
+        condition: service_healthy
     ports:
       - "5173:5173"
       - "9008:9008"
       - "8099:8099"
     environment:
       TZ: Asia/Shanghai
+      PANSOU_BASE_URL: http://pansou:8888/
       EMBY_PROXY_HOST: ${EMBY_PROXY_HOST:-host.docker.internal}
       EMBY_PROXY_PORT: ${EMBY_PROXY_PORT:-8096}
     volumes:
@@ -187,12 +210,20 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
+
+volumes:
+  pansou-cache:
 ```
+
+启动前请确保仓库内存在 `docker/pansou.env`（已随仓库提供，内含盘搜必需的 `ENABLED_PLUGINS` 等配置；可按需参考 [fish2018/pansou](https://github.com/fish2018/pansou) 调整频道与插件）。
 
 **Compose 参数说明：**
 
 | 参数 | 必填 | 说明 |
 |------|------|------|
+| `pansou` 服务 `38080:8888` | 盘搜 | 盘搜 API 对外端口 **38080**；容器内仍为 8888。健康检查：`/api/health` |
+| `PANSOU_BASE_URL` | 推荐 | MediaSync115 连接盘搜的地址。Compose 同网络内填 `http://pansou:8888/` |
+| `depends_on: pansou` | 推荐 | 等盘搜健康后再启动 MediaSync115 |
 | `ports: 5173:5173` | 是 | 前端 UI 端口，浏览器访问 `http://你的IP:5173` |
 | `ports: 9008:9008` | 是 | 后端 API + STRM 播放端口，飞牛影视读取 STRM 时走此端口 |
 | `ports: 8099:8099` | 否 | **Emby 代理端口**。如果不需要 Emby 代理 302 播放可删除此行 |
@@ -201,6 +232,12 @@ services:
 | `EMBY_PROXY_PORT` | 否 | 真实 Emby 的端口（默认 8096） |
 | `volumes: ./data:/app/data` | 是 | 持久化数据目录。**不要删除宿主机上的这个目录**，所有配置、数据库都在里面 |
 | `volumes: strm:/app/strm` | STRM 场景 | STRM 输出目录挂载。如果不用 STRM 功能可删除此行 |
+
+**盘搜与 MediaSync115 配置：**
+
+- 使用上述 Compose 一键部署时，一般**无需**在设置页再填 Pansou 地址（已通过 `PANSOU_BASE_URL` 注入）。
+- 若盘搜单独部署在其他机器，请在设置 → **Pansou** 中填写，例如 `http://192.168.1.x:38080/`。
+- 浏览器可访问 `http://你的IP:38080` 验证盘搜 API（健康接口：`/api/health`）。
 
 **首次启动后需在设置页勾选：**
 
@@ -245,6 +282,7 @@ docker compose up -d --build
 - `TMDB_API_KEY`
 - `PAN115_COOKIE`
 - `EMBY_URL`
+- `Pansou 服务地址`（仅在不使用上述集成 Compose、或盘搜部署在其他主机时需要填写）
 
 访问地址：
 - `http://127.0.0.1:9008` — 前端 UI + 后端 API
@@ -262,7 +300,7 @@ docker compose up -d --build
 
 ### 1. 首次部署
 
-如果 NAS 支持导入 compose 文件，直接使用仓库自带的 `compose.yaml`。
+如果 NAS 支持导入 compose 文件，直接使用仓库自带的 `compose.nas.yaml`（含盘搜，对外端口 38080），并一并上传 `docker/pansou.env`。
 
 如果 NAS 只支持填写镜像参数，请保持等效配置：
 - 镜像：`wangsy1007/mediasync115:latest`

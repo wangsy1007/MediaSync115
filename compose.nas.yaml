@@ -1,17 +1,41 @@
-# NAS 部署用 compose 文件
+# NAS 部署用 compose 文件（含盘搜）
 # 使用 Docker Hub 镜像，NAS 镜像管理可自动检测更新
 services:
+  pansou:
+    image: ghcr.io/fish2018/pansou:latest
+    container_name: pansou
+    restart: unless-stopped
+    ports:
+      - "38080:8888"
+    env_file:
+      - ./docker/pansou.env
+    volumes:
+      - pansou-cache:/app/cache
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8888/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   mediasync115:
     image: wangsy1007/mediasync115:latest
     container_name: mediasync115
     restart: unless-stopped
+    depends_on:
+      pansou:
+        condition: service_healthy
     ports:
       - "5173:5173"
       - "9008:9008"
+      - "8099:8099"
     environment:
       TZ: Asia/Shanghai
+      PANSOU_BASE_URL: http://pansou:8888/
       STRM_HOST_IP: ${STRM_HOST_IP:-}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-}
+      EMBY_PROXY_HOST: ${EMBY_PROXY_HOST:-host.docker.internal}
+      EMBY_PROXY_PORT: ${EMBY_PROXY_PORT:-8096}
     volumes:
       - ./data:/app/data
       - ${STRM_HOST_DIR:-./strm}:/app/strm
@@ -28,8 +52,11 @@ services:
       retries: 5
       start_period: 120s
 
+volumes:
+  pansou-cache:
+
 # 使用说明:
 # 1. 将本文件上传到 NAS 的 docker 项目目录，重命名为 docker-compose.yml 或 compose.yaml
-# 2. 在 NAS Docker 管理界面中，通过 "项目" 导入本文件部署
-# 3. 后续你推送新镜像到 Docker Hub 后，NAS 镜像管理会提示有可用更新
-# 4. 在 NAS 中点击"更新"即可拉取最新镜像并重建容器
+# 2. 同时上传 docker/pansou.env（盘搜插件与频道配置）
+# 3. 盘搜 Web/API 对外端口为 38080，MediaSync115 容器内通过 http://pansou:8888/ 访问
+# 4. 在 NAS Docker 管理界面中，通过 "项目" 导入本文件部署
