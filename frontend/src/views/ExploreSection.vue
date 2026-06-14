@@ -96,7 +96,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, triggerRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { searchApi, subscriptionApi } from '@/api'
@@ -133,7 +133,7 @@ const exploreSource = computed(() => normalizeExploreSource(route.params.source)
 const loading = ref(false)
 const tmdbConfigured = ref(true)
 const loadingMore = ref(false)
-const allItems = ref([])
+const allItems = shallowRef([])
 const displayCount = ref(0)
 const loadAnchorRef = ref(null)
 const remoteTotal = ref(0)
@@ -209,14 +209,22 @@ const applySubscribedFlags = () => {
   for (const item of allItems.value) {
     applySubscribedFlag(item)
   }
+  triggerRef(allItems)
 }
 
 /** 仅更新本次状态映射涉及的 TMDB key，避免长列表滚动时全表遍历 */
 const applySubscribedFlagsForTmdbKeys = (tmdbKeys) => {
   if (!tmdbKeys || !tmdbKeys.size) return
+  let touched = false
   for (const item of allItems.value) {
     const key = buildSubscribedKey(item.media_type, item.tmdb_id)
-    if (key && tmdbKeys.has(key)) applySubscribedFlag(item)
+    if (key && tmdbKeys.has(key)) {
+      applySubscribedFlag(item)
+      touched = true
+    }
+  }
+  if (touched) {
+    triggerRef(allItems)
   }
 }
 
@@ -310,6 +318,7 @@ const syncExploreQueueItemStates = () => {
     const itemKey = buildExploreQueueItemKeyFromItem(item)
     item.saving = Boolean(itemKey) && queueActiveSaveKeys.value.has(itemKey)
   }
+  triggerRef(allItems)
 }
 
 const applyExploreQueueTaskSnapshot = (tasks = []) => {

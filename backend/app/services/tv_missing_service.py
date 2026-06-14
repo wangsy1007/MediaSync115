@@ -366,6 +366,7 @@ class TvMissingService:
 
         pairs: set[tuple[int, int]] = set()
         selected_season = int(season_number) if season_number is not None else None
+        season_targets: list[int] = []
         for season in seasons:
             if not isinstance(season, dict):
                 continue
@@ -376,14 +377,38 @@ class TvMissingService:
                 continue
             if selected_season is not None and current_season != selected_season:
                 continue
-            if aired_only:
-                season_pairs = await self._collect_tmdb_aired_season_pairs(
-                    tmdb_id,
-                    current_season,
-                    episode_start=episode_start,
-                    episode_end=episode_end,
-                )
+            season_targets.append(current_season)
+
+        if aired_only:
+            if not season_targets:
+                return set()
+            semaphore = asyncio.Semaphore(6)
+
+            async def _fetch_aired_pairs(target_season: int) -> set[tuple[int, int]]:
+                async with semaphore:
+                    return await self._collect_tmdb_aired_season_pairs(
+                        tmdb_id,
+                        target_season,
+                        episode_start=episode_start,
+                        episode_end=episode_end,
+                    )
+
+            season_results = await asyncio.gather(
+                *(_fetch_aired_pairs(target) for target in season_targets)
+            )
+            for season_pairs in season_results:
                 pairs.update(season_pairs)
+            return pairs
+
+        for season in seasons:
+            if not isinstance(season, dict):
+                continue
+            current_season = self._to_non_negative_int(season.get("season_number"))
+            if current_season is None:
+                continue
+            if current_season == 0 and not include_specials:
+                continue
+            if selected_season is not None and current_season != selected_season:
                 continue
 
             episode_count = self._to_non_negative_int(season.get("episode_count")) or 0

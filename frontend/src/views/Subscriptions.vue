@@ -449,32 +449,23 @@ const formatMissingBySeason = (missingBySeason) => {
   return segments.length > 0 ? segments.join(' | ') : '-'
 }
 
+const buildTvSubscriptionIdSet = () => new Set(
+  allSubscriptions.value
+    .filter((item) => String(item?.media_type || '').toLowerCase() === 'tv')
+    .map((item) => Number(item?.id))
+    .filter((id) => Number.isFinite(id) && id > 0)
+)
+
 const fetchTvMissingStatus = async (refresh = false) => {
   missingLoading.value = true
   try {
-    const loadTvSubscriptionIdSet = async () => {
-      const { data } = await subscriptionApi.list({
-        is_active: true,
-        exclude_transferred_success: true,
-        media_type: 'tv'
-      })
-      // 处理新的返回格式
-      const rows = Array.isArray(data) ? data : (data?.items || [])
-      return new Set(
-        rows
-          .map((item) => Number(item?.id))
-          .filter((id) => Number.isFinite(id) && id > 0)
-      )
-    }
     const params = {
       only_missing: missingOnly.value,
       limit: 120,
       refresh: refresh === true
     }
-    const [{ data }, tvSubscriptionIdSet] = await Promise.all([
-      subscriptionApi.getTvMissingStatus(params),
-      loadTvSubscriptionIdSet()
-    ])
+    const { data } = await subscriptionApi.getTvMissingStatus(params)
+    const tvSubscriptionIdSet = buildTvSubscriptionIdSet()
     const rows = Array.isArray(data?.items) ? data.items : []
     missingRows.value = rows.filter((row) => {
       const subscriptionId = Number(row?.subscription_id)
@@ -491,17 +482,7 @@ const refreshMissingRow = async (row) => {
   const subscriptionId = Number(row?.subscription_id)
   if (!Number.isFinite(subscriptionId) || subscriptionId <= 0) return
   try {
-    const { data: tvSubsData } = await subscriptionApi.list({
-      is_active: true,
-      exclude_transferred_success: true,
-      media_type: 'tv'
-    })
-    // 处理新的返回格式
-    const tvSubIdSet = new Set(
-      (Array.isArray(tvSubsData) ? tvSubsData : (tvSubsData?.items || []))
-        .map((item) => Number(item?.id))
-        .filter((id) => Number.isFinite(id) && id > 0)
-    )
+    const tvSubIdSet = buildTvSubscriptionIdSet()
     if (!tvSubIdSet.has(subscriptionId)) {
       const index = missingRows.value.findIndex((item) => Number(item.subscription_id) === subscriptionId)
       if (index >= 0) missingRows.value.splice(index, 1)
@@ -538,8 +519,8 @@ const refreshMissingRow = async (row) => {
   }
 }
 
-onMounted(() => {
-  fetchSubscriptions()
+onMounted(async () => {
+  await fetchSubscriptions()
   fetchTvMissingStatus()
 })
 </script>

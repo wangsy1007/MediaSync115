@@ -1906,7 +1906,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, reactive, computed } from 'vue'
+import { ref, onMounted, onBeforeUnmount, reactive, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowUp, ArrowDown, Close } from '@element-plus/icons-vue'
 import {
@@ -1928,6 +1928,7 @@ import { ALL_RESOLUTIONS, ALL_FORMATS } from '@/utils/resourceTags'
 
 const router = useRouter()
 const activeSettingsTab = ref('pan115')
+const loadedSettingsTabs = ref(new Set())
 const officialUpdateRepository = 'wangsy1007/mediasync115'
 const TMDB_DEFAULT_BASE_URL = 'https://api.themoviedb.org/3'
 const TMDB_DEFAULT_IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/w500'
@@ -4936,38 +4937,80 @@ onMounted(() => {
   if (tabParam) {
     activeSettingsTab.value = tabParam
   }
-  fetchAuthSession()
   fetchRuntimeSettings().then(() => {
-    fetchAppInfo()
-    if (String(hdhiveForm.value.apiKey || '').trim()) {
-      checkHdhive(false)
-    }
-    if (String(embyForm.value.url || '').trim() && String(embyForm.value.apiKey || '').trim()) {
-      checkEmby(false)
-    }
-    fetchEmbySyncStatus(false)
-    if (String(feiniuForm.value.url || '').trim()) {
-      checkFeiniu(false)
-    }
-    fetchFeiniuSyncStatus(false)
-    if (String(tgForm.value.session || '').trim()) {
-      checkTg(false)
-    }
     refreshSourceConnectionStatus()
+    ensureSettingsTabLoaded(activeSettingsTab.value)
   })
-  fetchCookieInfo()
-  checkCookie()
-  loadPan115QrApps()
-  fetchDefaultFolder()
-  fetchOfflineDefaultFolder()
-  refreshQuarkInfo()
-  fetchPansouConfig()
-  fetchTgIndexStatus()
-  fetchSubscriptionLogs()
-  fetchProxyStatus()
-  fetchHealthStatus()
-  loadLicense()
-  loadAvailableCharts()
+})
+
+const ensureSettingsTabLoaded = (tab) => {
+  const normalized = String(tab || '').trim()
+  if (!normalized || loadedSettingsTabs.value.has(normalized)) {
+    return
+  }
+  loadedSettingsTabs.value.add(normalized)
+
+  switch (normalized) {
+    case 'account':
+      fetchAuthSession()
+      break
+    case 'pan115':
+      fetchCookieInfo()
+      checkCookie()
+      loadPan115QrApps()
+      fetchDefaultFolder()
+      fetchOfflineDefaultFolder()
+      break
+    case 'quark':
+      refreshQuarkInfo()
+      break
+    case 'hdhive':
+      if (String(hdhiveForm.value.apiKey || '').trim()) {
+        checkHdhive(false)
+      }
+      break
+    case 'emby':
+      if (String(embyForm.value.url || '').trim() && String(embyForm.value.apiKey || '').trim()) {
+        checkEmby(false)
+      }
+      fetchEmbySyncStatus(false)
+      break
+    case 'feiniu':
+      if (String(feiniuForm.value.url || '').trim()) {
+        checkFeiniu(false)
+      }
+      fetchFeiniuSyncStatus(false)
+      break
+    case 'tg':
+      if (String(tgForm.value.session || '').trim()) {
+        checkTg(false)
+      }
+      fetchTgIndexStatus()
+      break
+    case 'pansou':
+      fetchPansouConfig()
+      break
+    case 'proxy':
+      fetchProxyStatus()
+      break
+    case 'chartSubscription':
+      loadAvailableCharts()
+      break
+    case 'taskLogs':
+      fetchSubscriptionLogs()
+      break
+    case 'about':
+      fetchAppInfo()
+      fetchHealthStatus()
+      loadLicense()
+      break
+    default:
+      break
+  }
+}
+
+watch(activeSettingsTab, (tab) => {
+  ensureSettingsTabLoaded(tab)
 })
 
 onBeforeUnmount(() => {

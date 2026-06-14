@@ -33,32 +33,45 @@
 
       <div class="credits-section">
         <h3>作品列表</h3>
-        <div class="credits-grid">
-          <el-card
-            v-for="credit in person.credits || []"
-            :key="`${credit.media_type}-${credit.tmdb_id}`"
-            class="credit-card"
-            shadow="hover"
-            @click="goToWork(credit)"
-          >
-            <div class="poster">
-              <img v-if="credit.poster_path" :src="getProfileUrl(credit.poster_path)" :alt="credit.title" />
-              <div v-else class="poster-placeholder">暂无海报</div>
-            </div>
-            <div class="credit-info">
-              <div class="title">{{ credit.title }}</div>
-              <div class="meta">
-                <el-tag size="small" :type="credit.media_type === 'movie' ? 'primary' : 'success'">
-                  {{ credit.media_type === 'movie' ? '电影' : '电视剧' }}
-                </el-tag>
-                <span>{{ credit.release_date || credit.first_air_date || '-' }}</span>
+        <VirtualList
+          v-if="credits.length"
+          :items="credits"
+          :item-height="360"
+          class="credits-virtual-list"
+        >
+          <template #default="{ item: credit }">
+            <el-card
+              :key="`${credit.media_type}-${credit.tmdb_id}`"
+              class="credit-card"
+              shadow="hover"
+              @click="goToWork(credit)"
+            >
+              <div class="poster">
+                <img
+                  v-if="credit.poster_path"
+                  :src="getProfileUrl(credit.poster_path)"
+                  :alt="credit.title"
+                  loading="lazy"
+                  decoding="async"
+                />
+                <div v-else class="poster-placeholder">暂无海报</div>
               </div>
-              <div class="role" v-if="credit.character || credit.job">
-                {{ credit.character || credit.job }}
+              <div class="credit-info">
+                <div class="title">{{ credit.title }}</div>
+                <div class="meta">
+                  <el-tag size="small" :type="credit.media_type === 'movie' ? 'primary' : 'success'">
+                    {{ credit.media_type === 'movie' ? '电影' : '电视剧' }}
+                  </el-tag>
+                  <span>{{ credit.release_date || credit.first_air_date || '-' }}</span>
+                </div>
+                <div class="role" v-if="credit.character || credit.job">
+                  {{ credit.character || credit.job }}
+                </div>
               </div>
-            </div>
-          </el-card>
-        </div>
+            </el-card>
+          </template>
+        </VirtualList>
+        <el-empty v-else description="暂无作品" />
       </div>
     </template>
   </div>
@@ -71,6 +84,7 @@ import { ElMessage } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { personFollowApi, searchApi } from '@/api'
 import { getDepartmentLabel, getTmdbProfileUrl } from '@/utils/tmdbProfile'
+import VirtualList from '@/components/VirtualList.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -81,6 +95,10 @@ const followedPersonIds = ref(new Set())
 
 const personId = computed(() => Number(route.params.id || 0))
 const isFollowed = computed(() => followedPersonIds.value.has(String(personId.value)))
+const credits = computed(() => {
+  const rows = person.value?.credits
+  return Array.isArray(rows) ? rows : []
+})
 
 const getProfileUrl = (path) => getTmdbProfileUrl(path)
 
@@ -206,10 +224,18 @@ onMounted(async () => {
     }
   }
 
-  .credits-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 14px;
+  .credits-section {
+    h3 {
+      margin: 0 0 14px;
+    }
+  }
+
+  .credits-virtual-list {
+    height: min(70vh, 960px);
+  }
+
+  .credits-virtual-list :deep(.virtual-list-item) {
+    padding-bottom: 12px;
   }
 
   .credit-card {

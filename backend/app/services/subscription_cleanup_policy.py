@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from typing import Any, Protocol
 
@@ -129,6 +130,7 @@ async def has_upcoming_episodes_in_subscription_scope(
         return False
 
     today = date.today()
+    season_targets: list[int] = []
     for season in seasons:
         if not isinstance(season, dict):
             continue
@@ -139,10 +141,25 @@ async def has_upcoming_episodes_in_subscription_scope(
             continue
         if selected_season is not None and season_number != selected_season:
             continue
+        season_targets.append(season_number)
 
-        season_detail = await tmdb_service.get_tv_season_detail(
-            normalized_tmdb_id, season_number
-        )
+    if not season_targets:
+        return False
+
+    semaphore = asyncio.Semaphore(6)
+
+    async def _fetch_season_detail(target_season: int) -> dict[str, Any]:
+        async with semaphore:
+            payload = await tmdb_service.get_tv_season_detail(
+                normalized_tmdb_id, target_season
+            )
+            return payload if isinstance(payload, dict) else {}
+
+    season_details = await asyncio.gather(
+        *(_fetch_season_detail(season_number) for season_number in season_targets)
+    )
+
+    for season_detail in season_details:
         episodes = season_detail.get("episodes") if isinstance(season_detail, dict) else []
         if not isinstance(episodes, list):
             continue

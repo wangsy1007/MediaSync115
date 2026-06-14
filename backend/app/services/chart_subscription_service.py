@@ -202,6 +202,29 @@ async def _fetch_douban_chart(section_key: str, limit: int) -> list[dict[str, An
 
 # ── 自动订阅 ──────────────────────────────────────────────────
 
+async def load_existing_subscription_keys(
+    pairs: list[tuple[int, MediaType]],
+) -> set[tuple[int, MediaType]]:
+    """批量查询已存在的 (tmdb_id, media_type) 订阅键。"""
+    if not pairs:
+        return set()
+
+    pair_set = set(pairs)
+    tmdb_ids = list({pair[0] for pair in pair_set})
+    async with async_session_maker() as db:
+        result = await db.execute(
+            select(Subscription.tmdb_id, Subscription.media_type).where(
+                Subscription.tmdb_id.in_(tmdb_ids)
+            )
+        )
+        existing: set[tuple[int, MediaType]] = set()
+        for row in result.all():
+            key = (int(row.tmdb_id), row.media_type)
+            if key in pair_set:
+                existing.add(key)
+        return existing
+
+
 async def _subscribe_items(
     items: list[dict[str, Any]],
     source_type: str,
@@ -215,12 +238,12 @@ async def _subscribe_items(
     new_count = 0
     existing_count = 0
     failed_count = 0
+    resolved_items: list[dict[str, Any]] = []
 
     for item in items:
         try:
             tmdb_id = item.get("tmdb_id")
             if tmdb_id is None:
-                # 豆瓣条目可能没有 tmdb_id，需要尝试解析
                 if source_type == "douban":
                     tmdb_id = await _resolve_douban_tmdb_id(item)
                 if tmdb_id is None:
@@ -231,33 +254,52 @@ async def _subscribe_items(
             media_type_str = str(item.get("media_type") or "movie").strip().lower()
             media_enum = MediaType.TV if media_type_str == "tv" else MediaType.MOVIE
 
-            title = str(
-                item.get("title") or item.get("name") or ""
-            ).strip() or f"TMDB {tmdb_id}"
-            year = _normalize_year(item.get("year"))
-            rating = _normalize_rating(item.get("rating") or item.get("vote_average"))
-            overview = str(item.get("intro") or item.get("overview") or "").strip()
-            poster_path = str(
-                item.get("poster_url") or item.get("poster_path") or ""
-            ).strip() or None
-            douban_id = str(item.get("douban_id") or "").strip() or None
+            resolved_items.append(
+                {
+                    "tmdb_id": tmdb_id,
+                    "media_enum": media_enum,
+                    "title": str(item.get("title") or item.get("name") or "").strip()
+                    or f"TMDB {tmdb_id}",
+                    "year": _normalize_year(item.get("year")),
+                    "rating": _normalize_rating(item.get("rating") or item.get("vote_average")),
+                    "overview": str(item.get("intro") or item.get("overview") or "").strip(),
+                    "poster_path": str(
+                        item.get("poster_url") or item.get("poster_path") or ""
+                    ).strip()
+                    or None,
+                    "douban_id": str(item.get("douban_id") or "").strip() or None,
+                }
+            )
+        except Exception as exc:
+            logger.warning("榜单条目解析失败: %s — %s", item.get("title"), exc)
+            failed_count += 1
 
+    existing_keys = await load_existing_subscription_keys(
+        [(entry["tmdb_id"], entry["media_enum"]) for entry in resolved_items]
+    )
+
+    for entry in resolved_items:
+        key = (entry["tmdb_id"], entry["media_enum"])
+        if key in existing_keys:
+            existing_count += 1
+            continue
+        try:
             created = await _create_subscription_if_not_exists(
-                tmdb_id=tmdb_id,
-                media_type=media_enum,
-                title=title,
-                year=year,
-                rating=rating,
-                overview=overview,
-                poster_path=poster_path,
-                douban_id=douban_id,
+                tmdb_id=entry["tmdb_id"],
+                media_type=entry["media_enum"],
+                title=entry["title"],
+                year=entry["year"],
+                rating=entry["rating"],
+                overview=entry["overview"],
+                poster_path=entry["poster_path"],
+                douban_id=entry["douban_id"],
             )
             if created:
                 new_count += 1
             else:
                 existing_count += 1
         except Exception as exc:
-            logger.warning("榜单条目订阅失败: %s — %s", item.get("title"), exc)
+            logger.warning("榜单条目订阅失败: %s — %s", entry["title"], exc)
             failed_count += 1
 
     return new_count, existing_count, failed_count

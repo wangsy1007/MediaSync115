@@ -255,7 +255,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, shallowRef, triggerRef, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { clearSearchReturnContext, saveSearchReturnContext } from '@/utils/navigation'
 import {
@@ -314,7 +314,7 @@ const totalPages = ref(0)
 
 const exploreLoading = ref(false)
 const tmdbConfigured = ref(true)
-const exploreSections = ref([])
+const exploreSections = shallowRef([])
 const exploreContainerRef = ref(null)
 const sectionRowRefs = ref({})
 const sectionScrollStates = ref({})
@@ -509,6 +509,7 @@ const syncExploreQueueItemStates = () => {
       item.saving = Boolean(itemKey) && queueActiveSaveKeys.value.has(itemKey)
     }
   }
+  triggerRef(exploreSections)
 }
 
 const applyExploreQueueTaskSnapshot = (tasks = []) => {
@@ -586,6 +587,7 @@ const applySubscribedFlags = () => {
       markEmbyOnItem(item)
     }
   }
+  triggerRef(exploreSections)
 }
 
 const refreshSubscribedKeys = async () => {
@@ -2017,11 +2019,14 @@ const resetExploreState = () => {
 onMounted(async () => {
   calculateCardWidth()
   loadResourcePriority()
-  refreshFollowedPersonIds()
-  refreshWatchlists()
   const restored = await restoreSearchFromRoute()
   if (!restored) {
     await initializeExploreHome()
+  } else {
+    await Promise.allSettled([
+      refreshFollowedPersonIds(),
+      refreshWatchlists()
+    ])
   }
   startExploreQueuePolling()
 })

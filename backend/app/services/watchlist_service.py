@@ -3,13 +3,15 @@
 import logging
 from typing import Any
 
-from sqlalchemy import and_, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 
 from app.core.database import async_session_maker
-from app.models.models import MediaType, Subscription
+from app.models.models import MediaType
 from app.models.watchlist import Watchlist, WatchlistItem
-from app.services.chart_subscription_service import _create_subscription_if_not_exists
+from app.services.chart_subscription_service import (
+    _create_subscription_if_not_exists,
+    load_existing_subscription_keys,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,23 +37,22 @@ async def fill_watchlist_missing_subscriptions(
     failed_count = 0
     skipped_count = 0
 
+    existing_keys: set[tuple[int, MediaType]] = set()
+    if only_unsubscribed and items:
+        pairs = [
+            (
+                item.tmdb_id,
+                MediaType.TV if item.media_type == "tv" else MediaType.MOVIE,
+            )
+            for item in items
+        ]
+        existing_keys = await load_existing_subscription_keys(pairs)
+
     for item in items:
         media_enum = MediaType.TV if item.media_type == "tv" else MediaType.MOVIE
-        if only_unsubscribed:
-            async with async_session_maker() as db:
-                existing = await db.execute(
-                    select(Subscription)
-                    .where(
-                        and_(
-                            Subscription.tmdb_id == item.tmdb_id,
-                            Subscription.media_type == media_enum,
-                        )
-                    )
-                    .limit(1)
-                )
-                if existing.scalar_one_or_none():
-                    existing_count += 1
-                    continue
+        if only_unsubscribed and (item.tmdb_id, media_enum) in existing_keys:
+            existing_count += 1
+            continue
 
         try:
             created = await _create_subscription_if_not_exists(

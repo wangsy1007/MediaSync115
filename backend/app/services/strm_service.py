@@ -360,9 +360,9 @@ class StrmService:
             pan115=pan115_service, cid=output_cid
         )
 
-        output_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
         manifest_path = output_dir / MANIFEST_FILENAME
-        previous_files = self._load_manifest_files(manifest_path)
+        previous_files = await self._load_manifest_files_async(manifest_path)
 
         generated_files: set[str] = set()
         written_count = 0
@@ -375,30 +375,37 @@ class StrmService:
             generated_files.add(strm_relative_path.as_posix())
 
             target_path = output_dir.joinpath(*strm_relative_path.parts)
-            target_path.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(target_path.parent.mkdir, parents=True, exist_ok=True)
             content = self.build_play_url(item["pc"]) + "\n"
 
-            if target_path.exists():
+            if await asyncio.to_thread(target_path.exists):
                 try:
-                    if target_path.read_text(encoding="utf-8") == content:
+                    existing_content = await asyncio.to_thread(
+                        target_path.read_text, encoding="utf-8"
+                    )
+                    if existing_content == content:
                         unchanged_count += 1
                         continue
                 except Exception:
                     pass
 
-            target_path.write_text(content, encoding="utf-8")
+            await asyncio.to_thread(
+                target_path.write_text, content, encoding="utf-8"
+            )
             written_count += 1
 
         removed_count = 0
         stale_files = previous_files - generated_files
         for relative in stale_files:
             stale_path = output_dir.joinpath(*PurePosixPath(relative).parts)
-            if stale_path.exists() and stale_path.is_file():
-                stale_path.unlink()
+            if await asyncio.to_thread(stale_path.exists) and await asyncio.to_thread(
+                stale_path.is_file
+            ):
+                await asyncio.to_thread(stale_path.unlink)
                 removed_count += 1
 
-        self._cleanup_empty_dirs(output_dir)
-        self._save_manifest(manifest_path, generated_files, output_cid)
+        await asyncio.to_thread(self._cleanup_empty_dirs, output_dir)
+        await self._save_manifest_async(manifest_path, generated_files, output_cid)
 
         refresh_results = await self._refresh_media_servers()
         return {
@@ -834,6 +841,10 @@ class StrmService:
             return set()
         return {str(item).strip() for item in files if str(item).strip()}
 
+    @classmethod
+    async def _load_manifest_files_async(cls, manifest_path: Path) -> set[str]:
+        return await asyncio.to_thread(cls._load_manifest_files, manifest_path)
+
     @staticmethod
     def _save_manifest(manifest_path: Path, files: set[str], output_cid: str) -> None:
         payload = {
@@ -844,6 +855,12 @@ class StrmService:
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    @classmethod
+    async def _save_manifest_async(
+        cls, manifest_path: Path, files: set[str], output_cid: str
+    ) -> None:
+        await asyncio.to_thread(cls._save_manifest, manifest_path, files, output_cid)
 
     @staticmethod
     def _cleanup_empty_dirs(root_dir: Path) -> None:
