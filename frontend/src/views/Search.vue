@@ -534,20 +534,7 @@ const markExploreQueueTaskActive = (task) => {
     queueActiveSaveKeys.value = new Set([...queueActiveSaveKeys.value, itemKey])
   }
   syncExploreQueueItemStates()
-}
-
-const fetchExploreQueueActiveTasks = async () => {
-  if (exploreQueuePolling) return
-  exploreQueuePolling = true
-  try {
-    const { data } = await searchApi.getExploreActiveQueueTasks('save')
-    const tasks = Array.isArray(data?.tasks) ? data.tasks : []
-    applyExploreQueueTaskSnapshot(tasks)
-  } catch (error) {
-    console.error('Failed to poll explore queue tasks:', error)
-  } finally {
-    exploreQueuePolling = false
-  }
+  scheduleExploreQueuePolling()
 }
 
 const stopExploreQueuePolling = () => {
@@ -557,12 +544,35 @@ const stopExploreQueuePolling = () => {
   }
 }
 
-const startExploreQueuePolling = () => {
-  stopExploreQueuePolling()
-  fetchExploreQueueActiveTasks()
+const scheduleExploreQueuePolling = () => {
+  if (exploreQueuePollTimer) return
   exploreQueuePollTimer = window.setInterval(() => {
     fetchExploreQueueActiveTasks()
   }, EXPLORE_QUEUE_POLL_INTERVAL_MS)
+}
+
+const fetchExploreQueueActiveTasks = async () => {
+  if (exploreQueuePolling) return
+  exploreQueuePolling = true
+  try {
+    const { data } = await searchApi.getExploreActiveQueueTasks('save')
+    const tasks = Array.isArray(data?.tasks) ? data.tasks : []
+    applyExploreQueueTaskSnapshot(tasks)
+    const hasActiveTasks = tasks.length > 0 || queueActiveSaveKeys.value.size > 0
+    if (hasActiveTasks) {
+      scheduleExploreQueuePolling()
+    } else {
+      stopExploreQueuePolling()
+    }
+  } catch (error) {
+    console.error('Failed to poll explore queue tasks:', error)
+  } finally {
+    exploreQueuePolling = false
+  }
+}
+
+const startExploreQueuePolling = () => {
+  fetchExploreQueueActiveTasks()
 }
 
 const applySubscribedFlags = () => {

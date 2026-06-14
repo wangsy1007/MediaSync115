@@ -5,6 +5,7 @@ import Icons from 'unplugin-icons/vite'
 import IconsResolver from 'unplugin-icons/resolver'
 import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
+import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
@@ -15,6 +16,7 @@ export default defineConfig(({ mode }) => {
       vue(),
       AutoImport({
         resolvers: [
+          ElementPlusResolver(),
           IconsResolver({
             prefix: 'Icon',
             enabledCollections: ['ep']
@@ -23,6 +25,7 @@ export default defineConfig(({ mode }) => {
       }),
       Components({
         resolvers: [
+          ElementPlusResolver({ importStyle: 'sass' }),
           IconsResolver({
             enabledCollections: ['ep']
           })

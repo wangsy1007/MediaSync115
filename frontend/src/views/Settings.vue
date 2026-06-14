@@ -2,7 +2,7 @@
   <div class="settings-page">
     <h2>系统设置</h2>
 
-    <el-tabs v-model="activeSettingsTab" class="settings-tabs">
+    <el-tabs v-model="activeSettingsTab" class="settings-tabs" lazy>
       <el-tab-pane label="账号安全" name="account">
         <el-card class="settings-card">
           <template #header>

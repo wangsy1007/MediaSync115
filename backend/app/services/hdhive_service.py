@@ -53,6 +53,12 @@ class HDHiveService:
         self._unlock_locks: dict[str, asyncio.Lock] = {}
         self._unlock_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._unlock_cache_ttl_seconds = 120.0
+        self._http_client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = self._create_client()
+        return self._http_client
 
     @staticmethod
     def _extract_error_text(response: httpx.Response) -> str:
@@ -373,17 +379,14 @@ class HDHiveService:
         json_body: dict[str, Any] | None = None,
     ) -> tuple[httpx.Response, dict[str, Any]]:
         headers = self._build_open_api_headers(json_body=json_body is not None)
-        client = self._create_client()
-        try:
-            response = await client.request(
-                method.upper(),
-                self._build_open_api_url(path),
-                headers=headers,
-                params=params,
-                json=json_body,
-            )
-        finally:
-            await client.aclose()
+        client = self._get_client()
+        response = await client.request(
+            method.upper(),
+            self._build_open_api_url(path),
+            headers=headers,
+            params=params,
+            json=json_body,
+        )
 
         payload: dict[str, Any] = {}
         try:
@@ -535,11 +538,8 @@ class HDHiveService:
         url = f"{self._base_url}/api/checkin"
         body = {"is_gambler": True} if gamble else {}
 
-        client = self._create_client()
-        try:
-            response = await client.post(url, headers=headers, json=body)
-        finally:
-            await client.aclose()
+        client = self._get_client()
+        response = await client.post(url, headers=headers, json=body)
 
         payload: dict[str, Any] = {}
         try:

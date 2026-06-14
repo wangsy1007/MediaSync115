@@ -6,6 +6,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -44,6 +45,7 @@ class WatchlistItem(Base):
     __tablename__ = "watchlist_items"
     __table_args__ = (
         UniqueConstraint("watchlist_id", "tmdb_id", "media_type", name="uq_watchlist_item"),
+        Index("ix_watchlist_items_added_at", "added_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

@@ -1,6 +1,6 @@
 <template>
   <div class="quark-resource-tab">
-    <el-tabs v-if="orderedQuarkSubTabs.length" v-model="activeSubTab" class="source-tabs">
+    <el-tabs v-if="orderedQuarkSubTabs.length" v-model="activeSubTab" class="source-tabs" lazy>
       <template v-for="key in orderedQuarkSubTabs" :key="key">
       <el-tab-pane v-if="key === 'quark_pansou'" label="Pansou" name="pansou">
         <div class="resource-tools">

@@ -2,14 +2,36 @@ import httpx
 from typing import Any, Set, Tuple
 from app.core.config import settings
 
+_EMBY_HTTP_TIMEOUT = httpx.Timeout(15.0, connect=10.0)
+_EMBY_HTTP_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+
+
 class EmbyService:
     def __init__(self):
         self.base_url = settings.EMBY_URL.rstrip('/')
         self.api_key = settings.EMBY_API_KEY
+        self._http_client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                timeout=_EMBY_HTTP_TIMEOUT,
+                limits=_EMBY_HTTP_LIMITS,
+            )
+        return self._http_client
 
     def set_config(self, base_url: str, api_key: str) -> None:
         self.base_url = str(base_url or "").strip().rstrip("/")
         self.api_key = str(api_key or "").strip()
+        if self._http_client is not None and not self._http_client.is_closed:
+            old_client = self._http_client
+            self._http_client = None
+            try:
+                import asyncio
+                loop = asyncio.get_running_loop()
+                loop.create_task(old_client.aclose())
+            except RuntimeError:
+                pass
 
     async def get_downloaded_episodes_with_status(self, tmdb_id: int) -> dict[str, Any]:
         """
@@ -28,54 +50,54 @@ class EmbyService:
                 "episodes": set(),
             }
 
-        async with httpx.AsyncClient() as client:
-            try:
-                series_ids = await self._find_series_ids_by_tmdb(client, tmdb_id)
-                if not series_ids:
-                    return {
-                        "status": "ok",
-                        "message": "Emby 中未匹配到该 TMDB 剧集",
-                        "episodes": set(),
-                    }
-
-                existing_episodes: set[tuple[int, int]] = set()
-                for series_id in series_ids:
-                    episodes = await self._fetch_items(
-                        client,
-                        {
-                            "ParentId": series_id,
-                            "IncludeItemTypes": "Episode",
-                            "Recursive": "true",
-                            "Fields": "ParentIndexNumber,IndexNumber,IndexNumberEnd,SeriesId",
-                        },
-                    )
-                    for item in episodes:
-                        if not isinstance(item, dict):
-                            continue
-                        episode_start = self._safe_int(item.get("IndexNumber"))
-                        if episode_start is None or episode_start <= 0:
-                            continue
-
-                        season = self._safe_int(item.get("ParentIndexNumber"), default=1)
-                        season_number = season if season is not None and season >= 0 else 1
-                        episode_end = self._safe_int(item.get("IndexNumberEnd"), default=episode_start)
-                        if episode_end is None or episode_end < episode_start:
-                            episode_end = episode_start
-
-                        for episode_number in range(episode_start, episode_end + 1):
-                            existing_episodes.add((season_number, episode_number))
+        client = self._get_client()
+        try:
+            series_ids = await self._find_series_ids_by_tmdb(client, tmdb_id)
+            if not series_ids:
                 return {
                     "status": "ok",
-                    "message": "查询成功",
-                    "episodes": existing_episodes,
-                }
-            except Exception as e:
-                print(f"Error fetching from Emby: {e}")
-                return {
-                    "status": "request_failed",
-                    "message": str(e),
+                    "message": "Emby 中未匹配到该 TMDB 剧集",
                     "episodes": set(),
                 }
+
+            existing_episodes: set[tuple[int, int]] = set()
+            for series_id in series_ids:
+                episodes = await self._fetch_items(
+                    client,
+                    {
+                        "ParentId": series_id,
+                        "IncludeItemTypes": "Episode",
+                        "Recursive": "true",
+                        "Fields": "ParentIndexNumber,IndexNumber,IndexNumberEnd,SeriesId",
+                    },
+                )
+                for item in episodes:
+                    if not isinstance(item, dict):
+                        continue
+                    episode_start = self._safe_int(item.get("IndexNumber"))
+                    if episode_start is None or episode_start <= 0:
+                        continue
+
+                    season = self._safe_int(item.get("ParentIndexNumber"), default=1)
+                    season_number = season if season is not None and season >= 0 else 1
+                    episode_end = self._safe_int(item.get("IndexNumberEnd"), default=episode_start)
+                    if episode_end is None or episode_end < episode_start:
+                        episode_end = episode_start
+
+                    for episode_number in range(episode_start, episode_end + 1):
+                        existing_episodes.add((season_number, episode_number))
+            return {
+                "status": "ok",
+                "message": "查询成功",
+                "episodes": existing_episodes,
+            }
+        except Exception as e:
+            print(f"Error fetching from Emby: {e}")
+            return {
+                "status": "request_failed",
+                "message": str(e),
+                "episodes": set(),
+            }
 
     async def get_tv_episode_status_by_tmdb(self, tmdb_id: int) -> dict[str, Any]:
         """
@@ -94,42 +116,42 @@ class EmbyService:
                 "existing_episodes": set(),
             }
 
-        async with httpx.AsyncClient() as client:
-            try:
-                series_ids = await self._find_series_ids_by_tmdb(client, tmdb_id)
-                if not series_ids:
-                    return {
-                        "status": "ok",
-                        "message": "Emby 中未匹配到该 TMDB 剧集",
-                        "existing_episodes": set(),
-                    }
-
-                existing_episodes: set[tuple[int, int]] = set()
-                for series_id in series_ids:
-                    episodes = await self._fetch_items(
-                        client,
-                        {
-                            "ParentId": series_id,
-                            "IncludeItemTypes": "Episode",
-                            "Recursive": "true",
-                            "Fields": "ParentIndexNumber,IndexNumber,IndexNumberEnd,SeriesId",
-                        },
-                    )
-                    for pair in self._extract_episode_pairs(episodes):
-                        existing_episodes.add(pair)
-
+        client = self._get_client()
+        try:
+            series_ids = await self._find_series_ids_by_tmdb(client, tmdb_id)
+            if not series_ids:
                 return {
                     "status": "ok",
-                    "message": "查询成功",
-                    "existing_episodes": existing_episodes,
-                }
-            except Exception as e:
-                print(f"Error fetching tv status from Emby: {e}")
-                return {
-                    "status": "request_failed",
-                    "message": str(e),
+                    "message": "Emby 中未匹配到该 TMDB 剧集",
                     "existing_episodes": set(),
                 }
+
+            existing_episodes: set[tuple[int, int]] = set()
+            for series_id in series_ids:
+                episodes = await self._fetch_items(
+                    client,
+                    {
+                        "ParentId": series_id,
+                        "IncludeItemTypes": "Episode",
+                        "Recursive": "true",
+                        "Fields": "ParentIndexNumber,IndexNumber,IndexNumberEnd,SeriesId",
+                    },
+                )
+                for pair in self._extract_episode_pairs(episodes):
+                    existing_episodes.add(pair)
+
+            return {
+                "status": "ok",
+                "message": "查询成功",
+                "existing_episodes": existing_episodes,
+            }
+        except Exception as e:
+            print(f"Error fetching tv status from Emby: {e}")
+            return {
+                "status": "request_failed",
+                "message": str(e),
+                "existing_episodes": set(),
+            }
 
     async def get_movie_status_by_tmdb(self, tmdb_id: int) -> dict[str, Any]:
         """基于 Emby API 直接判断电影是否已入库。"""
@@ -147,42 +169,39 @@ class EmbyService:
                 "item_ids": [],
             }
 
-        async with httpx.AsyncClient() as client:
-            try:
-                movie_ids = await self._find_movie_ids_by_tmdb(client, tmdb_id)
-                return {
-                    "status": "ok",
-                    "message": "查询成功" if movie_ids else "Emby 中未匹配到该 TMDB 电影",
-                    "exists": bool(movie_ids),
-                    "item_ids": movie_ids,
-                }
-            except Exception as e:
-                print(f"Error fetching movie status from Emby: {e}")
-                return {
-                    "status": "request_failed",
-                    "message": str(e),
-                    "exists": False,
-                    "item_ids": [],
-                }
+        client = self._get_client()
+        try:
+            movie_ids = await self._find_movie_ids_by_tmdb(client, tmdb_id)
+            return {
+                "status": "ok",
+                "message": "查询成功" if movie_ids else "Emby 中未匹配到该 TMDB 电影",
+                "exists": bool(movie_ids),
+                "item_ids": movie_ids,
+            }
+        except Exception as e:
+            print(f"Error fetching movie status from Emby: {e}")
+            return {
+                "status": "request_failed",
+                "message": str(e),
+                "exists": False,
+                "item_ids": [],
+            }
 
     async def list_all_movies(self) -> list[dict[str, Any]]:
         if not self.base_url or not self.api_key:
             return []
-        async with httpx.AsyncClient() as client:
-            return await self.list_all_movies_with_client(client)
+        return await self.list_all_movies_with_client(self._get_client())
 
     async def list_all_series(self) -> list[dict[str, Any]]:
         if not self.base_url or not self.api_key:
             return []
-        async with httpx.AsyncClient() as client:
-            return await self.list_all_series_with_client(client)
+        return await self.list_all_series_with_client(self._get_client())
 
     async def list_series_episodes(self, series_id: str) -> list[dict[str, Any]]:
         normalized_id = str(series_id or "").strip()
         if not normalized_id or not self.base_url or not self.api_key:
             return []
-        async with httpx.AsyncClient() as client:
-            return await self.list_series_episodes_with_client(client, normalized_id)
+        return await self.list_series_episodes_with_client(self._get_client(), normalized_id)
 
     async def list_all_movies_with_client(self, client: httpx.AsyncClient) -> list[dict[str, Any]]:
         return await self._fetch_items(
@@ -395,12 +414,12 @@ class EmbyService:
         url = f"{self.base_url}/emby/Library/Refresh"
         params = {"api_key": self.api_key}
         
-        async with httpx.AsyncClient() as client:
-            try:
-                # 触发扫描是不返回具体内容的
-                await client.post(url, params=params, timeout=5.0)
-            except Exception as e:
-                print(f"Error triggering Emby refresh: {e}")
+        client = self._get_client()
+        try:
+            # 触发扫描是不返回具体内容的
+            await client.post(url, params=params, timeout=5.0)
+        except Exception as e:
+            print(f"Error triggering Emby refresh: {e}")
 
     async def check_connection_with_config(self, base_url: str, api_key: str) -> dict[str, Any]:
         normalized_base_url = str(base_url or "").strip().rstrip("/")

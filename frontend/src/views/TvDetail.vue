@@ -67,10 +67,10 @@
         </el-select>
       </div>
 
-      <el-tabs v-model="activeTab" class="resource-tabs">
+      <el-tabs v-model="activeTab" class="resource-tabs" lazy>
         <template v-for="key in orderedMainTabs" :key="key">
           <el-tab-pane v-if="key === 'pan115'" label="115网盘" name="pan115">
-          <el-tabs v-model="pan115SourceTab" class="source-tabs">
+          <el-tabs v-model="pan115SourceTab" class="source-tabs" lazy>
             <div class="resource-tools">
               <el-button
                 size="small"
@@ -356,7 +356,7 @@
         </el-tab-pane>
 
         <el-tab-pane v-else-if="key === 'magnet'" label="磁力链接" name="magnet">
-          <el-tabs v-model="magnetSourceTab" class="source-tabs">
+          <el-tabs v-model="magnetSourceTab" class="source-tabs" lazy>
             <template v-for="key in orderedMagnetSubTabs" :key="key">
               <el-tab-pane v-if="key === 'magnet_seedhub'" label="SeedHub" name="seedhub">
               <div class="resource-tools">

@@ -4,6 +4,7 @@ from sqlalchemy import event, inspect, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 
@@ -13,9 +14,7 @@ engine = create_async_engine(
     connect_args={
         "timeout": 60,
     },
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True,
+    poolclass=NullPool,
 )
 
 
@@ -99,6 +98,26 @@ def is_missing_table_error(exc: Exception, *table_names: str) -> bool:
     return any(table_name.lower() in message for table_name in table_names)
 
 
+PERFORMANCE_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS ix_download_records_subscription_id "
+    "ON download_records (subscription_id)",
+    "CREATE INDEX IF NOT EXISTS ix_download_records_subscription_status "
+    "ON download_records (subscription_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_subscriptions_active_created "
+    "ON subscriptions (is_active, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_subscription_step_logs_created_at "
+    "ON subscription_step_logs (created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_watchlist_items_added_at "
+    "ON watchlist_items (added_at)",
+)
+
+
+async def ensure_performance_indexes() -> None:
+    async with engine.begin() as conn:
+        for ddl in PERFORMANCE_INDEX_SQL:
+            await conn.execute(text(ddl))
+
+
 async def init_db():
     # 在最开始就用独立连接执行 PRAGMA，确保 WAL 和 busy_timeout 生效
     async with engine.connect() as conn:
@@ -108,6 +127,7 @@ async def init_db():
     await ensure_tables_exist()
     await ensure_subscription_columns()
     await ensure_download_record_columns()
+    await ensure_performance_indexes()
 
 
 async def ensure_subscription_columns() -> None:

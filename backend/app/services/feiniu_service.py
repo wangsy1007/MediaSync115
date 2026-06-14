@@ -11,6 +11,7 @@ import time
 import uuid
 from typing import Any, Optional
 
+import asyncio
 import httpx
 import websockets
 from Crypto.Cipher import AES, PKCS1_v1_5
@@ -20,6 +21,9 @@ from playwright.async_api import async_playwright
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+_FEINIU_HTTP_TIMEOUT = httpx.Timeout(15.0, connect=10.0)
+_FEINIU_HTTP_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
 
 
 class FeiniuService:
@@ -33,12 +37,33 @@ class FeiniuService:
         self.secret = settings.FEINIU_SECRET
         self.api_key = settings.FEINIU_API_KEY
         self.session_token: Optional[str] = None
+        self._http_client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                timeout=_FEINIU_HTTP_TIMEOUT,
+                follow_redirects=True,
+                limits=_FEINIU_HTTP_LIMITS,
+            )
+        return self._http_client
+
+    def _reset_http_client(self) -> None:
+        if self._http_client is not None and not self._http_client.is_closed:
+            old_client = self._http_client
+            self._http_client = None
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(old_client.aclose())
+            except RuntimeError:
+                pass
 
     def set_config(self, base_url: str, secret: str, api_key: str) -> None:
         self.base_url = str(base_url or "").strip().rstrip("/")
         self.secret = str(secret or "").strip()
         self.api_key = str(api_key or "").strip() or self.API_KEY
         self.session_token = None
+        self._reset_http_client()
 
     def set_session_token(self, token: str) -> None:
         self.session_token = token
@@ -196,61 +221,60 @@ class FeiniuService:
         url = f"{self.base_url}/v/api/v1/login"
 
         try:
-            async with httpx.AsyncClient(follow_redirects=True) as client:
-                response = await client.post(
-                    url,
-                    json={"username": username, "password": password},
-                    timeout=15.0,
+            client = self._get_client()
+            response = await client.post(
+                url,
+                json={"username": username, "password": password},
+                timeout=15.0,
+            )
+
+            if response.status_code != 200:
+                return {
+                    "success": False,
+                    "message": f"登录请求失败 (HTTP {response.status_code})",
+                    "token": None,
+                }
+
+            payload = response.json()
+            code = payload.get("code")
+            msg = payload.get("msg", "")
+
+            if code == 0:
+                token = (
+                    payload.get("data", {}).get("token")
+                    if isinstance(payload.get("data"), dict)
+                    else None
                 )
-
-                if response.status_code != 200:
+                if token:
+                    self.session_token = token
+                    logger.info(f"HTTP登录成功，获取 Token: {token[:20]}...")
                     return {
-                        "success": False,
-                        "message": f"登录请求失败 (HTTP {response.status_code})",
-                        "token": None,
+                        "success": True,
+                        "message": "登录成功",
+                        "token": token,
                     }
-
-                payload = response.json()
-                code = payload.get("code")
-                msg = payload.get("msg", "")
-
-                if code == 0:
-                    token = (
-                        payload.get("data", {}).get("token")
-                        if isinstance(payload.get("data"), dict)
-                        else None
-                    )
-                    if token:
-                        self.session_token = token
-                        logger.info(f"HTTP登录成功，获取 Token: {token[:20]}...")
-                        return {
-                            "success": True,
-                            "message": "登录成功",
-                            "token": token,
-                        }
-                    return {
-                        "success": False,
-                        "message": f"登录成功但未返回 Token: {msg}",
-                        "token": None,
-                    }
-                elif code == -15:
-                    return {
-                        "success": False,
-                        "message": "密码错误",
-                        "token": None,
-                    }
-                elif code == -2:
-                    return {
-                        "success": False,
-                        "message": "认证失败，请检查用户名",
-                        "token": None,
-                    }
-                else:
-                    return {
-                        "success": False,
-                        "message": f"登录失败: {msg} (code={code})",
-                        "token": None,
-                    }
+                return {
+                    "success": False,
+                    "message": f"登录成功但未返回 Token: {msg}",
+                    "token": None,
+                }
+            if code == -15:
+                return {
+                    "success": False,
+                    "message": "密码错误",
+                    "token": None,
+                }
+            if code == -2:
+                return {
+                    "success": False,
+                    "message": "认证失败，请检查用户名",
+                    "token": None,
+                }
+            return {
+                "success": False,
+                "message": f"登录失败: {msg} (code={code})",
+                "token": None,
+            }
 
         except Exception as exc:
             logger.exception("HTTP登录异常")
@@ -438,39 +462,39 @@ class FeiniuService:
 
         url = f"{self.base_url}/v/api/v1/user/info"
         headers = self._auth_headers(use_session=True)
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(url, headers=headers, timeout=10.0)
-                if response.status_code == 200:
-                    payload = response.json()
-                    if payload.get("code") == 0:
-                        return {
-                            "valid": True,
-                            "message": "飞牛影视连接成功",
-                            "user": payload.get("data") or {"server": "feiniu"},
-                        }
-                    if payload.get("code") == -2:
-                        return {
-                            "valid": False,
-                            "message": "Session Token 无效或已过期，请重新登录",
-                            "user": None,
-                        }
+        client = self._get_client()
+        try:
+            response = await client.get(url, headers=headers, timeout=10.0)
+            if response.status_code == 200:
+                payload = response.json()
+                if payload.get("code") == 0:
+                    return {
+                        "valid": True,
+                        "message": "飞牛影视连接成功",
+                        "user": payload.get("data") or {"server": "feiniu"},
+                    }
+                if payload.get("code") == -2:
                     return {
                         "valid": False,
-                        "message": payload.get("msg") or "飞牛影视连接失败",
+                        "message": "Session Token 无效或已过期，请重新登录",
                         "user": None,
                     }
                 return {
                     "valid": False,
-                    "message": f"连接失败 (HTTP {response.status_code})",
+                    "message": payload.get("msg") or "飞牛影视连接失败",
                     "user": None,
                 }
-            except Exception as exc:
-                return {
-                    "valid": False,
-                    "message": str(exc),
-                    "user": None,
-                }
+            return {
+                "valid": False,
+                "message": f"连接失败 (HTTP {response.status_code})",
+                "user": None,
+            }
+        except Exception as exc:
+            return {
+                "valid": False,
+                "message": str(exc),
+                "user": None,
+            }
 
     async def check_connection_with_config(
         self, base_url: str, secret: str, api_key: str
@@ -496,33 +520,33 @@ class FeiniuService:
         url = f"{self.base_url}/v/api/v1/user/info"
         headers = self._session_headers()
 
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(url, headers=headers, timeout=10.0)
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("code") == 0:
-                        return {
-                            "valid": True,
-                            "message": "飞牛影视连接成功",
-                            "user": data.get("data", {}),
-                        }
+        client = self._get_client()
+        try:
+            response = await client.get(url, headers=headers, timeout=10.0)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("code") == 0:
                     return {
-                        "valid": False,
-                        "message": f"API错误: {data.get('msg', 'Unknown')}",
-                        "user": None,
+                        "valid": True,
+                        "message": "飞牛影视连接成功",
+                        "user": data.get("data", {}),
                     }
                 return {
                     "valid": False,
-                    "message": f"连接失败 (HTTP {response.status_code})",
+                    "message": f"API错误: {data.get('msg', 'Unknown')}",
                     "user": None,
                 }
-            except Exception as exc:
-                return {
-                    "valid": False,
-                    "message": str(exc),
-                    "user": None,
-                }
+            return {
+                "valid": False,
+                "message": f"连接失败 (HTTP {response.status_code})",
+                "user": None,
+            }
+        except Exception as exc:
+            return {
+                "valid": False,
+                "message": str(exc),
+                "user": None,
+            }
 
     async def get_movie_status_by_tmdb(self, tmdb_id: int) -> dict[str, Any]:
         """使用 session token 检查电影是否存在（需要先登录）"""
@@ -539,45 +563,45 @@ class FeiniuService:
         headers = self._session_headers()
         params = {"tmdb": str(tmdb_id), "type": "movie"}
 
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    url, headers=headers, params=params, timeout=15.0
-                )
-                if response.status_code != 200:
-                    return {
-                        "status": "request_failed",
-                        "message": f"请求失败 (HTTP {response.status_code})",
-                        "exists": False,
-                        "item_ids": [],
-                    }
-                payload = response.json()
-                if payload.get("code") != 0:
-                    return {
-                        "status": "api_error",
-                        "message": payload.get("msg", "Unknown error"),
-                        "exists": False,
-                        "item_ids": [],
-                    }
-                items = payload.get("data", {}).get("items") or []
-                item_ids = [
-                    str(item.get("id") or "") for item in items if item.get("id")
-                ]
-                return {
-                    "status": "ok",
-                    "message": "查询成功"
-                    if item_ids
-                    else "飞牛影视中未匹配到该 TMDB 电影",
-                    "exists": bool(item_ids),
-                    "item_ids": item_ids,
-                }
-            except Exception as exc:
+        client = self._get_client()
+        try:
+            response = await client.get(
+                url, headers=headers, params=params, timeout=15.0
+            )
+            if response.status_code != 200:
                 return {
                     "status": "request_failed",
-                    "message": str(exc),
+                    "message": f"请求失败 (HTTP {response.status_code})",
                     "exists": False,
                     "item_ids": [],
                 }
+            payload = response.json()
+            if payload.get("code") != 0:
+                return {
+                    "status": "api_error",
+                    "message": payload.get("msg", "Unknown error"),
+                    "exists": False,
+                    "item_ids": [],
+                }
+            items = payload.get("data", {}).get("items") or []
+            item_ids = [
+                str(item.get("id") or "") for item in items if item.get("id")
+            ]
+            return {
+                "status": "ok",
+                "message": "查询成功"
+                if item_ids
+                else "飞牛影视中未匹配到该 TMDB 电影",
+                "exists": bool(item_ids),
+                "item_ids": item_ids,
+            }
+        except Exception as exc:
+            return {
+                "status": "request_failed",
+                "message": str(exc),
+                "exists": False,
+                "item_ids": [],
+            }
 
     async def get_tv_episode_status_by_tmdb(self, tmdb_id: int) -> dict[str, Any]:
         """使用 session token 检查剧集是否存在"""
@@ -593,42 +617,42 @@ class FeiniuService:
         headers = self._session_headers()
         params = {"tmdb": str(tmdb_id), "type": "tv"}
 
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(
-                    url, headers=headers, params=params, timeout=15.0
-                )
-                if response.status_code != 200:
-                    return {
-                        "status": "request_failed",
-                        "message": f"请求失败 (HTTP {response.status_code})",
-                        "existing_episodes": set(),
-                    }
-                payload = response.json()
-                if payload.get("code") != 0:
-                    return {
-                        "status": "api_error",
-                        "message": payload.get("msg", "Unknown error"),
-                        "existing_episodes": set(),
-                    }
-                items = payload.get("data", {}).get("items") or []
-                existing_episodes: set[tuple[int, int]] = set()
-                for item in items:
-                    season = int(item.get("season") or item.get("seasonNumber") or 1)
-                    episode = int(item.get("episode") or item.get("episodeNumber") or 0)
-                    if episode > 0:
-                        existing_episodes.add((season, episode))
-                return {
-                    "status": "ok",
-                    "message": "查询成功",
-                    "existing_episodes": existing_episodes,
-                }
-            except Exception as exc:
+        client = self._get_client()
+        try:
+            response = await client.get(
+                url, headers=headers, params=params, timeout=15.0
+            )
+            if response.status_code != 200:
                 return {
                     "status": "request_failed",
-                    "message": str(exc),
+                    "message": f"请求失败 (HTTP {response.status_code})",
                     "existing_episodes": set(),
                 }
+            payload = response.json()
+            if payload.get("code") != 0:
+                return {
+                    "status": "api_error",
+                    "message": payload.get("msg", "Unknown error"),
+                    "existing_episodes": set(),
+                }
+            items = payload.get("data", {}).get("items") or []
+            existing_episodes: set[tuple[int, int]] = set()
+            for item in items:
+                season = int(item.get("season") or item.get("seasonNumber") or 1)
+                episode = int(item.get("episode") or item.get("episodeNumber") or 0)
+                if episode > 0:
+                    existing_episodes.add((season, episode))
+            return {
+                "status": "ok",
+                "message": "查询成功",
+                "existing_episodes": existing_episodes,
+            }
+        except Exception as exc:
+            return {
+                "status": "request_failed",
+                "message": str(exc),
+                "existing_episodes": set(),
+            }
 
     async def refresh_library(self, path: Optional[str] = None) -> dict[str, Any]:
         """触发媒体库扫描"""
@@ -644,31 +668,31 @@ class FeiniuService:
         if path:
             payload["path"] = path
 
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    url, headers=headers, json=payload, timeout=30.0
-                )
-                if response.status_code == 200:
-                    return {
-                        "status": "ok",
-                        "message": "扫描任务已触发",
-                    }
-                error_text = response.text
-                if "-14" in error_text:
-                    return {
-                        "status": "duplicate",
-                        "message": "扫描任务冲突，请稍后重试",
-                    }
+        client = self._get_client()
+        try:
+            response = await client.post(
+                url, headers=headers, json=payload, timeout=30.0
+            )
+            if response.status_code == 200:
                 return {
-                    "status": "error",
-                    "message": f"扫描失败 (HTTP {response.status_code}): {error_text}",
+                    "status": "ok",
+                    "message": "扫描任务已触发",
                 }
-            except Exception as exc:
+            error_text = response.text
+            if "-14" in error_text:
                 return {
-                    "status": "request_failed",
-                    "message": str(exc),
+                    "status": "duplicate",
+                    "message": "扫描任务冲突，请稍后重试",
                 }
+            return {
+                "status": "error",
+                "message": f"扫描失败 (HTTP {response.status_code}): {error_text}",
+            }
+        except Exception as exc:
+            return {
+                "status": "request_failed",
+                "message": str(exc),
+            }
 
     async def list_items_page(self, page: int = 1) -> dict[str, Any]:
         """分页获取媒体条目列表"""
@@ -682,38 +706,38 @@ class FeiniuService:
 
         url = f"{self.base_url}/v/api/v1/item/list"
         headers = self._session_headers()
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    url,
-                    headers=headers,
-                    json={"page": max(1, int(page))},
-                    timeout=30.0,
-                )
-                if response.status_code != 200:
-                    return {
-                        "success": False,
-                        "message": f"请求失败 (HTTP {response.status_code})",
-                        "data": None,
-                    }
-                payload = response.json()
-                if payload.get("code") != 0:
-                    return {
-                        "success": False,
-                        "message": payload.get("msg") or "获取媒体条目失败",
-                        "data": None,
-                    }
-                return {
-                    "success": True,
-                    "message": "查询成功",
-                    "data": payload.get("data") or {},
-                }
-            except Exception as exc:
+        client = self._get_client()
+        try:
+            response = await client.post(
+                url,
+                headers=headers,
+                json={"page": max(1, int(page))},
+                timeout=30.0,
+            )
+            if response.status_code != 200:
                 return {
                     "success": False,
-                    "message": str(exc),
+                    "message": f"请求失败 (HTTP {response.status_code})",
                     "data": None,
                 }
+            payload = response.json()
+            if payload.get("code") != 0:
+                return {
+                    "success": False,
+                    "message": payload.get("msg") or "获取媒体条目失败",
+                    "data": None,
+                }
+            return {
+                "success": True,
+                "message": "查询成功",
+                "data": payload.get("data") or {},
+            }
+        except Exception as exc:
+            return {
+                "success": False,
+                "message": str(exc),
+                "data": None,
+            }
 
     async def get_item_detail(self, guid: str) -> dict[str, Any]:
         """获取条目详情"""
@@ -728,33 +752,33 @@ class FeiniuService:
 
         url = f"{self.base_url}/v/api/v1/item/{item_guid}"
         headers = self._session_headers()
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(url, headers=headers, timeout=15.0)
-                if response.status_code != 200:
-                    return {
-                        "success": False,
-                        "message": f"请求失败 (HTTP {response.status_code})",
-                        "data": None,
-                    }
-                payload = response.json()
-                if payload.get("code") != 0:
-                    return {
-                        "success": False,
-                        "message": payload.get("msg") or "获取条目详情失败",
-                        "data": None,
-                    }
-                return {
-                    "success": True,
-                    "message": "查询成功",
-                    "data": payload.get("data") or {},
-                }
-            except Exception as exc:
+        client = self._get_client()
+        try:
+            response = await client.get(url, headers=headers, timeout=15.0)
+            if response.status_code != 200:
                 return {
                     "success": False,
-                    "message": str(exc),
+                    "message": f"请求失败 (HTTP {response.status_code})",
                     "data": None,
                 }
+            payload = response.json()
+            if payload.get("code") != 0:
+                return {
+                    "success": False,
+                    "message": payload.get("msg") or "获取条目详情失败",
+                    "data": None,
+                }
+            return {
+                "success": True,
+                "message": "查询成功",
+                "data": payload.get("data") or {},
+            }
+        except Exception as exc:
+            return {
+                "success": False,
+                "message": str(exc),
+                "data": None,
+            }
 
     async def list_seasons(self, tv_guid: str) -> dict[str, Any]:
         """获取剧集季列表"""
@@ -769,34 +793,34 @@ class FeiniuService:
 
         url = f"{self.base_url}/v/api/v1/season/list/{item_guid}"
         headers = self._session_headers()
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(url, headers=headers, timeout=15.0)
-                if response.status_code != 200:
-                    return {
-                        "success": False,
-                        "message": f"请求失败 (HTTP {response.status_code})",
-                        "data": [],
-                    }
-                payload = response.json()
-                if payload.get("code") != 0:
-                    return {
-                        "success": False,
-                        "message": payload.get("msg") or "获取季列表失败",
-                        "data": [],
-                    }
-                data = payload.get("data") or []
-                return {
-                    "success": True,
-                    "message": "查询成功",
-                    "data": data if isinstance(data, list) else [],
-                }
-            except Exception as exc:
+        client = self._get_client()
+        try:
+            response = await client.get(url, headers=headers, timeout=15.0)
+            if response.status_code != 200:
                 return {
                     "success": False,
-                    "message": str(exc),
+                    "message": f"请求失败 (HTTP {response.status_code})",
                     "data": [],
                 }
+            payload = response.json()
+            if payload.get("code") != 0:
+                return {
+                    "success": False,
+                    "message": payload.get("msg") or "获取季列表失败",
+                    "data": [],
+                }
+            data = payload.get("data") or []
+            return {
+                "success": True,
+                "message": "查询成功",
+                "data": data if isinstance(data, list) else [],
+            }
+        except Exception as exc:
+            return {
+                "success": False,
+                "message": str(exc),
+                "data": [],
+            }
 
     async def list_episodes(self, season_guid: str) -> dict[str, Any]:
         """获取单季分集列表"""
@@ -811,34 +835,34 @@ class FeiniuService:
 
         url = f"{self.base_url}/v/api/v1/episode/list/{item_guid}"
         headers = self._session_headers()
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(url, headers=headers, timeout=15.0)
-                if response.status_code != 200:
-                    return {
-                        "success": False,
-                        "message": f"请求失败 (HTTP {response.status_code})",
-                        "data": [],
-                    }
-                payload = response.json()
-                if payload.get("code") != 0:
-                    return {
-                        "success": False,
-                        "message": payload.get("msg") or "获取分集列表失败",
-                        "data": [],
-                    }
-                data = payload.get("data") or []
-                return {
-                    "success": True,
-                    "message": "查询成功",
-                    "data": data if isinstance(data, list) else [],
-                }
-            except Exception as exc:
+        client = self._get_client()
+        try:
+            response = await client.get(url, headers=headers, timeout=15.0)
+            if response.status_code != 200:
                 return {
                     "success": False,
-                    "message": str(exc),
+                    "message": f"请求失败 (HTTP {response.status_code})",
                     "data": [],
                 }
+            payload = response.json()
+            if payload.get("code") != 0:
+                return {
+                    "success": False,
+                    "message": payload.get("msg") or "获取分集列表失败",
+                    "data": [],
+                }
+            data = payload.get("data") or []
+            return {
+                "success": True,
+                "message": "查询成功",
+                "data": data if isinstance(data, list) else [],
+            }
+        except Exception as exc:
+            return {
+                "success": False,
+                "message": str(exc),
+                "data": [],
+            }
 
 
 feiniu_service = FeiniuService()

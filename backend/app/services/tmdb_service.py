@@ -10,6 +10,20 @@ from app.utils.proxy import proxy_manager
 _TMDB_CACHE_TTL_SECONDS = 60 * 60
 _TMDB_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _TMDB_CACHE_LOCK = asyncio.Lock()
+_TMDB_HTTP_CLIENT: httpx.AsyncClient | None = None
+_TMDB_HTTP_CLIENT_LOCK = asyncio.Lock()
+
+
+async def _get_tmdb_http_client(*, verify: bool = True) -> httpx.AsyncClient:
+    global _TMDB_HTTP_CLIENT
+    if verify:
+        async with _TMDB_HTTP_CLIENT_LOCK:
+            if _TMDB_HTTP_CLIENT is None or _TMDB_HTTP_CLIENT.is_closed:
+                _TMDB_HTTP_CLIENT = proxy_manager.create_httpx_client(
+                    timeout=15.0, http2=True
+                )
+            return _TMDB_HTTP_CLIENT
+    return proxy_manager.create_httpx_client(timeout=15.0, http2=True, verify=False)
 
 
 class TmdbService:
@@ -35,7 +49,7 @@ class TmdbService:
 
     async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         url = f"{settings.TMDB_BASE_URL}{path}"
-        client = proxy_manager.create_httpx_client(timeout=15.0, http2=True)
+        client = await _get_tmdb_http_client()
         try:
             response = await client.get(url, params=params)
             self._check_api_key_error(response)
@@ -49,13 +63,9 @@ class TmdbService:
             # Fallback once with verify=False to keep subscription/detail flows available.
             if not self._is_tls_hostname_error(exc):
                 raise
-        finally:
-            await client.aclose()
 
         # Fallback without verification
-        insecure_client = proxy_manager.create_httpx_client(
-            timeout=15.0, http2=True, verify=False
-        )
+        insecure_client = await _get_tmdb_http_client(verify=False)
         try:
             response = await insecure_client.get(url, params=params)
             self._check_api_key_error(response)
@@ -63,7 +73,8 @@ class TmdbService:
             payload = response.json()
             return payload if isinstance(payload, dict) else {}
         finally:
-            await insecure_client.aclose()
+            if insecure_client is not _TMDB_HTTP_CLIENT:
+                await insecure_client.aclose()
 
     async def check_connection(self) -> dict[str, Any]:
         """Validate TMDB API connectivity with a lightweight real API request."""

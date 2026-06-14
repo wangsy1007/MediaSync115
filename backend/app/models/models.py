@@ -43,6 +43,9 @@ class ExecutionStatus(str, enum.Enum):
 
 class Subscription(Base):
     __tablename__ = "subscriptions"
+    __table_args__ = (
+        Index("ix_subscriptions_active_created", "is_active", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     douban_id: Mapped[str | None] = mapped_column(
@@ -78,10 +81,14 @@ class Subscription(Base):
 
 class DownloadRecord(Base):
     __tablename__ = "download_records"
+    __table_args__ = (
+        Index("ix_download_records_subscription_id", "subscription_id"),
+        Index("ix_download_records_subscription_status", "subscription_id", "status"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     subscription_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("subscriptions.id"), nullable=False
+        Integer, ForeignKey("subscriptions.id"), nullable=False, index=True
     )
     resource_name: Mapped[str] = mapped_column(String(500), nullable=False)
     resource_url: Mapped[str] = mapped_column(Text, nullable=False)
@@ -123,6 +130,9 @@ class SubscriptionExecutionLog(Base):
 
 class SubscriptionStepLog(Base):
     __tablename__ = "subscription_step_logs"
+    __table_args__ = (
+        Index("ix_subscription_step_logs_created_at", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
