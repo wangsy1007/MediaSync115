@@ -935,7 +935,17 @@ class Pan115Service:
                 if not isinstance(item, dict):
                     continue
 
-                # web share_snap 返回中，目录通常没有 fid，文件包含 fid
+                if self._is_share_folder_item(item):
+                    sub_folder_cid = self._share_item_cid(item)
+                    if not sub_folder_cid:
+                        continue
+
+                    sub_files = await self.get_share_all_files_recursive(
+                        share_code, receive_code, sub_folder_cid, visited_cids
+                    )
+                    all_files.extend(sub_files)
+                    continue
+
                 fid = self._share_item_fid(item)
                 if fid:
                     all_files.append(
@@ -947,13 +957,13 @@ class Pan115Service:
                     )
                     continue
 
-                # 没有 fid 时按目录处理，递归抓取子目录文件
-                sub_folder_cid = item.get("cid")
-                if sub_folder_cid is None or sub_folder_cid in ("", 0, "0"):
+                # 兜底：无 fid 但存在目录 ID 时仍递归。
+                sub_folder_cid = self._share_item_cid(item)
+                if not sub_folder_cid:
                     continue
 
                 sub_files = await self.get_share_all_files_recursive(
-                    share_code, receive_code, str(sub_folder_cid), visited_cids
+                    share_code, receive_code, sub_folder_cid, visited_cids
                 )
                 all_files.extend(sub_files)
 
@@ -1137,6 +1147,45 @@ class Pan115Service:
         if raw in (None, "", 0, "0"):
             return ""
         return str(raw).strip()
+
+    @staticmethod
+    def _share_item_cid(item: dict[str, Any]) -> str:
+        """统一分享列表中的目录 ID。"""
+        raw = item.get("cid") or item.get("category_id") or item.get("dir_id")
+        if raw in (None, "", 0, "0"):
+            return ""
+        return str(raw).strip()
+
+    @classmethod
+    def _is_share_folder_item(cls, item: dict[str, Any]) -> bool:
+        """判断分享列表项是否是目录。
+
+        share/snap 在不同端点上字段不完全一致，目录项有时也会带 `fid`，
+        所以不能只根据 `fid` 是否存在来区分文件与目录。
+        """
+        if not isinstance(item, dict):
+            return False
+
+        for key in ("is_dir", "is_folder", "folder"):
+            value = item.get(key)
+            if value in (1, "1", True, "true", "True"):
+                return True
+
+        category = str(item.get("category") or item.get("type") or item.get("file_type") or "").strip().lower()
+        if category in {"folder", "dir", "directory"}:
+            return True
+
+        cid = cls._share_item_cid(item)
+        fid = cls._share_item_fid(item)
+        size = cls._share_item_size(item)
+        name = cls._share_item_name(item)
+
+        if cid and (not fid or cid != fid):
+            return True
+        if cid and fid and cid == fid and size <= 0 and not cls._is_video_file_name(name):
+            return True
+
+        return False
 
     @classmethod
     def _collect_share_file_ids(cls, files: list[dict[str, Any]]) -> list[str]:

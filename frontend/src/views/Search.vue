@@ -42,7 +42,7 @@
         <template v-else-if="exploreSections.length > 0">
           <ExploreSectionRow
             v-for="section in exploreSections"
-            :key="section.key"
+            :key="`${exploreSource}:${section.key}`"
             :source="exploreSource"
             :card-width="cardWidth"
             :section="section"
@@ -203,6 +203,14 @@
                   <template v-if="item.queuePosition > 1">排队中({{ item.queuePosition }})</template>
                   <template v-else>{{ item.isPansouResult ? '一键转存' : '转存' }}</template>
                 </el-button>
+                <el-button
+                  v-if="item.isPansouResult && item.pan115_share_link"
+                  class="action-btn watchlist-btn"
+                  size="small"
+                  @click.stop="handleCopyPanShareLink(item)"
+                >
+                  复制分享链接
+                </el-button>
               </div>
             </div>
             <div class="media-info">
@@ -287,6 +295,8 @@ import {
   setCachedExploreSectionBatch,
   setExploreSectionBatchInflight
 } from '@/utils/exploreSectionBatchCache'
+import { copyText } from '@/utils/clipboard'
+import { parseReceiveCodeFromShareLink } from '@/utils/panShare'
 
 defineOptions({ name: 'Search' })
 
@@ -315,6 +325,7 @@ const totalPages = ref(0)
 const exploreLoading = ref(false)
 const tmdbConfigured = ref(true)
 const exploreSections = shallowRef([])
+let exploreSectionsRequestId = 0
 const exploreContainerRef = ref(null)
 const sectionRowRefs = ref({})
 const sectionScrollStates = ref({})
@@ -666,6 +677,7 @@ const goToDoubanDetail = (item) => {
 }
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
+const POSTER_FALLBACK_URL = new URL('/no-poster.png', import.meta.url).href
 const CARD_GAP = EXPLORE_CARD_GAP
 const resolveExploreSpeedMode = () => {
   if (typeof window === 'undefined') return 'extreme'
@@ -1174,7 +1186,7 @@ const rewriteTmdbPosterSize = (url, compact = false) => {
 
 const getPosterUrl = (path, options = {}) => {
   const compact = options.compact !== false
-  if (!path) return new URL('/no-poster.png', import.meta.url).href
+  if (!path) return POSTER_FALLBACK_URL
   const source = String(path).trim()
   const rawUrl = source.startsWith('//') ? `https:${source}` : source
   if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
@@ -1188,7 +1200,7 @@ const getPosterUrl = (path, options = {}) => {
     return rawUrl
   }
   if (String(path).startsWith('/')) return rewriteTmdbPosterSize(`${TMDB_IMAGE_BASE}${path}`, compact)
-  return new URL('/no-poster.png', import.meta.url).href
+  return POSTER_FALLBACK_URL
 }
 
 const isPriorityExplorePoster = (sectionIndex, itemIndex) => {
@@ -1196,7 +1208,11 @@ const isPriorityExplorePoster = (sectionIndex, itemIndex) => {
 }
 
 const handleImageError = (e) => {
-  e.target.src = new URL('/no-poster.png', import.meta.url).href
+  const target = e?.target
+  if (!target) return
+  target.onerror = null
+  if (target.src === POSTER_FALLBACK_URL || target.currentSrc === POSTER_FALLBACK_URL) return
+  target.src = POSTER_FALLBACK_URL
 }
 
 const getMediaTypeLabel = (type) => {
@@ -1285,13 +1301,16 @@ const normalizeSearchResultItem = (item, index = 0, fallbackService = '') => {
 }
 
 const fetchExploreSections = async () => {
+  const requestId = ++exploreSectionsRequestId
+  const source = exploreSource.value
   exploreLoading.value = true
   try {
     // 一次性把 9 个分区 + emby/feiniu 角标全部拉回，避免 row 各自请求带来的 9 次 RTT 与重复角标查询
-    const { data } = await searchApi.getExploreSections(exploreSource.value, 12, false)
+    const { data } = await searchApi.getExploreSections(source, 12, false)
+    if (requestId !== exploreSectionsRequestId || source !== exploreSource.value) return
     const sourceSections = Array.isArray(data?.sections) ? data.sections : []
 
-    if (exploreSource.value === 'tmdb') {
+    if (source === 'tmdb') {
       const errors = Array.isArray(data?.errors) ? data.errors : []
       const hasUnconfigured = errors.some((entry) => {
         const detail = String(entry?.error || '')
@@ -1311,7 +1330,7 @@ const fetchExploreSections = async () => {
     mergeFeiniuStatusMap(data?.feiniu_status_map || {})
 
     const responseSource = String(data?.source || '')
-    if (exploreSource.value === 'douban' && responseSource.startsWith('fallback:')) {
+    if (source === 'douban' && responseSource.startsWith('fallback:')) {
       ElMessage.warning('豆瓣榜单暂不可用，已展示备用榜单。请检查设置中的代理地址/端口是否正确。')
     }
 
@@ -1324,7 +1343,8 @@ const fetchExploreSections = async () => {
       }
     })
   } catch (error) {
-    if (exploreSource.value === 'tmdb') {
+    if (requestId !== exploreSectionsRequestId || source !== exploreSource.value) return
+    if (source === 'tmdb') {
       const detail = String(error?.response?.data?.detail || error?.message || '')
       if (detail.includes('TMDB API Key 未配置') || detail.includes('TMDB_API_KEY')) {
         tmdbConfigured.value = false
@@ -1333,14 +1353,16 @@ const fetchExploreSections = async () => {
       }
     }
     const detail = String(error?.response?.data?.detail || error?.message || '')
-    if (exploreSource.value === 'tmdb') {
+    if (source === 'tmdb') {
       ElMessage.error(detail.includes('TMDB') ? detail : `TMDB 榜单加载失败：${detail || '请检查代理或 API Key 配置'}`)
     } else {
       ElMessage.error(detail || '探索榜单加载失败')
     }
     console.error('Failed to fetch explore sections:', error)
   } finally {
-    exploreLoading.value = false
+    if (requestId === exploreSectionsRequestId) {
+      exploreLoading.value = false
+    }
   }
 }
 
@@ -1492,30 +1514,56 @@ const openSearchResultDetail = (mediaType, id) => {
     page: currentPage.value
   })
   const path = mediaType === 'tv' ? `/tv/${id}` : `/movie/${id}`
-  router.push({ path })
+  router.push({
+    path,
+    query: { from: route.fullPath }
+  })
+}
+
+const resolveSearchResultTarget = (item) => {
+  const mediaType = item?.media_type
+  if (mediaType === 'collection') return { mediaType: 'collection', tmdbId: null }
+  if (mediaType === 'person') {
+    return {
+      mediaType: 'person',
+      tmdbId: toValidTmdbId(item?.tmdb_id || item?.tmdbid || item?.id)
+    }
+  }
+  if (mediaType !== 'movie' && mediaType !== 'tv') return null
+  return {
+    mediaType,
+    tmdbId: toValidTmdbId(item?.tmdb_id || item?.tmdbid || item?.id)
+  }
 }
 
 const handleItemClick = (item) => {
   if (item.isPansouResult) return
-  const type = item.media_type
-  const id = item.id
-  if (!id) return
+  const target = resolveSearchResultTarget(item)
+  if (!target) return
 
-  if (type === 'movie') {
-    warmupPan115Resources('movie', id)
-    openSearchResultDetail('movie', id)
-  } else if (type === 'tv') {
-    warmupPan115Resources('tv', id)
-    openSearchResultDetail('tv', id)
-  } else if (type === 'collection') {
-    openSearchResultDetail('movie', id)
-  } else if (type === 'person') {
+  if (target.mediaType === 'collection') {
+    ElMessage.info('合集结果暂不支持直接打开详情，请选择具体电影或剧集')
+    return
+  }
+
+  if (!target.tmdbId) {
+    ElMessage.warning('未找到有效的详情 ID')
+    return
+  }
+
+  if (target.mediaType === 'movie') {
+    warmupPan115Resources('movie', target.tmdbId)
+    openSearchResultDetail('movie', target.tmdbId)
+  } else if (target.mediaType === 'tv') {
+    warmupPan115Resources('tv', target.tmdbId)
+    openSearchResultDetail('tv', target.tmdbId)
+  } else if (target.mediaType === 'person') {
     saveSearchReturnContext({
       path: route.path,
       keyword: lastSearchKeyword.value,
       page: currentPage.value
     })
-    router.push({ path: `/person/${id}`, query: { from: route.fullPath } })
+    router.push({ path: `/person/${target.tmdbId}`, query: { from: route.fullPath } })
   }
 }
 
@@ -1790,20 +1838,6 @@ const handleSubscribe = async (item) => {
   }
 }
 
-const parseReceiveCodeFromShareLink = (shareLink) => {
-  const rawLink = String(shareLink || '').trim()
-  if (!rawLink) return ''
-
-  const passwordMatch = rawLink.match(/[?&](?:password|pwd)=([^&#]+)/i)
-  if (!passwordMatch) return ''
-
-  try {
-    return decodeURIComponent(passwordMatch[1])
-  } catch {
-    return passwordMatch[1]
-  }
-}
-
 // 执行队列中单条转存任务（内部使用，由队列调度）
 const executeSaveItem = async (item) => {
   if (!item) return
@@ -1991,6 +2025,20 @@ const cleanupExploreContainerResizeObserver = () => {
   if (exploreContainerResizeObserver) {
     exploreContainerResizeObserver.disconnect()
     exploreContainerResizeObserver = null
+  }
+}
+
+const handleCopyPanShareLink = async (item) => {
+  const shareLink = String(item?.pan115_share_link || item?.share_link || item?.share_url || '').trim()
+  if (!shareLink) {
+    ElMessage.warning('该结果没有可复制的分享链接')
+    return
+  }
+  try {
+    await copyText(shareLink)
+    ElMessage.success('已复制分享链接')
+  } catch (error) {
+    ElMessage.error(error.message || '复制失败')
   }
 }
 

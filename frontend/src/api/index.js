@@ -199,7 +199,7 @@ export const searchApi = {
   unlockHdhiveResource: (slug) => api.post('/search/hdhive/resource/unlock', { slug }),
   getMovieMagnet: (tmdbId) => api.get(`/search/movie/${tmdbId}/magnet`),
   getMovieMagnetSeedhub: (tmdbId, limit = 80) =>
-    api.get(`/search/movie/${tmdbId}/magnet`, { params: { source: 'seedhub', limit } }),
+    api.get(`/search/movie/${tmdbId}/magnet/seedhub`, { params: { limit } }),
   getMovieMagnetButailing: (tmdbId) =>
     api.get(`/search/movie/${tmdbId}/magnet/butailing`),
   createMovieSeedhubMagnetTask: (tmdbId, limit = 40, forceRefresh = false) =>

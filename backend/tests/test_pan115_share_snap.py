@@ -57,3 +57,38 @@ class TestPan115ShareSnapFallback:
             "message='Specified method is invalid for this resource'"
         )
         assert Pan115Service._is_method_not_allowed_error(text) is True
+
+    @pytest.mark.asyncio
+    async def test_get_share_all_files_recursive_descends_nested_folders_with_fid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = Pan115Service(cookie="test-cookie")
+
+        async def fake_get_share_file_list(
+            share_code: str,
+            receive_code: str = "",
+            cid: str = "0",
+            offset: int = 0,
+            limit: int = 50,
+        ):
+            if cid == "0":
+                return {
+                    "list": [
+                        {"fid": "folder-fid", "cid": "100", "n": "顶层目录", "s": 0, "is_dir": 1}
+                    ]
+                }
+            if cid == "100":
+                return {
+                    "list": [
+                        {"fid": "sub-folder-fid", "cid": "200", "n": "二级目录", "s": 0, "is_dir": 1}
+                    ]
+                }
+            if cid == "200":
+                return {"list": [{"fid": "video-1", "n": "Episode.S01E01.mkv", "s": 1024}]}
+            return {"list": []}
+
+        monkeypatch.setattr(service, "get_share_file_list", fake_get_share_file_list)
+
+        result = await service.get_share_all_files_recursive("share-code", "pwd")
+
+        assert result == [{"fid": "video-1", "name": "Episode.S01E01.mkv", "size": 1024}]

@@ -2634,9 +2634,33 @@ async def _search_butailing_magnet_resources(
     tmdb_id: int, media_type: str, season: int | None = None
 ) -> tuple[str, list[dict]]:
     media_payload = await _load_media_payload(tmdb_id, media_type)
-    keyword_candidates = _build_pansou_keyword_candidates(
-        media_payload, media_type, tmdb_id, season
-    )
+    if media_type == "tv":
+        keyword_candidates: list[str] = []
+        seen: set[str] = set()
+
+        def add_keyword(keyword: str) -> None:
+            normalized = _normalize_keyword_text(keyword)
+            if not normalized:
+                return
+            fingerprint = normalized.casefold()
+            if fingerprint in seen:
+                return
+            seen.add(fingerprint)
+            keyword_candidates.append(normalized)
+
+        fallback_titles = [
+            _normalize_keyword_text(media_payload.get("name") or media_payload.get("title")),
+            _normalize_keyword_text(
+                media_payload.get("original_name") or media_payload.get("original_title")
+            ),
+        ]
+        for fallback_title in fallback_titles:
+            add_keyword(fallback_title)
+    else:
+        keyword_candidates = _build_pansou_keyword_candidates(
+            media_payload, media_type, tmdb_id, season
+        )
+
     selected_keyword = (
         keyword_candidates[0] if keyword_candidates else f"TMDB {tmdb_id}"
     )

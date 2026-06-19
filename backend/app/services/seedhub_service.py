@@ -1,11 +1,17 @@
 import asyncio
 import base64
 import html
+import logging
 import re
 import time
 from urllib.parse import quote
 
 import httpx
+
+from app.utils.proxy import proxy_manager
+
+
+logger = logging.getLogger(__name__)
 
 
 class SeedHubService:
@@ -84,7 +90,6 @@ class SeedHubService:
             if str(item.get("magnet") or "").strip()
         }
         semaphore = asyncio.Semaphore(max(1, concurrency))
-
         async def resolve(movie_id: str, entry: dict) -> dict | None:
             seed_id = str(entry.get("seed_id") or "").strip()
             if not seed_id:
@@ -118,6 +123,8 @@ class SeedHubService:
             return_exceptions=True,
         )
         for item in resolved_items:
+            if isinstance(item, Exception):
+                continue
             if isinstance(item, dict):
                 collected.append(item)
             if len(collected) >= max_results:
@@ -321,7 +328,7 @@ class SeedHubService:
         return await self._fetch_text_with_client(url, client)
 
     def _create_client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
+        return proxy_manager.create_httpx_client(
             timeout=self._request_timeout,
             follow_redirects=True,
             headers=self._headers,
@@ -333,8 +340,21 @@ class SeedHubService:
             try:
                 response = await client.get(url)
                 response.raise_for_status()
+                logger.debug(
+                    "SeedHub 请求成功 url=%s status=%s attempt=%s final_url=%s",
+                    url,
+                    response.status_code,
+                    attempt + 1,
+                    str(response.url),
+                )
                 return response.text or ""
             except Exception as exc:
+                logger.warning(
+                    "SeedHub 请求失败 url=%s attempt=%s error=%s",
+                    url,
+                    attempt + 1,
+                    str(exc),
+                )
                 if attempt + 1 >= self._request_retries:
                     break
                 await asyncio.sleep(0.2 * (attempt + 1))

@@ -4,10 +4,15 @@
 """
 
 import hashlib
+import logging
+import time
 import httpx
 from typing import Any
 
 from app.utils.proxy import proxy_manager
+
+
+logger = logging.getLogger(__name__)
 
 _BTL_API_BASE = "https://web5.mukaku.com/prod/api/v1/"
 _BTL_DEFAULT_APP_ID = "83768d9ad4"
@@ -33,26 +38,84 @@ class ButailingService:
     def _auth_params(self) -> dict[str, str]:
         return {"app_id": self.app_id, "identity": self.identity}
 
+    def _log_request_failure(
+        self,
+        *,
+        action: str,
+        elapsed_ms: int,
+        error: Exception,
+        extra: dict[str, Any],
+    ) -> None:
+        logger.warning(
+            "不太灵请求失败 action=%s elapsed_ms=%s error_type=%s error=%r base_url=%s extra=%s",
+            action,
+            elapsed_ms,
+            type(error).__name__,
+            error,
+            self.base_url,
+            extra,
+        )
+
     async def search_videos(
         self, keyword: str, page: int = 1, limit: int = 24
     ) -> dict[str, Any]:
         """搜索影视列表"""
         params = {**self._auth_params(), "sb": keyword, "page": page, "limit": limit}
+        started_at = time.perf_counter()
         try:
             resp = await self.client.get("getVideoList", params=params)
             resp.raise_for_status()
-            return resp.json()
-        except Exception:
+            payload = resp.json()
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            data = payload.get("data", {}) if isinstance(payload, dict) else {}
+            rows = data.get("data", []) if isinstance(data, dict) else []
+            logger.info(
+                "不太灵搜索视频完成 keyword=%s page=%s limit=%s elapsed_ms=%s status=%s result_count=%s",
+                keyword,
+                page,
+                limit,
+                elapsed_ms,
+                resp.status_code,
+                len(rows) if isinstance(rows, list) else 0,
+            )
+            return payload
+        except Exception as exc:
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            self._log_request_failure(
+                action="getVideoList",
+                elapsed_ms=elapsed_ms,
+                error=exc,
+                extra={"keyword": keyword, "params": params},
+            )
             return {"success": False, "data": {"data": []}}
 
     async def get_video_detail(self, douban_id: int) -> dict[str, Any]:
         """获取影视详情，包含磁力资源"""
         params = {**self._auth_params(), "id": douban_id}
+        started_at = time.perf_counter()
         try:
             resp = await self.client.get("getVideoDetail", params=params)
             resp.raise_for_status()
-            return resp.json()
-        except Exception:
+            payload = resp.json()
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            detail = payload.get("data", {}) if isinstance(payload, dict) else {}
+            seeds = detail.get("all_seeds", []) if isinstance(detail, dict) else []
+            logger.info(
+                "不太灵获取详情完成 douban_id=%s elapsed_ms=%s status=%s seed_count=%s",
+                douban_id,
+                elapsed_ms,
+                resp.status_code,
+                len(seeds) if isinstance(seeds, list) else 0,
+            )
+            return payload
+        except Exception as exc:
+            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            self._log_request_failure(
+                action="getVideoDetail",
+                elapsed_ms=elapsed_ms,
+                error=exc,
+                extra={"douban_id": douban_id, "params": params},
+            )
             return {"success": False, "data": {}}
 
     async def search_magnets(
@@ -69,8 +132,10 @@ class ButailingService:
         2. 从结果中找到匹配的影视
         3. 获取详情页中的 all_seeds 磁力资源
         """
+        normalized_keyword = str(keyword or "").strip()
+
         # 步骤1: 搜索视频
-        search_result = await self.search_videos(keyword)
+        search_result = await self.search_videos(normalized_keyword)
         data = search_result.get("data", {})
         video_list = data.get("data", []) if isinstance(data, dict) else []
         if not isinstance(video_list, list) or not video_list:
@@ -113,7 +178,7 @@ class ButailingService:
             return []
 
         resources: list[dict[str, Any]] = []
-        video_title = target_video.get("title", keyword)
+        video_title = target_video.get("title", normalized_keyword)
 
         for index, seed in enumerate(all_seeds):
             if not isinstance(seed, dict):
@@ -140,7 +205,6 @@ class ButailingService:
                     "source_service": "butailing",
                 }
             )
-
         return resources
 
 

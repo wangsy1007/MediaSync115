@@ -169,6 +169,7 @@ const DEFAULT_CARD_WIDTH = 188
 const DESKTOP_ROW_GAP = 16
 const MOBILE_ROW_GAP = 10
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
+const POSTER_FALLBACK_URL = new URL('/no-poster.png', import.meta.url).href
 const rowItems = ref([])
 const remoteTotal = ref(0)
 const loaded = ref(false)
@@ -303,7 +304,7 @@ const rewriteTmdbPosterSize = (url, compact = false) => {
 
 const getPosterUrl = (path, options = {}) => {
   const compact = options.compact !== false
-  if (!path) return new URL('/no-poster.png', import.meta.url).href
+  if (!path) return POSTER_FALLBACK_URL
   const source = String(path).trim()
   const rawUrl = source.startsWith('//') ? `https:${source}` : source
   if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
@@ -317,11 +318,15 @@ const getPosterUrl = (path, options = {}) => {
     return rawUrl
   }
   if (source.startsWith('/')) return rewriteTmdbPosterSize(`${TMDB_IMAGE_BASE}${source}`, compact)
-  return new URL('/no-poster.png', import.meta.url).href
+  return POSTER_FALLBACK_URL
 }
 
 const handleImageError = (event) => {
-  event.target.src = new URL('/no-poster.png', import.meta.url).href
+  const target = event?.target
+  if (!target) return
+  target.onerror = null
+  if (target.src === POSTER_FALLBACK_URL || target.currentSrc === POSTER_FALLBACK_URL) return
+  target.src = POSTER_FALLBACK_URL
 }
 
 const updateScrollState = () => {

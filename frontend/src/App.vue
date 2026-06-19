@@ -115,7 +115,7 @@
           <router-view v-slot="{ Component, route: currentRoute }">
             <transition name="page-fade" mode="out-in">
               <keep-alive :include="keepAlivePages" :max="keepAliveMax">
-                <component :is="Component" :key="currentRoute.path" />
+                <component :is="Component" :key="resolveViewKey(currentRoute)" />
               </keep-alive>
             </transition>
           </router-view>
@@ -275,6 +275,13 @@ const isLoginRoute = computed(() => route.path === '/login')
 // 需要缓存的页面组件名（探索首页 + 更多页），返回时保持滚动位置和数据状态
 const keepAlivePages = ['Search', 'ExploreSection']
 const keepAliveMax = 5
+const resolveViewKey = (currentRoute) => {
+  const routeName = String(currentRoute?.name || '').trim()
+  if (keepAlivePages.includes(routeName)) {
+    return routeName
+  }
+  return currentRoute?.fullPath || currentRoute?.path || routeName
+}
 
 const activeMenu = computed(() => {
   // 处理首页重定向

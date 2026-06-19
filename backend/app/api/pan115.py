@@ -1106,8 +1106,40 @@ async def extract_share_files(request: ShareExtractFilesRequest):
         all_files = await service.get_share_all_files_recursive(
             share_code, receive_code
         )
-        return {"success": True, "list": all_files}
+        normalized_files = []
+        video_count = 0
+        for item in all_files:
+            if not isinstance(item, dict):
+                continue
+            normalized = dict(item)
+            is_video = service._is_video_file_name(str(normalized.get("name") or ""))
+            normalized["is_video"] = is_video
+            if is_video:
+                video_count += 1
+            normalized_files.append(normalized)
+
+        logger.info(
+            "115分享文件提取完成 share_code=%s receive_code_present=%s total_count=%s video_count=%s share_url=%s",
+            share_code,
+            bool(receive_code),
+            len(normalized_files),
+            video_count,
+            share_url,
+        )
+        return {
+            "success": True,
+            "list": normalized_files,
+            "total_count": len(normalized_files),
+            "video_count": video_count,
+        }
     except Exception as e:
+        logger.warning(
+            "115分享文件提取失败 share_url=%s receive_code_present=%s error_type=%s error=%r",
+            (request.share_url or "").strip(),
+            bool((request.receive_code or "").strip()),
+            type(e).__name__,
+            e,
+        )
         handle_115_error(e)
 
 

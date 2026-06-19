@@ -92,10 +92,11 @@
           <el-tabs v-model="pan115SourceTab" class="source-tabs" lazy>
             <template v-for="key in orderedPan115SubTabs" :key="key">
               <el-tab-pane v-if="key === 'pan115_pansou'" label="Pansou" name="pansou">
-              <div class="resource-tools">
+              <div class="resource-tools resource-tools-split">
                 <el-button size="small" type="primary" plain :loading="pansouLoading" @click="fetchPansouPan115">
                   {{ pansouTried ? '重新尝试 Pansou' : '用 Pansou 获取资源' }}
                 </el-button>
+                <el-button size="small" @click="openManualPanDialog">导入 115 分享</el-button>
               </div>
               <div v-loading="pan115Loading || pansouLoading">
                 <el-table v-if="pansouPan115Resources.length" :data="pagedPansouPan115Resources" stripe class="resource-table">
@@ -130,7 +131,7 @@
                   <el-table-column label="大小" width="110" align="center">
                     <template #default="{ row }">{{ row.size || '-' }}</template>
                   </el-table-column>
-                  <el-table-column label="操作" width="180" align="center" fixed="right">
+                  <el-table-column label="操作" width="250" align="center" fixed="right">
                     <template #default="{ row }">
                       <el-button
                         type="primary"
@@ -140,6 +141,9 @@
                         @click="savePan115Resource(row)"
                       >
                         转存
+                      </el-button>
+                      <el-button size="small" :disabled="!resolvePanShareLink(row)" @click="handleCopyPanShareLink(row)">
+                        复制链接
                       </el-button>
                       <el-button
                         v-if="mediaType === 'tv'"
@@ -163,14 +167,18 @@
                     @current-change="(page) => (pan115Pager.pansou = page)"
                   />
                 </div>
-                <el-empty v-else :description="pansouTried ? '暂无可用115网盘资源' : '尚未获取 Pansou 资源'" />
+                <div v-else class="resource-empty-state">
+                  <el-empty :description="pansouTried ? '暂无可用115网盘资源' : '尚未获取 Pansou 资源'" />
+                  <el-button size="small" @click="openManualPanDialog">导入 115 分享</el-button>
+                </div>
               </div>
             </el-tab-pane>
               <el-tab-pane v-else-if="key === 'pan115_hdhive'" label="HDHive" name="hdhive">
-              <div class="resource-tools">
+              <div class="resource-tools resource-tools-split">
                 <el-button size="small" type="primary" plain :loading="hdhiveLoading" @click="fetchHdhivePan115">
                   {{ hdhiveTried ? '刷新 HDHive' : '用 HDHive 获取资源' }}
                 </el-button>
+                <el-button size="small" @click="openManualPanDialog">导入 115 分享</el-button>
               </div>
               <div v-loading="pan115Loading || hdhiveLoading">
                 <el-table v-if="hdhivePan115Resources.length" :data="pagedHdhivePan115Resources" stripe class="resource-table">
@@ -228,7 +236,7 @@
                   <el-table-column label="积分" width="80" align="center">
                     <template #default="{ row }">{{ Number(row.unlock_points || 0) }}</template>
                   </el-table-column>
-                  <el-table-column label="操作" width="180" align="center" fixed="right">
+                  <el-table-column label="操作" width="250" align="center" fixed="right">
                     <template #default="{ row }">
                       <el-button
                         type="primary"
@@ -238,6 +246,9 @@
                         @click="savePan115Resource(row)"
                       >
                         转存
+                      </el-button>
+                      <el-button size="small" :disabled="!resolvePanShareLink(row)" @click="handleCopyPanShareLink(row)">
+                        复制链接
                       </el-button>
                       <el-button
                         v-if="mediaType === 'tv'"
@@ -261,14 +272,18 @@
                     @current-change="(page) => (pan115Pager.hdhive = page)"
                   />
                 </div>
-                <el-empty v-else :description="hdhiveTried ? 'HDHive 暂无可用115网盘资源' : '尚未获取 HDHive 资源'" />
+                <div v-else class="resource-empty-state">
+                  <el-empty :description="hdhiveTried ? 'HDHive 暂无可用115网盘资源' : '尚未获取 HDHive 资源'" />
+                  <el-button size="small" @click="openManualPanDialog">导入 115 分享</el-button>
+                </div>
               </div>
             </el-tab-pane>
               <el-tab-pane v-else-if="key === 'pan115_tg'" label="Telegram" name="tg">
-              <div class="resource-tools">
+              <div class="resource-tools resource-tools-split">
                 <el-button size="small" type="primary" plain :loading="tgLoading" @click="fetchTgPan115">
                   {{ tgTried ? '刷新 Telegram' : '用 Telegram 获取资源' }}
                 </el-button>
+                <el-button size="small" @click="openManualPanDialog">导入 115 分享</el-button>
               </div>
               <div v-loading="pan115Loading || tgLoading">
                 <el-table v-if="tgPan115Resources.length" :data="pagedTgPan115Resources" stripe class="resource-table">
@@ -303,7 +318,7 @@
                   <el-table-column label="大小" width="110" align="center">
                     <template #default="{ row }">{{ row.size || '-' }}</template>
                   </el-table-column>
-                  <el-table-column label="操作" width="180" align="center" fixed="right">
+                  <el-table-column label="操作" width="250" align="center" fixed="right">
                     <template #default="{ row }">
                       <el-button
                         type="primary"
@@ -313,6 +328,9 @@
                         @click="savePan115Resource(row)"
                       >
                         一键转存
+                      </el-button>
+                      <el-button size="small" :disabled="!resolvePanShareLink(row)" @click="handleCopyPanShareLink(row)">
+                        复制链接
                       </el-button>
                       <el-button
                         v-if="mediaType === 'tv'"
@@ -336,7 +354,10 @@
                     @current-change="(page) => (pan115Pager.tg = page)"
                   />
                 </div>
-                <el-empty v-else :description="tgTried ? 'Telegram 暂无可用115网盘资源' : '尚未获取 Telegram 资源'" />
+                <div v-else class="resource-empty-state">
+                  <el-empty :description="tgTried ? 'Telegram 暂无可用115网盘资源' : '尚未获取 Telegram 资源'" />
+                  <el-button size="small" @click="openManualPanDialog">导入 115 分享</el-button>
+                </div>
               </div>
             </el-tab-pane>
             </template>
@@ -364,10 +385,11 @@
           <el-tabs v-model="magnetSourceTab" class="source-tabs" lazy>
             <template v-for="key in orderedMagnetSubTabs" :key="key">
               <el-tab-pane v-if="key === 'magnet_seedhub'" label="SeedHub" name="seedhub">
-              <div class="resource-tools">
+              <div class="resource-tools resource-tools-split">
                 <el-button size="small" type="primary" plain :loading="seedhubMagnetLoading" @click="fetchSeedhubMagnet">
                   {{ seedhubMagnetTried ? '重新尝试 SeedHub' : '用 SeedHub 获取磁链' }}
                 </el-button>
+                <el-button size="small" @click="openManualMagnetDialog">导入磁链</el-button>
               </div>
               <div v-loading="seedhubMagnetLoading">
                 <el-table v-if="seedhubMagnetResources.length" :data="pagedSeedhubMagnetResources" stripe class="resource-table">
@@ -408,14 +430,18 @@
                     @current-change="(page) => (magnetPager.seedhub = page)"
                   />
                 </div>
-                <el-empty v-else :description="seedhubMagnetTried ? 'SeedHub 暂无磁力资源' : '尚未获取 SeedHub 资源'" />
+                <div v-else class="resource-empty-state">
+                  <el-empty :description="seedhubMagnetTried ? 'SeedHub 暂无磁力资源' : '尚未获取 SeedHub 资源'" />
+                  <el-button size="small" @click="openManualMagnetDialog">导入磁链</el-button>
+                </div>
               </div>
             </el-tab-pane>
               <el-tab-pane v-else-if="key === 'magnet_butailing'" label="不太灵" name="butailing">
-              <div class="resource-tools">
+              <div class="resource-tools resource-tools-split">
                 <el-button size="small" type="primary" plain :loading="butailingMagnetLoading" @click="fetchButailingMagnet">
                   {{ butailingMagnetTried ? '刷新不太灵' : '用不太灵获取磁链' }}
                 </el-button>
+                <el-button size="small" @click="openManualMagnetDialog">导入磁链</el-button>
               </div>
               <div v-loading="butailingMagnetLoading">
                 <el-table v-if="butailingMagnetResources.length" :data="pagedButailingMagnetResources" stripe class="resource-table">
@@ -459,7 +485,10 @@
                     @current-change="(page) => (magnetPager.butailing = page)"
                   />
                 </div>
-                <el-empty v-else :description="butailingMagnetTried ? '不太灵暂无磁力资源' : '尚未获取不太灵资源'" />
+                <div v-else class="resource-empty-state">
+                  <el-empty :description="butailingMagnetTried ? '不太灵暂无磁力资源' : '尚未获取不太灵资源'" />
+                  <el-button size="small" @click="openManualMagnetDialog">导入磁链</el-button>
+                </div>
               </div>
             </el-tab-pane>
             </template>
@@ -520,6 +549,53 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="manualPanDialogVisible" title="导入 115 分享链接" width="520px">
+      <el-form label-width="88px">
+        <el-form-item label="分享链接">
+          <el-input
+            v-model="manualPanForm.shareLink"
+            type="textarea"
+            :rows="4"
+            placeholder="粘贴 115 分享链接，支持带提取码文本"
+          />
+        </el-form-item>
+        <el-form-item label="文件夹名称">
+          <el-input v-model="manualPanForm.folderName" placeholder="默认按豆瓣标题生成" />
+        </el-form-item>
+        <el-form-item label="提取码">
+          <el-input v-model="manualPanForm.receiveCode" placeholder="可留空，若链接里带提取码会自动解析" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="manualPanDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="manualPanSubmitting" @click="submitManualPanShare">
+          开始转存
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="manualMagnetDialogVisible" title="导入磁力链接" width="520px">
+      <el-form label-width="88px">
+        <el-form-item label="磁力链接">
+          <el-input
+            v-model="manualMagnetForm.magnet"
+            type="textarea"
+            :rows="4"
+            placeholder="粘贴 magnet:?xt=urn:btih:..."
+          />
+        </el-form-item>
+        <el-form-item label="任务名称">
+          <el-input v-model="manualMagnetForm.title" placeholder="默认按豆瓣标题生成" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="manualMagnetDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="manualMagnetSubmitting" @click="submitManualMagnet">
+          添加离线任务
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -534,6 +610,8 @@ import QuarkResourceTab from '@/components/detail/QuarkResourceTab.vue'
 import { getVisibleTabs, loadVisibleTabs, isTabVisible, getOrderedVisibleSubTabs, getFirstVisibleSubTabName, getOrderedVisibleMainTabs } from '@/utils/detailTabs'
 import { extractTags } from '@/utils/resourceTags'
 import { navigateBackFromDetail } from '@/utils/navigation'
+import { copyText } from '@/utils/clipboard'
+import { parseReceiveCodeFromShareLink, resolvePanShareLink } from '@/utils/panShare'
 
 const _visibleTabs = getVisibleTabs()
 const tabVisible = (key) => isTabVisible(_visibleTabs.value, key)
@@ -599,6 +677,19 @@ const butailingMagnetTried = ref(false)
 const selectSaveDialogVisible = ref(false)
 const extractingFiles = ref(false)
 const selectSaving = ref(false)
+const manualPanDialogVisible = ref(false)
+const manualPanSubmitting = ref(false)
+const manualPanForm = ref({
+  shareLink: '',
+  folderName: '',
+  receiveCode: ''
+})
+const manualMagnetDialogVisible = ref(false)
+const manualMagnetSubmitting = ref(false)
+const manualMagnetForm = ref({
+  magnet: '',
+  title: ''
+})
 const hdhiveUnlockingSlugs = ref(new Set())
 const shareFilesList = ref([])
 const selectedFiles = ref([])
@@ -753,34 +844,29 @@ const copyMagnet = async (text) => {
     return
   }
   try {
-    await navigator.clipboard.writeText(value)
+    await copyText(value)
     ElMessage.success('已复制')
   } catch {
     ElMessage.error('复制失败')
   }
 }
 
-const parseReceiveCodeFromShareLink = (shareLink) => {
-  const rawLink = String(shareLink || '').trim()
-  if (!rawLink) return ''
-
-  const shortMatch = rawLink.match(/^[A-Za-z0-9]+-([A-Za-z0-9]{4})$/)
-  if (shortMatch) return shortMatch[1]
-
-  const passwordMatch = rawLink.match(/[?&](?:password|pwd|receive_code|pickcode|code)=([^&#]+)/i)
-  if (passwordMatch) {
-    try {
-      return decodeURIComponent(passwordMatch[1])
-    } catch {
-      return passwordMatch[1]
-    }
+const handleCopyPanShareLink = async (row) => {
+  const shareLink = resolvePanShareLink(row)
+  if (!shareLink) {
+    ElMessage.warning('该资源暂无分享链接')
+    return
   }
-
-  return ''
+  try {
+    await copyText(shareLink)
+    ElMessage.success('已复制分享链接')
+  } catch {
+    ElMessage.error('复制失败')
+  }
 }
 
 const resolvePanReceiveCode = (row, shareLink = '') => {
-  const resolvedLink = String(shareLink || resolvePan115ShareLink(row)).trim()
+  const resolvedLink = String(shareLink || resolvePanShareLink(row)).trim()
   const linkCode = parseReceiveCodeFromShareLink(resolvedLink)
   if (linkCode) return linkCode
   return String(row?.access_code || row?.hdhive_access_code || '').trim()
@@ -803,7 +889,7 @@ const normalizeKeywordFingerprint = (value) => {
 const isHdhiveResourceLocked = (row) => {
   if (!row || row.source_service !== 'hdhive') return false
   if (row.hdhive_locked === true) return true
-  const shareLink = resolvePan115ShareLink(row)
+  const shareLink = resolvePanShareLink(row)
   return !shareLink && Number(row.unlock_points || 0) > 0
 }
 
@@ -853,7 +939,7 @@ const showHdhiveNeedPointsNotice = async (row, reason = '') => {
 const ensureHdhiveShareLink = async (row, actionLabel = '转存', options = {}) => {
   const forceUnlock = options?.forceUnlock === true
   const reason = String(options?.reason || '').trim()
-  const currentLink = resolvePan115ShareLink(row)
+  const currentLink = resolvePanShareLink(row)
   const locked = isHdhiveResourceLocked(row)
   if (!forceUnlock && currentLink && !locked) return currentLink
   if (!forceUnlock && !locked) return currentLink
@@ -994,7 +1080,7 @@ const fetchPansouPan115 = async () => {
       }
       const dedup = new Map()
       for (const row of rows) {
-        const link = resolvePan115ShareLink(row)
+        const link = resolvePanShareLink(row)
         if (!link) continue
         const key = link.toLowerCase()
         if (!dedup.has(key)) {
@@ -1208,17 +1294,97 @@ const getDefaultTransferFolderId = async () => {
   }
 }
 
+const getDefaultOfflineFolderId = async () => {
+  try {
+    const { data } = await pan115Api.getOfflineDefaultFolder()
+    return data.folder_id || '0'
+  } catch {
+    return '0'
+  }
+}
+
 const isVideoFile = (filename) => {
   const value = String(filename || '').trim()
   if (!value) return false
   return /\.(mp4|mkv|avi|rmvb|flv|ts|mov|wmv|m4v)$/i.test(value)
 }
 
+const isShareVideoFile = (item) => {
+  if (item?.is_video === true) return true
+  return isVideoFile(item?.name)
+}
+
+const buildDefaultDetailFolderName = () => String(detail.value?.title || '豆瓣资源').trim()
+
+const openManualPanDialog = () => {
+  manualPanForm.value = {
+    shareLink: '',
+    folderName: buildDefaultDetailFolderName(),
+    receiveCode: ''
+  }
+  manualPanDialogVisible.value = true
+}
+
+const openManualMagnetDialog = () => {
+  manualMagnetForm.value = {
+    magnet: '',
+    title: buildDefaultDetailFolderName()
+  }
+  manualMagnetDialogVisible.value = true
+}
+
+const submitManualPanShare = async () => {
+  if (manualPanSubmitting.value) return
+  const shareLink = String(manualPanForm.value.shareLink || '').trim()
+  if (!shareLink) {
+    ElMessage.warning('请输入分享链接')
+    return
+  }
+
+  manualPanSubmitting.value = true
+  try {
+    const folderId = await getDefaultTransferFolderId()
+    const folderName = String(manualPanForm.value.folderName || '').trim() || buildDefaultDetailFolderName()
+    const receiveCode = String(manualPanForm.value.receiveCode || '').trim() || parseReceiveCodeFromShareLink(shareLink)
+    const { data } = await pan115Api.saveShareToFolder(shareLink, folderName, folderId, receiveCode)
+    const success = data?.success === true || data?.state === true || data?.result?.success === true || data?.result?.state === true
+    if (!success) throw new Error(data?.message || data?.error || data?.result?.error || '转存失败')
+    ElMessage.success(data?.message || '转存成功')
+    manualPanDialogVisible.value = false
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || '转存失败')
+  } finally {
+    manualPanSubmitting.value = false
+  }
+}
+
+const submitManualMagnet = async () => {
+  if (manualMagnetSubmitting.value) return
+  const magnet = String(manualMagnetForm.value.magnet || '').trim()
+  if (!magnet) {
+    ElMessage.warning('请输入磁力链接')
+    return
+  }
+
+  manualMagnetSubmitting.value = true
+  try {
+    const folderId = await getDefaultOfflineFolderId()
+    const title = String(manualMagnetForm.value.title || '').trim() || buildDefaultDetailFolderName()
+    await pan115Api.addOfflineTask(magnet, folderId, title)
+    ElMessage.success('已提交离线任务')
+    manualMagnetDialogVisible.value = false
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || '离线失败')
+  } finally {
+    manualMagnetSubmitting.value = false
+  }
+}
+
 const savePan115Resource = async (row) => {
   if (row?.saving || row?.extracting || isHdhiveUnlocking(row)) return
   row.saving = true
   try {
-    let shareLink = resolvePan115ShareLink(row)
+    let shareLink = resolvePanShareLink(row)
     if (row?.source_service === 'hdhive') {
       shareLink = await ensureHdhiveShareLink(row, '转存')
     }
@@ -1233,8 +1399,7 @@ const savePan115Resource = async (row) => {
       shareLink,
       folderName,
       folderId,
-      receiveCode,
-      mappedTmdbId.value && mediaType.value === 'tv' ? mappedTmdbId.value : null
+      receiveCode
     )
     const success = data?.success === true || data?.state === true || data?.result?.success === true || data?.result?.state === true
     if (!success) throw new Error(data?.message || data?.error || data?.result?.error || '转存失败')
@@ -1259,8 +1424,7 @@ const receiveCode = resolvePanReceiveCode(row, unlockedLink)
               unlockedLink,
               folderName,
               folderId,
-              receiveCode,
-              mappedTmdbId.value && mediaType.value === 'tv' ? mappedTmdbId.value : null
+              receiveCode
             )
             const retrySuccess = data?.success === true || data?.state === true || data?.result?.success === true || data?.result?.state === true
             if (!retrySuccess) throw new Error(data?.message || data?.error || data?.result?.error || '转存失败')
@@ -1295,7 +1459,7 @@ const openSelectSaveDialog = async (row) => {
   extractingFiles.value = true
 
   try {
-    let shareLink = resolvePan115ShareLink(row)
+    let shareLink = resolvePanShareLink(row)
     if (row?.source_service === 'hdhive') {
       shareLink = await ensureHdhiveShareLink(row, '选集转存')
     }
@@ -1321,10 +1485,10 @@ const openSelectSaveDialog = async (row) => {
 
     const { data } = await pan115Api.extractShareFiles(shareLink, receiveCode)
     const allFiles = Array.isArray(data?.list) ? data.list : []
-    shareFilesList.value = allFiles.filter((item) => isVideoFile(item?.name))
+    shareFilesList.value = allFiles.filter((item) => isShareVideoFile(item))
     sortShareFilesByName(fileNameSortOrder.value)
     if (shareFilesList.value.length === 0) {
-      ElMessage.info('未找到可选的视频文件')
+      ElMessage.info(`未找到可选的视频文件（总文件 ${Number(data?.total_count || allFiles.length || 0)}，识别为视频 ${Number(data?.video_count || 0)}）`)
     }
 } catch (error) {
     const errorDetail = String(error.response?.data?.detail || error.message || '').trim()
@@ -1346,10 +1510,10 @@ const openSelectSaveDialog = async (row) => {
           }
           const { data } = await pan115Api.extractShareFiles(unlockedLink, receiveCode)
           const allFiles = Array.isArray(data?.list) ? data.list : []
-          shareFilesList.value = allFiles.filter((item) => isVideoFile(item?.name))
+          shareFilesList.value = allFiles.filter((item) => isShareVideoFile(item))
           sortShareFilesByName(fileNameSortOrder.value)
           if (shareFilesList.value.length === 0) {
-            ElMessage.info('未找到可选的视频文件')
+            ElMessage.info(`未找到可选的视频文件（总文件 ${Number(data?.total_count || allFiles.length || 0)}，识别为视频 ${Number(data?.video_count || 0)}）`)
           }
           return
         } catch (retryError) {
@@ -1424,7 +1588,7 @@ const saveMagnet = async (row) => {
     return
   }
   try {
-    const folderId = await getDefaultTransferFolderId()
+    const folderId = await getDefaultOfflineFolderId()
     const title = detail.value?.title || '豆瓣资源'
     await pan115Api.addOfflineTask(url, folderId, title)
     ElMessage.success('已提交离线任务')
@@ -1874,6 +2038,14 @@ onMounted(async () => {
     gap: 10px;
   }
 
+  .resource-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding-bottom: 8px;
+  }
+
   .resource-tabs {
     background: var(--ms-gradient-card);
     border: 1px solid var(--ms-glass-border);
@@ -1883,6 +2055,10 @@ onMounted(async () => {
     :deep(.el-tabs__content) {
       padding-top: 12px;
     }
+  }
+
+  .resource-tools-split {
+    justify-content: space-between;
   }
 
   .table-pagination {
