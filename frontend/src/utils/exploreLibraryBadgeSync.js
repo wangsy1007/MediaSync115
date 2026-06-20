@@ -17,6 +17,11 @@ const buildStatusKey = (item) => {
   return `${mediaType}:${tmdbId}`
 }
 
+const isResolvedLibraryBadgeStatus = (payload) => {
+  const status = String(payload?.status || '').trim().toLowerCase()
+  return status !== 'cache_unavailable' && status !== 'request_failed'
+}
+
 const toStatusPayloadItems = (items) => {
   const seen = new Set()
   const rows = []
@@ -54,7 +59,11 @@ export function createExploreLibraryBadgeSyncer({
     const embyMap = getEmbyStatusMap?.()
     const feiniuMap = getFeiniuStatusMap?.()
     if (!(embyMap instanceof Map) || !(feiniuMap instanceof Map)) return false
-    return embyMap.has(key) && feiniuMap.has(key)
+    if (!embyMap.has(key) || !feiniuMap.has(key)) return false
+    return (
+      isResolvedLibraryBadgeStatus(embyMap.get(key))
+      && isResolvedLibraryBadgeStatus(feiniuMap.get(key))
+    )
   }
 
   const enqueueItems = (items = []) => {
@@ -146,4 +155,4 @@ export function createExploreLibraryBadgeSyncer({
   }
 }
 
-export { buildStatusKey as buildExploreLibraryStatusKey }
+export { buildStatusKey as buildExploreLibraryStatusKey, isResolvedLibraryBadgeStatus }

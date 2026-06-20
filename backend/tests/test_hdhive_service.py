@@ -142,7 +142,7 @@ class TestHDHiveService:
         ]
 
     def test_map_resource_row_marks_api_resource_as_locked_until_unlock(self) -> None:
-        service = HDHiveService(api_key="test-key")
+        service = HDHiveService()
 
         row = service._map_resource_row(
             {

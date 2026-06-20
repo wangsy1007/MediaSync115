@@ -30,7 +30,6 @@ class RuntimeSettingsService:
         "pan115_cookie": "PAN115_COOKIE",
         "quark_cookie": "QUARK_COOKIE",
         "hdhive_cookie": "HDHIVE_COOKIE",
-        "hdhive_api_key": "HDHIVE_API_KEY",
         "hdhive_base_url": "HDHIVE_BASE_URL",
         "pansou_base_url": "PANSOU_BASE_URL",
         "tg_api_id": "TG_API_ID",
@@ -84,7 +83,6 @@ class RuntimeSettingsService:
             "quark_default_folder_id": "0",
             "quark_default_folder_name": "根目录",
             "hdhive_cookie": settings.HDHIVE_COOKIE or "",
-            "hdhive_api_key": settings.HDHIVE_API_KEY or "",
             "hdhive_base_url": settings.HDHIVE_BASE_URL,
             "hdhive_login_username": "",
             "hdhive_password_enc": "",
@@ -283,7 +281,6 @@ class RuntimeSettingsService:
             "socks_proxy": settings.SOCKS_PROXY or "",
             "pan115_cookie": settings.PAN115_COOKIE or "",
             "hdhive_cookie": settings.HDHIVE_COOKIE or "",
-            "hdhive_api_key": settings.HDHIVE_API_KEY or "",
             "hdhive_base_url": settings.HDHIVE_BASE_URL or "",
             "pansou_base_url": settings.PANSOU_BASE_URL or "",
             "tg_api_id": settings.TG_API_ID or "",
@@ -405,9 +402,6 @@ class RuntimeSettingsService:
 
     def get_hdhive_cookie(self) -> str:
         return self._data["hdhive_cookie"]
-
-    def get_hdhive_api_key(self) -> str:
-        return str(self._data.get("hdhive_api_key") or "")
 
     def get_hdhive_base_url(self) -> str:
         return self._data["hdhive_base_url"]
@@ -1253,7 +1247,6 @@ class RuntimeSettingsService:
         settings.PAN115_COOKIE = self.get_pan115_cookie() or None
         settings.QUARK_COOKIE = self.get_quark_cookie() or None
         settings.HDHIVE_COOKIE = self.get_hdhive_cookie() or None
-        settings.HDHIVE_API_KEY = self.get_hdhive_api_key() or None
         settings.HDHIVE_BASE_URL = self.get_hdhive_base_url()
         settings.PANSOU_BASE_URL = self.get_pansou_base_url()
         settings.TG_API_ID = self.get_tg_api_id() or None
@@ -1289,7 +1282,6 @@ class RuntimeSettingsService:
         from app.services.quark_service import quark_service
         quark_service.update_cookie(self.get_quark_cookie())
         hdhive_service.set_cookie(self.get_hdhive_cookie())
-        hdhive_service.set_api_key(self.get_hdhive_api_key())
         hdhive_service.set_base_url(self.get_hdhive_base_url())
         pansou_service.set_base_url(self.get_pansou_base_url())
         tg_service.set_config(
@@ -1335,7 +1327,6 @@ class RuntimeSettingsService:
                 "folder_name"
             ],
             "hdhive_cookie": self.get_hdhive_cookie(),
-            "hdhive_api_key": self.get_hdhive_api_key(),
             "hdhive_base_url": self.get_hdhive_base_url(),
             "hdhive_login_username": self.get_hdhive_login_username(),
             "hdhive_auto_checkin_enabled": self.get_hdhive_auto_checkin_enabled(),

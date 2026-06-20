@@ -63,7 +63,6 @@
               draggable="false"
               @error="handleImageError"
             />
-            <div class="rank-badge">#{{ item.rank }}</div>
             <div v-if="getExploreItemRating(item)" class="rating-badge">
               {{ formatExploreItemRating(item) }}
             </div>
@@ -631,8 +630,8 @@ onBeforeUnmount(() => {
 
       .emby-badge {
         position: absolute;
-        right: 10px;
-        bottom: 10px;
+        top: 10px;
+        left: 10px;
         z-index: 4;
       }
 
@@ -682,18 +681,6 @@ onBeforeUnmount(() => {
       &:focus-within .explore-card-actions {
         opacity: 1;
         transform: translate(-50%, 0);
-      }
-
-      .rank-badge {
-        position: absolute;
-        top: 10px;
-        left: 10px;
-        padding: 4px 10px;
-        border-radius: 4px;
-        background: var(--ms-accent-warning);
-        color: #fff;
-        font-size: 12px;
-        font-weight: 700;
       }
     }
 

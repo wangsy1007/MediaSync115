@@ -58,7 +58,6 @@ class RuntimeSettingsRequest(BaseModel):
     all_proxy: Optional[str] = None
     socks_proxy: Optional[str] = None
     hdhive_cookie: Optional[str] = None
-    hdhive_api_key: Optional[str] = None
     hdhive_base_url: Optional[str] = None
     hdhive_login_username: Optional[str] = None
     hdhive_auto_checkin_enabled: Optional[bool] = None
@@ -176,7 +175,6 @@ _HDHIVE_CHECKIN_SETTING_KEYS = frozenset(
         "hdhive_auto_checkin_mode",
         "hdhive_auto_checkin_method",
         "hdhive_auto_checkin_run_time",
-        "hdhive_api_key",
     }
 )
 _EMBY_SYNC_SETTING_KEYS = frozenset(
@@ -231,7 +229,6 @@ class HDHiveCheckinRequest(BaseModel):
     mode: Optional[str] = None
     method: Optional[str] = None
     cookie: Optional[str] = None
-    api_key: Optional[str] = None
     base_url: Optional[str] = None
 
 
@@ -712,10 +709,7 @@ async def update_runtime_settings(
         "subscription_hdhive_unlock_budget_points_per_run",
         "subscription_hdhive_unlock_threshold_inclusive",
     }
-    if (
-        any(key in payload for key in unlock_keys)
-        or payload.get("hdhive_api_key") is not None
-    ):
+    if any(key in payload for key in unlock_keys):
         _validate_hdhive_unlock_settings(merged_settings)
     checkin_keys = {
         "hdhive_auto_checkin_enabled",
@@ -723,10 +717,7 @@ async def update_runtime_settings(
         "hdhive_auto_checkin_method",
         "hdhive_auto_checkin_run_time",
     }
-    if (
-        any(key in payload for key in checkin_keys)
-        or payload.get("hdhive_api_key") is not None
-    ):
+    if any(key in payload for key in checkin_keys):
         _validate_hdhive_checkin_settings(merged_settings)
     if any(
         key in payload
@@ -784,7 +775,6 @@ async def update_runtime_settings(
 
     _secret_keys = {
         "hdhive_cookie",
-        "hdhive_api_key",
         "hdhive_password_enc",
         "tg_session",
         "tg_api_hash",
@@ -917,16 +907,14 @@ async def run_hdhive_checkin(payload: HDHiveCheckinRequest):
         method = "web"
 
     cookie = str(payload.cookie or "").strip()
-    api_key = str(payload.api_key or "").strip()
     base_url = str(payload.base_url or "").strip()
     service = hdhive_service
-    if cookie or api_key or base_url:
+    if cookie or base_url:
         from app.services.hdhive_service import HDHiveService
 
         service = HDHiveService(
             base_url=base_url or runtime_settings_service.get_hdhive_base_url(),
             cookie=cookie or runtime_settings_service.get_hdhive_cookie(),
-            api_key=api_key or runtime_settings_service.get_hdhive_api_key(),
         )
 
     try:

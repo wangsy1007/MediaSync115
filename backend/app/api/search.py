@@ -211,6 +211,12 @@ def _collect_section_items(sections: list[dict[str, Any]]) -> list[dict[str, Any
     return rows
 
 
+def _is_persistable_library_badge_status(payload: dict[str, Any]) -> bool:
+    """索引未就绪或请求失败时不缓存，避免同步完成后仍显示无角标。"""
+    status = str(payload.get("status") or "").strip().lower()
+    return status not in {"cache_unavailable", "request_failed"}
+
+
 async def _get_cached_emby_badge_status(cache_key: str) -> dict[str, Any] | None:
     now_ts = time.time()
     async with _emby_badge_cache_lock:
@@ -222,12 +228,17 @@ async def _get_cached_emby_badge_status(cache_key: str) -> dict[str, Any] | None
             _emby_badge_cache.pop(cache_key, None)
             return None
         payload = cached.get("payload")
-        return dict(payload) if isinstance(payload, dict) else None
+        if not isinstance(payload, dict) or not _is_persistable_library_badge_status(payload):
+            _emby_badge_cache.pop(cache_key, None)
+            return None
+        return dict(payload)
 
 
 async def _set_cached_emby_badge_status(
     cache_key: str, payload: dict[str, Any]
 ) -> None:
+    if not _is_persistable_library_badge_status(payload):
+        return
     async with _emby_badge_cache_lock:
         _emby_badge_cache[cache_key] = {
             "expires_at": time.time() + EMBY_BADGE_CACHE_TTL_SECONDS,
@@ -252,12 +263,17 @@ async def _get_cached_feiniu_badge_status(cache_key: str) -> dict[str, Any] | No
             _feiniu_badge_cache.pop(cache_key, None)
             return None
         payload = cached.get("payload")
-        return dict(payload) if isinstance(payload, dict) else None
+        if not isinstance(payload, dict) or not _is_persistable_library_badge_status(payload):
+            _feiniu_badge_cache.pop(cache_key, None)
+            return None
+        return dict(payload)
 
 
 async def _set_cached_feiniu_badge_status(
     cache_key: str, payload: dict[str, Any]
 ) -> None:
+    if not _is_persistable_library_badge_status(payload):
+        return
     async with _feiniu_badge_cache_lock:
         _feiniu_badge_cache[cache_key] = {
             "expires_at": time.time() + FEINIU_BADGE_CACHE_TTL_SECONDS,
@@ -458,14 +474,32 @@ async def _resolve_feiniu_status_payload(
     }
 
 
+async def _build_library_status_maps(
+    items: list[dict[str, Any]],
+    *,
+    prime_limit: int | None = None,
+    max_candidates: int | None = None,
+    douban_prepare: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if douban_prepare:
+        await prepare_douban_items_for_library_status(items, prime_limit)
+    return (
+        await _build_emby_status_map(items, max_candidates=max_candidates),
+        await _build_feiniu_status_map(items, max_candidates=max_candidates),
+    )
+
+
 async def _build_douban_library_status_maps(
     items: list[dict[str, Any]],
     prime_limit: int | None = None,
+    *,
+    max_candidates: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    await prepare_douban_items_for_library_status(items, prime_limit)
-    return (
-        await _build_emby_status_map(items),
-        await _build_feiniu_status_map(items),
+    return await _build_library_status_maps(
+        items,
+        prime_limit=prime_limit,
+        max_candidates=max_candidates,
+        douban_prepare=True,
     )
 
 
@@ -1543,8 +1577,11 @@ async def get_explore_popular_sections(
             status_code=502, detail="Failed to fetch all recommendation sections"
         )
 
-    emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
-    feiniu_status_map = await _build_feiniu_status_map(_collect_section_items(sections))
+    section_items = _collect_section_items(sections)
+    emby_status_map, feiniu_status_map = await _build_library_status_maps(
+        section_items,
+        douban_prepare=False,
+    )
     return {
         "source": "popular-movies-data.stevenlu.com",
         "fetched_at": beijing_now().isoformat(),
@@ -1601,8 +1638,11 @@ async def get_explore_douban_sections(
             "feiniu_status_map": fallback.get("feiniu_status_map", {}),
         }
 
-    emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
-    feiniu_status_map = await _build_feiniu_status_map(_collect_section_items(sections))
+    section_items = _collect_section_items(sections)
+    emby_status_map, feiniu_status_map = await _build_douban_library_status_maps(
+        section_items,
+        prime_limit=limit,
+    )
     return {
         "source": "douban-frodo",
         "fetched_at": beijing_now().isoformat(),
@@ -1665,9 +1705,10 @@ async def get_explore_sections(
                 status_code=502, detail="Failed to fetch TMDB explore sections"
             )
 
-        emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
-        feiniu_status_map = await _build_feiniu_status_map(
-            _collect_section_items(sections)
+        section_items = _collect_section_items(sections)
+        emby_status_map, feiniu_status_map = await _build_library_status_maps(
+            section_items,
+            douban_prepare=False,
         )
         return {
             "source": "tmdb",
@@ -1721,8 +1762,11 @@ async def get_explore_sections(
             "feiniu_status_map": fallback.get("feiniu_status_map", {}),
         }
 
-    emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
-    feiniu_status_map = await _build_feiniu_status_map(_collect_section_items(sections))
+    section_items = _collect_section_items(sections)
+    emby_status_map, feiniu_status_map = await _build_douban_library_status_maps(
+        section_items,
+        prime_limit=limit,
+    )
     return {
         "source": "douban-frodo",
         "fetched_at": beijing_now().isoformat(),
@@ -1814,9 +1858,10 @@ async def get_explore_home(
                 status_code=502, detail="Failed to fetch TMDB explore home"
             )
 
-        emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
-        feiniu_status_map = await _build_feiniu_status_map(
-            _collect_section_items(sections)
+        section_items = _collect_section_items(sections)
+        emby_status_map, feiniu_status_map = await _build_library_status_maps(
+            section_items,
+            douban_prepare=False,
         )
         return {
             "source": "tmdb",
@@ -1876,8 +1921,11 @@ async def get_explore_home(
             "feiniu_status_map": fallback.get("feiniu_status_map", {}),
         }
 
-    emby_status_map = await _build_emby_status_map(_collect_section_items(sections))
-    feiniu_status_map = await _build_feiniu_status_map(_collect_section_items(sections))
+    section_items = _collect_section_items(sections)
+    emby_status_map, feiniu_status_map = await _build_douban_library_status_maps(
+        section_items,
+        prime_limit=DOUBAN_HOME_SYNC_PRIME_LIMIT,
+    )
     return {
         "source": "douban-frodo",
         "fetched_at": beijing_now().isoformat(),
@@ -1935,6 +1983,11 @@ async def get_explore_section(
         items = (
             payload.get("items", []) if isinstance(payload.get("items"), list) else []
         )
+        emby_status_map, feiniu_status_map = await _build_library_status_maps(
+            items,
+            max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP,
+            douban_prepare=False,
+        )
         return {
             "source": "tmdb",
             "fetched_at": beijing_now().isoformat(),
@@ -1949,12 +2002,8 @@ async def get_explore_section(
                 "count": payload.get("count", limit),
                 "items": items,
             },
-            "emby_status_map": await _build_emby_status_map(
-                items, max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP
-            ),
-            "feiniu_status_map": await _build_feiniu_status_map(
-                items, max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP
-            ),
+            "emby_status_map": emby_status_map,
+            "feiniu_status_map": feiniu_status_map,
             "cache_hit": False,
             "cache_source": "section_runtime",
             "cache_warmed_at": None,
@@ -1983,6 +2032,11 @@ async def get_explore_section(
         )
 
     items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
+    emby_status_map, feiniu_status_map = await _build_douban_library_status_maps(
+        items,
+        prime_limit=0,
+        max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP,
+    )
     return {
         "source": "douban-frodo",
         "fetched_at": beijing_now().isoformat(),
@@ -1997,12 +2051,8 @@ async def get_explore_section(
             "count": payload.get("count", limit),
             "items": items,
         },
-        "emby_status_map": await _build_emby_status_map(
-            items, max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP
-        ),
-        "feiniu_status_map": await _build_feiniu_status_map(
-            items, max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP
-        ),
+        "emby_status_map": emby_status_map,
+        "feiniu_status_map": feiniu_status_map,
         "cache_hit": False,
         "cache_source": "section_runtime",
         "cache_warmed_at": None,
@@ -2042,6 +2092,11 @@ async def get_explore_douban_section(
         )
 
     items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
+    emby_status_map, feiniu_status_map = await _build_douban_library_status_maps(
+        items,
+        prime_limit=0,
+        max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP,
+    )
     return {
         "source": "douban-frodo",
         "fetched_at": beijing_now().isoformat(),
@@ -2056,12 +2111,8 @@ async def get_explore_douban_section(
             "count": payload.get("count", limit),
             "items": items,
         },
-        "emby_status_map": await _build_emby_status_map(
-            items, max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP
-        ),
-        "feiniu_status_map": await _build_feiniu_status_map(
-            items, max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP
-        ),
+        "emby_status_map": emby_status_map,
+        "feiniu_status_map": feiniu_status_map,
     }
 
 

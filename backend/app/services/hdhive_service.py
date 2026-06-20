@@ -39,11 +39,9 @@ class HDHiveService:
         self,
         base_url: str | None = None,
         cookie: str | None = None,
-        api_key: str | None = None,
     ) -> None:
         self._base_url = str(base_url or settings.HDHIVE_BASE_URL or "https://hdhive.com/").strip().rstrip("/")
         self._cookie = str(cookie or settings.HDHIVE_COOKIE or "").strip()
-        self._api_key = str(api_key or settings.HDHIVE_API_KEY or "").strip()
         self._web = HDHiveWebClient(base_url=self._base_url, cookie=self._cookie)
         self._auth_lock = asyncio.Lock()
 
@@ -57,9 +55,6 @@ class HDHiveService:
     def set_cookie(self, cookie: str | None) -> None:
         self._cookie = str(cookie or "").strip()
         self._web.set_cookie(self._cookie)
-
-    def set_api_key(self, api_key: str | None) -> None:
-        self._api_key = str(api_key or "").strip()
 
     @property
     def cookie(self) -> str:

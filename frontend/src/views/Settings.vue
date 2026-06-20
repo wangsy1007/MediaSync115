@@ -393,14 +393,6 @@
                 自动登录失败时，可从浏览器开发者工具复制 Cookie 粘贴到此处
               </el-text>
             </el-form-item>
-            <el-form-item label="API Key（可选）">
-              <el-input
-                v-model="hdhiveForm.apiKey"
-                type="textarea"
-                :rows="2"
-                placeholder="已弃用，资源抓取不再依赖 Open API Key"
-              />
-            </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingHdhive" @click="handleSaveHdhive">保存</el-button>
               <el-button :loading="testingHdhive" @click="handleTestHdhive">测试连接</el-button>
@@ -2015,7 +2007,6 @@ const accountForm = ref({
 })
 
 const hdhiveForm = ref({
-  apiKey: '',
   cookie: '',
   loginUsername: '',
   autoCheckinEnabled: false,
@@ -2331,7 +2322,7 @@ const savingUpdateSettings = ref(false)
 const checkingUpdates = ref(false)
 
 const appInfo = ref({
-  currentVersion: '1.2.4',
+  currentVersion: '1.2.5',
   currentImageTag: '',
   currentGitSha: '',
   currentBuildTime: '',
@@ -3347,7 +3338,6 @@ const handleSaveHdhive = async () => {
   savingHdhive.value = true
   try {
     await settingsApi.updateRuntime({
-      hdhive_api_key: hdhiveForm.value.apiKey,
       hdhive_cookie: hdhiveForm.value.cookie,
       hdhive_auto_checkin_enabled: hdhiveForm.value.autoCheckinEnabled,
       hdhive_auto_checkin_mode: hdhiveForm.value.autoCheckinMode || 'normal',
@@ -3387,8 +3377,7 @@ const handleRunHdhiveCheckin = async () => {
     const { data } = await settingsApi.runHdhiveCheckin({
       mode: hdhiveForm.value.autoCheckinMode || 'normal',
       method,
-      cookie: hdhiveForm.value.cookie,
-      api_key: hdhiveForm.value.apiKey
+      cookie: hdhiveForm.value.cookie
     })
     if (method !== 'cookie') await checkHdhive(false)
     const modeLabel = hdhiveForm.value.autoCheckinMode === 'gamble' ? '赌狗签到' : '普通签到'
@@ -4613,7 +4602,6 @@ const fetchRuntimeSettings = async () => {
     if (!String(accountForm.value.newUsername || '').trim()) {
       accountForm.value.newUsername = data.auth_username || 'admin'
     }
-    hdhiveForm.value.apiKey = data.hdhive_api_key || ''
     hdhiveForm.value.cookie = data.hdhive_cookie || ''
     hdhiveForm.value.loginUsername = data.hdhive_login_username || ''
     hdhiveForm.value.autoCheckinEnabled = !!data.hdhive_auto_checkin_enabled

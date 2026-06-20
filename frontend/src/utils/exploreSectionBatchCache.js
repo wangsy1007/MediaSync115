@@ -4,6 +4,13 @@ const BATCH_CACHE_TTL_MS = 10 * 60 * 1000
 const batchCache = new Map()
 const batchInflight = new Map()
 
+const hasTransientLibraryStatus = (map = {}) => (
+  Object.values(map || {}).some((entry) => {
+    const status = String(entry?.status || '').toLowerCase()
+    return status === 'cache_unavailable' || status === 'request_failed'
+  })
+)
+
 export const buildExploreBatchCacheKey = (source, sectionKey, start, count) =>
   `${source}:${sectionKey}:${start}:${count}`
 
@@ -27,6 +34,12 @@ export const getCachedExploreSectionBatch = (source, sectionKey, start, count) =
 }
 
 export const setCachedExploreSectionBatch = (source, sectionKey, start, count, payload) => {
+  if (
+    hasTransientLibraryStatus(payload?.emby_status_map)
+    || hasTransientLibraryStatus(payload?.feiniu_status_map)
+  ) {
+    return
+  }
   const cacheKey = buildExploreBatchCacheKey(source, sectionKey, start, count)
   batchCache.set(cacheKey, {
     payload,

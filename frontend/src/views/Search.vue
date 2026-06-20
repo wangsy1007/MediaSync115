@@ -262,6 +262,7 @@ import {
   setCachedExploreSectionBatch,
   setExploreSectionBatchInflight
 } from '@/utils/exploreSectionBatchCache'
+import { createExploreLibraryBadgeSyncer } from '@/utils/exploreLibraryBadgeSync'
 import { copyText } from '@/utils/clipboard'
 import { buildExploreQueuePayload, buildTmdbSavePayload } from '@/utils/exploreQueuePayload'
 
@@ -420,6 +421,25 @@ const mergeFeiniuStatusMap = (rawMap = {}) => {
     nextMap.set(key, value || {})
   }
   feiniuStatusMap.value = nextMap
+}
+
+let libraryBadgeSyncer = null
+libraryBadgeSyncer = createExploreLibraryBadgeSyncer({
+  getEmbyStatusMap: () => embyStatusMap.value,
+  getFeiniuStatusMap: () => feiniuStatusMap.value,
+  mergeEmbyStatusMap,
+  mergeFeiniuStatusMap
+})
+
+const collectExploreSectionItems = () => (
+  exploreSections.value.flatMap((section) => (
+    Array.isArray(section?.items) ? section.items : []
+  ))
+)
+
+const scheduleLibraryBadgeSync = (items) => {
+  const rows = items ?? collectExploreSectionItems()
+  libraryBadgeSyncer?.schedule(rows)
 }
 
 const normalizeExploreQueueMediaType = (rawType) => {
@@ -1294,6 +1314,7 @@ const fetchExploreSections = async () => {
         items
       }
     })
+    scheduleLibraryBadgeSync()
   } catch (error) {
     if (requestId !== exploreSectionsRequestId || source !== exploreSource.value) return
     if (source === 'tmdb') {
@@ -1936,6 +1957,8 @@ onBeforeUnmount(() => {
   cleanupExploreContainerResizeObserver()
   cleanupSectionResizeObserver()
   stopExploreQueuePolling()
+  libraryBadgeSyncer?.dispose()
+  libraryBadgeSyncer = null
 })
 </script>
 
@@ -2200,7 +2223,7 @@ onBeforeUnmount(() => {
           .emby-badge {
             position: absolute;
             top: 10px;
-            right: 10px;
+            left: 10px;
             z-index: 4;
           }
 
@@ -2238,18 +2261,6 @@ onBeforeUnmount(() => {
           &:focus-within .explore-card-actions {
             opacity: 1;
             transform: translate(-50%, 0);
-          }
-
-          .rank-badge {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            padding: 4px 10px;
-            border-radius: 4px;
-            background: var(--ms-accent-warning);
-            color: #fff;
-            font-size: 12px;
-            font-weight: 700;
           }
         }
 

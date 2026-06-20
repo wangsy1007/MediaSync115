@@ -269,7 +269,7 @@ const viewportWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 12
 const showMoreMenu = ref(false)
 const showExploreMenu = ref(false)
 const lastExplorePage = ref('/explore/douban')
-const appVersionLabel = ref('v1.2.4')
+const appVersionLabel = ref('v1.2.5')
 const isLoginRoute = computed(() => route.path === '/login')
 
 // 需要缓存的页面组件名（探索首页 + 更多页），返回时保持滚动位置和数据状态
