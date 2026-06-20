@@ -1,6 +1,7 @@
 """HDHive Cookie + Next.js 网页解析客户端。"""
 
 import asyncio
+import html
 import json
 import re
 import unicodedata
@@ -959,6 +960,35 @@ class HDHiveWebClient:
             "full_url": full_url,
         }
 
+    @classmethod
+    def _sanitize_share_url(cls, raw_url: str) -> str:
+        """清理解锁响应中的分享链接（含 HTML 实体与截断后缀）。"""
+        value = html.unescape(str(raw_url or "").strip())
+        value = value.replace("\\/", "/")
+        value = re.sub(r"&#$", "", value)
+        value = re.sub(r"&+$", "", value)
+        return value.strip()
+
+    @classmethod
+    def _extract_share_link_from_action_data(
+        cls, action_result: dict[str, Any]
+    ) -> tuple[str, str, bool]:
+        """从 unlockResource Server Action 响应中提取 115 分享链接。"""
+        data_obj = action_result.get("data")
+        if not isinstance(data_obj, dict):
+            return "", "", False
+
+        access_code = str(data_obj.get("access_code") or "").strip()
+        share_link = cls._sanitize_share_url(str(data_obj.get("full_url") or ""))
+        resource_url = cls._sanitize_share_url(str(data_obj.get("url") or ""))
+        if not share_link and resource_url:
+            share_link = resource_url
+        if share_link and access_code and "password=" not in share_link and "pwd=" not in share_link:
+            joiner = "&" if "?" in share_link else "?"
+            share_link = f"{share_link}{joiner}{urlencode({'password': access_code})}"
+        already_owned = bool(data_obj.get("already_owned"))
+        return share_link, access_code, already_owned
+
     async def _resolve_media_slug(self, tmdb_id: int, media_type: str) -> str:
         try:
             tmdb_route_html = await self._fetch_text(f"/tmdb/{media_type}/{int(tmdb_id)}")
@@ -1263,24 +1293,29 @@ class HDHiveWebClient:
 
         cached = self._unlock_cache.get(normalized_slug)
         now = monotonic()
-        if cached and (now - cached[0] < self._unlock_cache_ttl_seconds):
+        if cached and cached[1].get("success") and (now - cached[0] < self._unlock_cache_ttl_seconds):
             return cached[1]
 
         lock = self._unlock_locks.setdefault(normalized_slug, asyncio.Lock())
         async with lock:
             cached = self._unlock_cache.get(normalized_slug)
             now = monotonic()
-            if cached and (now - cached[0] < self._unlock_cache_ttl_seconds):
+            if cached and cached[1].get("success") and (now - cached[0] < self._unlock_cache_ttl_seconds):
                 return cached[1]
 
             resource_html = await self._fetch_text(f"/resource/115/{normalized_slug}")
             action_result = await self._unlock_resource_via_next_action(normalized_slug, resource_html)
+            action_share_link, action_access_code, already_owned = (
+                self._extract_share_link_from_action_data(action_result)
+            )
             meta = self._extract_resource_meta(resource_html)
             if bool(meta.get("locked")):
                 meta = await self._fetch_resource_meta(normalized_slug)
-            access_code = str(meta.get("access_code") or "").strip()
-            share_link = str(meta.get("full_url") or "").strip()
-            resource_url = str(meta.get("resource_url") or "").strip()
+            access_code = action_access_code or str(meta.get("access_code") or "").strip()
+            share_link = action_share_link or self._sanitize_share_url(
+                str(meta.get("full_url") or "")
+            )
+            resource_url = self._sanitize_share_url(str(meta.get("resource_url") or ""))
             if not share_link and resource_url and access_code:
                 joiner = "&" if "?" in resource_url else "?"
                 share_link = f"{resource_url}{joiner}{urlencode({'password': access_code})}"
@@ -1288,29 +1323,35 @@ class HDHiveWebClient:
                 try:
                     fetched_link = await self._fetch_resource_share_link(normalized_slug)
                     if fetched_link:
-                        share_link = fetched_link
+                        share_link = self._sanitize_share_url(fetched_link)
                 except Exception:
                     pass
-            success = bool(action_result.get("success")) and bool(share_link or access_code)
+            action_message = str(action_result.get("message") or "").strip()
+            success = bool(share_link or access_code) and (
+                bool(action_result.get("success"))
+                or already_owned
+                or "已解锁" in action_message
+            )
 
             result = {
                 "success": success,
                 "method": "next_action",
                 "message": (
-                    str(action_result.get("message") or "").strip()
+                    action_message
                     or ("资源解锁成功" if success else "资源解锁失败")
                 ),
                 "share_link": share_link,
                 "access_code": access_code,
                 "full_url": share_link,
-                "already_owned": False,
-                "locked": bool(meta.get("locked")),
+                "already_owned": already_owned,
+                "locked": bool(meta.get("locked")) and not success,
                 "lock_code": str(meta.get("lock_code") or ""),
                 "lock_message": str(meta.get("lock_message") or ""),
                 "unlock_points": int(meta.get("unlock_points") or 0),
-                "resource_url": str(meta.get("resource_url") or ""),
+                "resource_url": resource_url,
             }
-            self._unlock_cache[normalized_slug] = (monotonic(), result)
+            if success:
+                self._unlock_cache[normalized_slug] = (monotonic(), result)
             return result
 
     async def get_pan115_by_keyword(self, keyword: str, media_type: str = "movie") -> list[dict[str, Any]]:

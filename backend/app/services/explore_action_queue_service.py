@@ -830,134 +830,137 @@ class ExploreActionQueueService:
             has_successful_transfer=False,
         )
 
-        primary_resources, _traces, meta = await subscription_service._fetch_resources(
-            channel="all", sub=snapshot
-        )
-
-        source_attempts = list(meta.get("attempts") or [])
-        source_order = list(meta.get("source_order") or [])
-
-        if not primary_resources:
-            raise ValueError(self._build_attempt_error_summary(source_attempts))
+        source_order = subscription_service._resolve_source_order("all")
+        source_attempts: list[dict[str, Any]] = []
+        transfer_attempts: list[dict[str, Any]] = []
 
         folder = runtime_settings_service.get_pan115_default_folder()
         folder_id = str(folder.get("folder_id") or "0").strip() or "0"
 
-        transfer_attempts: list[dict[str, Any]] = []
-        for resource in primary_resources:
-            share_link = subscription_service._extract_resource_url(resource)
-            if share_link:
-                receive_code = self._extract_receive_code(share_link)
-                try:
-                    from app.utils.resource_tags import (
-                        build_quality_filter_from_settings,
-                    )
+        for source in source_order:
+            primary_resources, _traces, meta = await subscription_service._fetch_resources(
+                channel="all",
+                sub=snapshot,
+                source_order=[source],
+            )
+            source_attempts.extend(list(meta.get("attempts") or []))
+            if not primary_resources:
+                continue
 
-                    quality_filter = build_quality_filter_from_settings()
-                    result = await pan115_service.save_share_directly(
-                        share_link,
-                        folder_id,
-                        receive_code,
-                        quality_filter,
-                    )
-                except Exception as exc:
-                    transfer_attempts.append(
-                        {
-                            "source": resource.get("source_service", "unknown"),
-                            "status": "transfer_failed",
-                            "error": str(exc)[:300],
-                        }
-                    )
-                    continue
-
-                transfer_success = True
-                if isinstance(result, dict):
-                    if "success" in result:
-                        transfer_success = bool(result.get("success"))
-                    elif "state" in result:
-                        transfer_success = bool(result.get("state"))
-
-                if not transfer_success:
-                    if isinstance(result, dict):
-                        error_text = (
-                            str(result.get("error") or "")
-                            or str(result.get("message") or "")
-                            or str(result.get("error_msg") or "")
+            for resource in primary_resources:
+                share_link = subscription_service._extract_resource_url(resource)
+                if share_link:
+                    receive_code = self._extract_receive_code(share_link)
+                    try:
+                        from app.utils.resource_tags import (
+                            build_quality_filter_from_settings,
                         )
-                    else:
-                        error_text = str(result)
-                    transfer_attempts.append(
-                        {
-                            "source": resource.get("source_service", "unknown"),
-                            "status": "transfer_failed",
-                            "error": (error_text or "转存失败")[:300],
-                        }
-                    )
-                    continue
 
-                await media_postprocess_service.trigger_archive_after_transfer(
-                    trigger="explore_transfer"
-                )
-                file_count = (
-                    result.get("file_count") if isinstance(result, dict) else None
-                )
-                original_file_count = (
-                    result.get("original_file_count")
-                    if isinstance(result, dict)
-                    else None
-                )
-                return {
-                    "tmdb_id": tmdb_id,
-                    "media_type": media_type,
-                    "share_link": share_link,
-                    "selected_source": resource.get("source_service", "unknown"),
-                    "source_order": source_order,
-                    "attempts": transfer_attempts,
-                    "save_mode": "direct",
-                    "target_parent_id": folder_id,
-                    "file_count": file_count,
-                    "original_file_count": original_file_count,
-                    "message": str(result.get("message") or "已提交转存任务")
-                    if isinstance(result, dict)
-                    else "已提交转存任务",
-                }
+                        quality_filter = build_quality_filter_from_settings()
+                        result = await pan115_service.save_share_directly(
+                            share_link,
+                            folder_id,
+                            receive_code,
+                            quality_filter,
+                        )
+                    except Exception as exc:
+                        transfer_attempts.append(
+                            {
+                                "source": resource.get("source_service", source),
+                                "status": "transfer_failed",
+                                "error": str(exc)[:300],
+                            }
+                        )
+                        continue
 
-            offline_url = subscription_service._extract_offline_url(resource)
-            if offline_url:
-                try:
-                    offline_folder_id = str(
-                        runtime_settings_service.get_pan115_offline_folder()
-                        .get("folder_id", "0")
-                        .strip()
-                        or "0"
-                    )
-                    await pan115_service.offline_task_add(
-                        url=offline_url,
-                        wp_path_id=offline_folder_id,
-                    )
+                    transfer_success = True
+                    if isinstance(result, dict):
+                        if "success" in result:
+                            transfer_success = bool(result.get("success"))
+                        elif "state" in result:
+                            transfer_success = bool(result.get("state"))
+
+                    if not transfer_success:
+                        if isinstance(result, dict):
+                            error_text = (
+                                str(result.get("error") or "")
+                                or str(result.get("message") or "")
+                                or str(result.get("error_msg") or "")
+                            )
+                        else:
+                            error_text = str(result)
+                        transfer_attempts.append(
+                            {
+                                "source": resource.get("source_service", source),
+                                "status": "transfer_failed",
+                                "error": (error_text or "转存失败")[:300],
+                            }
+                        )
+                        continue
+
                     await media_postprocess_service.trigger_archive_after_transfer(
                         trigger="explore_transfer"
+                    )
+                    file_count = (
+                        result.get("file_count") if isinstance(result, dict) else None
+                    )
+                    original_file_count = (
+                        result.get("original_file_count")
+                        if isinstance(result, dict)
+                        else None
                     )
                     return {
                         "tmdb_id": tmdb_id,
                         "media_type": media_type,
-                        "share_link": offline_url,
-                        "selected_source": resource.get("source_service", "offline"),
+                        "share_link": share_link,
+                        "selected_source": resource.get("source_service", source),
                         "source_order": source_order,
-                        "attempts": transfer_attempts,
-                        "save_mode": "offline",
-                        "target_parent_id": offline_folder_id,
-                        "message": "已提交离线下载任务",
+                        "attempts": source_attempts + transfer_attempts,
+                        "save_mode": "direct",
+                        "target_parent_id": folder_id,
+                        "file_count": file_count,
+                        "original_file_count": original_file_count,
+                        "message": str(result.get("message") or "已提交转存任务")
+                        if isinstance(result, dict)
+                        else "已提交转存任务",
                     }
-                except Exception as exc:
-                    transfer_attempts.append(
-                        {
-                            "source": resource.get("source_service", "offline"),
-                            "status": "transfer_failed",
-                            "error": str(exc)[:300],
+
+                offline_url = subscription_service._extract_offline_url(resource)
+                if offline_url:
+                    try:
+                        offline_folder_id = str(
+                            runtime_settings_service.get_pan115_offline_folder()
+                            .get("folder_id", "0")
+                            .strip()
+                            or "0"
+                        )
+                        await pan115_service.offline_task_add(
+                            url=offline_url,
+                            wp_path_id=offline_folder_id,
+                        )
+                        await media_postprocess_service.trigger_archive_after_transfer(
+                            trigger="explore_transfer"
+                        )
+                        return {
+                            "tmdb_id": tmdb_id,
+                            "media_type": media_type,
+                            "share_link": offline_url,
+                            "selected_source": resource.get("source_service", "offline"),
+                            "source_order": source_order,
+                            "attempts": source_attempts + transfer_attempts,
+                            "save_mode": "offline",
+                            "target_parent_id": offline_folder_id,
+                            "message": "已提交离线下载任务",
                         }
-                    )
-                    continue
+                    except Exception as exc:
+                        transfer_attempts.append(
+                            {
+                                "source": resource.get("source_service", "offline"),
+                                "status": "transfer_failed",
+                                "error": str(exc)[:300],
+                            }
+                        )
+                        continue
 
         all_attempts = source_attempts + transfer_attempts
         raise ValueError(self._build_attempt_error_summary(all_attempts))

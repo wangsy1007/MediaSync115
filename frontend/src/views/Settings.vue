@@ -1192,7 +1192,7 @@
 
             <el-divider content-position="left">资源画质偏好</el-divider>
             <el-alert type="info" :closable="false" style="margin-bottom: 12px">
-              设置后，订阅转存和首页探索转存会优先选择匹配的资源。勾选顺序即为优先级（从上到下）。不勾选则不做筛选。所有订阅统一应用此规则。
+              设置后，订阅转存和首页探索转存会优先尝试勾选的画质资源；若无匹配项，仍会继续尝试其他可用资源。勾选顺序即为优先级（从上到下）。不勾选则仅按默认规则选择。排除标签与体积范围仍会硬性过滤。所有订阅统一应用此规则。
             </el-alert>
             <el-form-item label="分辨率偏好">
               <el-checkbox-group v-model="resourcePrefForm.resolutions" class="preference-inline-group">
@@ -2331,7 +2331,7 @@ const savingUpdateSettings = ref(false)
 const checkingUpdates = ref(false)
 
 const appInfo = ref({
-  currentVersion: '1.2.3',
+  currentVersion: '1.2.4',
   currentImageTag: '',
   currentGitSha: '',
   currentBuildTime: '',

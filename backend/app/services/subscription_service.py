@@ -1496,6 +1496,7 @@ class SubscriptionService:
         sub: "SubscriptionSnapshot",
         hdhive_unlock_context: dict[str, Any] | None = None,
         source_order: list[str] | None = None,
+        exclude_urls: set[str] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         traces: list[dict[str, Any]] = []
         source_attempts: list[dict[str, Any]] = []  # 记录每个来源的尝试结果
@@ -1577,17 +1578,48 @@ class SubscriptionService:
                 attempt_info["status"] = "success"
                 attempt_info["count"] = len(source_resources)
                 if source == "hdhive":
+                    pref_res = self._resolve_subscription_resolutions(sub)
+                    if pref_res:
+                        source_resources = sort_by_preference(
+                            source_resources, pref_res, []
+                        )
+                    quality_filter = self._resolve_subscription_quality_filter(sub)
+                    if any(v for v in quality_filter.values() if v is not None):
+                        source_resources = filter_and_sort_by_quality(
+                            source_resources, **quality_filter
+                        )
                     source_resources = await self._prepare_hdhive_locked_resources(
                         source_resources,
                         hdhive_unlock_context or self._build_hdhive_unlock_context(),
                         traces,
                     )
-                # Sort by user's resolution/format preferences
-                pref_res = self._resolve_subscription_resolutions(sub)
-                if pref_res:
-                    source_resources = sort_by_preference(
-                        source_resources, pref_res, []
+                else:
+                    pref_res = self._resolve_subscription_resolutions(sub)
+                    if pref_res:
+                        source_resources = sort_by_preference(
+                            source_resources, pref_res, []
+                        )
+                if exclude_urls:
+                    before_exclude = len(source_resources)
+                    source_resources = self._filter_resources_excluding_urls(
+                        source_resources, exclude_urls
                     )
+                    if before_exclude and not source_resources:
+                        traces.append(
+                            {
+                                "step": "fetch_source_exhausted",
+                                "status": "info",
+                                "message": f"来源 {source} 命中资源均已尝试过，继续下一个来源",
+                                "payload": {
+                                    "source": source,
+                                    "excluded_count": before_exclude,
+                                },
+                            }
+                        )
+                        attempt_info["status"] = "empty"
+                        attempt_info["count"] = 0
+                        continue
+                attempt_info["count"] = len(source_resources)
                 primary_resources.extend(source_resources)
 
             source_attempts.append(attempt_info)
@@ -1610,6 +1642,9 @@ class SubscriptionService:
                     )
             except Exception:
                 pass
+
+            if primary_resources:
+                break
 
         if not primary_resources:
             traces.append(
@@ -1641,18 +1676,34 @@ class SubscriptionService:
         # 生成来源尝试链路摘要
         summary = self._build_source_attempt_summary(source_attempts, active_order)
 
-        # 按订阅质量偏好过滤资源
+        # 按全局画质偏好排序资源（偏好仅影响优先级；排除标签/体积范围仍会硬性过滤）
         quality_filter = self._resolve_subscription_quality_filter(sub)
         if any(v for v in quality_filter.values() if v is not None):
             before_count = len(primary_resources)
             primary_resources = filter_and_sort_by_quality(primary_resources, **quality_filter)
-            filtered_count = before_count - len(primary_resources)
-            if filtered_count > 0:
+            excluded_count = before_count - len(primary_resources)
+            if excluded_count > 0:
                 traces.append(
                     {
-                        "step": "quality_filter_applied",
+                        "step": "quality_hard_filter_applied",
                         "status": "info",
-                        "message": f"质量筛选过滤掉 {filtered_count} 个不符合偏好的资源",
+                        "message": f"排除规则过滤掉 {excluded_count} 个不符合条件的资源",
+                    }
+                )
+            if primary_resources and any(
+                quality_filter.get(key)
+                for key in (
+                    "preferred_resolutions",
+                    "preferred_formats",
+                    "preferred_languages",
+                    "preferred_subtitles",
+                )
+            ):
+                traces.append(
+                    {
+                        "step": "quality_preference_sorted",
+                        "status": "info",
+                        "message": "已按全局画质偏好排序，优先尝试匹配勾选画质的资源",
                     }
                 )
 
@@ -2021,6 +2072,7 @@ class SubscriptionService:
             "budget_total": budget_total,
             "budget_left": budget_total,
             "threshold_inclusive": runtime_settings_service.get_subscription_hdhive_unlock_threshold_inclusive(),
+            "max_unlocks_per_run": 1,
             "consecutive_failed_limit": 3,
             "consecutive_failed_count": 0,
             "request_interval_seconds": 0.35,
@@ -2050,6 +2102,9 @@ class SubscriptionService:
         budget_total = int(context.get("budget_total", 30) or 30)
         budget_left = int(context.get("budget_left", budget_total) or budget_total)
         threshold_inclusive = bool(context.get("threshold_inclusive", True))
+        max_unlocks_per_run = max(
+            1, int(context.get("max_unlocks_per_run", 1) or 1)
+        )
         traces.append(
             {
                 "step": "hdhive_unlock_policy",
@@ -2065,6 +2120,7 @@ class SubscriptionService:
                     "budget_total": budget_total,
                     "budget_left": budget_left,
                     "threshold_inclusive": threshold_inclusive,
+                    "max_unlocks_per_run": max_unlocks_per_run,
                 },
             }
         )
@@ -2106,15 +2162,17 @@ class SubscriptionService:
                 skip_reason = "disabled"
             elif not slug:
                 skip_reason = "missing_slug"
-            elif unlock_points <= 0:
+            elif unlock_points < 0:
                 skip_reason = "invalid_unlock_points"
-            elif not self._allow_unlock_by_threshold(
+            elif unlock_points > 0 and not self._allow_unlock_by_threshold(
                 unlock_points, max_points, threshold_inclusive
             ):
                 skip_reason = "over_threshold"
             elif context.get("stopped_by_circuit"):
                 skip_reason = "circuit_open"
-            elif unlock_points > int(context.get("budget_left", 0) or 0):
+            elif unlock_points > 0 and unlock_points > int(
+                context.get("budget_left", 0) or 0
+            ):
                 skip_reason = "budget_exceeded"
 
             if skip_reason:
@@ -2186,6 +2244,23 @@ class SubscriptionService:
                             },
                         }
                     )
+                    if local_success >= max_unlocks_per_run:
+                        traces.append(
+                            {
+                                "step": "hdhive_unlock_stop",
+                                "status": "info",
+                                "message": (
+                                    f"已达到本次最多解锁 {max_unlocks_per_run} 条资源，"
+                                    "停止继续解锁"
+                                ),
+                                "payload": {
+                                    "reason": "max_unlocks_reached",
+                                    "max_unlocks_per_run": max_unlocks_per_run,
+                                    "unlocked_count": local_success,
+                                },
+                            }
+                        )
+                        break
                 else:
                     context["consecutive_failed_count"] = (
                         int(context.get("consecutive_failed_count", 0) or 0) + 1
@@ -2684,6 +2759,7 @@ class SubscriptionService:
                 sub,
                 hdhive_unlock_context,
                 source_order=source_order,
+                exclude_urls=exclude_urls,
             )
             for trace in fetch_trace:
                 await self._create_step_log(

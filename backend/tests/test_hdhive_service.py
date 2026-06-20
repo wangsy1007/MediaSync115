@@ -174,6 +174,43 @@ class TestHDHiveService:
         assert row["hdhive_resource_url"] == "https://hdhive.com/movie/example"
         assert row["pan115_savable"] is False
 
+    def test_extract_share_link_from_action_data(self) -> None:
+        service = HDHiveService()
+        share_link, access_code, already_owned = service._web._extract_share_link_from_action_data(
+            {
+                "success": True,
+                "message": "资源已解锁，无需重复支付",
+                "data": {
+                    "access_code": "",
+                    "already_owned": True,
+                    "full_url": "https://115.com/s/swhzqwy3wwq?password=ddc3&#",
+                    "url": "https://115.com/s/swhzqwy3wwq?password=ddc3&#",
+                },
+            }
+        )
+
+        assert share_link == "https://115.com/s/swhzqwy3wwq?password=ddc3"
+        assert access_code == ""
+        assert already_owned is True
+
+    def test_extract_share_link_from_action_data_with_separate_code(self) -> None:
+        service = HDHiveService()
+        share_link, access_code, already_owned = service._web._extract_share_link_from_action_data(
+            {
+                "success": True,
+                "data": {
+                    "access_code": "abcd",
+                    "already_owned": False,
+                    "full_url": "",
+                    "url": "https://115.com/s/example",
+                },
+            }
+        )
+
+        assert share_link == "https://115.com/s/example?password=abcd"
+        assert access_code == "abcd"
+        assert already_owned is False
+
     def test_list_resources_by_tmdb_only_keeps_115_rows(self) -> None:
         service = HDHiveService(cookie="test-cookie")
 

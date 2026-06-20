@@ -64,7 +64,7 @@
 
 <script setup>
 import { onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { logsApi } from '@/api'
 
 const statusLabels = {
@@ -161,16 +161,6 @@ const handlePageChange = async (page) => {
 }
 
 const handleClearLogs = async () => {
-  try {
-    await ElMessageBox.confirm('确认清空所有运行日志吗？该操作不可恢复。', '提示', {
-      type: 'warning',
-      confirmButtonText: '确认清空',
-      cancelButtonText: '取消'
-    })
-  } catch {
-    return
-  }
-
   clearing.value = true
   try {
     const { data } = await logsApi.clear()

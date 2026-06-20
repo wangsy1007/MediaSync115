@@ -1,6 +1,12 @@
 services:
   mediasync115:
-    build: .
+    build:
+      context: .
+      args:
+        APP_BUILD_VERSION: "1.2.4"
+        APP_BUILD_TAG: "1.2.4"
+        APP_BUILD_GIT_SHA: "local"
+        APP_BUILD_TIME: ""
     image: mediasync115:latest
     container_name: mediasync115
     restart: unless-stopped

@@ -208,18 +208,45 @@ def score_resource(
     return score
 
 
-def matches_quality_filter(
+def score_resource_preference(
     resource: dict[str, Any],
     *,
     preferred_resolutions: list[str] | None = None,
     preferred_formats: list[str] | None = None,
-    exclude_labels: list[str] | None = None,
     preferred_languages: list[str] | None = None,
     preferred_subtitles: list[str] | None = None,
+) -> float:
+    """按全局画质偏好为资源打分，分数越高越优先转存；未匹配偏好时仍保留资源。"""
+    tags = resource.get("_tags") or extract_extended_tags(resource)
+    score = score_resource(
+        {"_tags": tags},
+        preferred_resolutions or [],
+        preferred_formats or [],
+    )
+
+    languages = set(str(item).lower() for item in (tags.get("languages") or []))
+    if languages and preferred_languages:
+        for idx, pref in enumerate(preferred_languages):
+            if pref.lower() in languages:
+                score += 50 * (len(preferred_languages) - idx)
+
+    subtitles = set(str(item).lower() for item in (tags.get("subtitles") or []))
+    if subtitles and preferred_subtitles:
+        for idx, pref in enumerate(preferred_subtitles):
+            if pref.lower() in subtitles:
+                score += 30 * (len(preferred_subtitles) - idx)
+
+    return score
+
+
+def matches_hard_quality_constraints(
+    resource: dict[str, Any],
+    *,
+    exclude_labels: list[str] | None = None,
     min_size_gb: float | None = None,
     max_size_gb: float | None = None,
 ) -> bool:
-    """Check if a resource passes quality filters. Returns True if it should be kept."""
+    """检查资源是否违反排除标签或体积范围等硬性规则。"""
     tags = resource.get("_tags") or extract_extended_tags(resource)
 
     if exclude_labels:
@@ -235,6 +262,31 @@ def matches_quality_filter(
                 return False
             if max_size_gb is not None and size > max_size_gb:
                 return False
+
+    return True
+
+
+def matches_quality_filter(
+    resource: dict[str, Any],
+    *,
+    preferred_resolutions: list[str] | None = None,
+    preferred_formats: list[str] | None = None,
+    exclude_labels: list[str] | None = None,
+    preferred_languages: list[str] | None = None,
+    preferred_subtitles: list[str] | None = None,
+    min_size_gb: float | None = None,
+    max_size_gb: float | None = None,
+) -> bool:
+    """兼容旧逻辑：硬性规则 + 偏好匹配。新代码请优先使用 matches_hard_quality_constraints。"""
+    if not matches_hard_quality_constraints(
+        resource,
+        exclude_labels=exclude_labels,
+        min_size_gb=min_size_gb,
+        max_size_gb=max_size_gb,
+    ):
+        return False
+
+    tags = resource.get("_tags") or extract_extended_tags(resource)
 
     if preferred_resolutions:
         res = (tags.get("resolution") or "").lower()
@@ -276,40 +328,48 @@ def filter_and_sort_by_quality(
     min_size_gb: float | None = None,
     max_size_gb: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Filter resources by quality criteria and sort by preference score."""
-    has_filter = any([
+    """按排除规则过滤资源，再按画质偏好排序（偏好仅影响优先级，不会剔除未匹配项）。"""
+    has_hard_filter = any([
+        exclude_labels,
+        min_size_gb is not None,
+        max_size_gb is not None,
+    ])
+    has_preference = any([
         preferred_resolutions,
         preferred_formats,
-        exclude_labels,
         preferred_languages,
         preferred_subtitles,
-        min_size_gb,
-        max_size_gb,
     ])
+
+    if not has_hard_filter and not has_preference:
+        return list(resources)
 
     for r in resources:
         if "_tags" not in r:
             enrich_resource_extended(r)
 
-    if has_filter:
+    if has_hard_filter:
         resources = [
-            r for r in resources
-            if matches_quality_filter(
+            r
+            for r in resources
+            if matches_hard_quality_constraints(
                 r,
-                preferred_resolutions=preferred_resolutions or [],
-                preferred_formats=preferred_formats or [],
                 exclude_labels=exclude_labels or [],
-                preferred_languages=preferred_languages or [],
-                preferred_subtitles=preferred_subtitles or [],
                 min_size_gb=min_size_gb,
                 max_size_gb=max_size_gb,
             )
         ]
 
-    if preferred_resolutions or preferred_formats:
+    if has_preference:
         return sorted(
             resources,
-            key=lambda r: score_resource(r, preferred_resolutions or [], preferred_formats or []),
+            key=lambda r: score_resource_preference(
+                r,
+                preferred_resolutions=preferred_resolutions,
+                preferred_formats=preferred_formats,
+                preferred_languages=preferred_languages,
+                preferred_subtitles=preferred_subtitles,
+            ),
             reverse=True,
         )
     return resources
