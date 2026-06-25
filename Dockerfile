@@ -1,4 +1,5 @@
-FROM node:20-alpine AS frontend-builder
+# syntax=docker/dockerfile:1
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-builder
 
 WORKDIR /frontend
 
