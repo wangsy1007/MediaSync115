@@ -56,6 +56,18 @@ logger = logging.getLogger(__name__)
 # 单轮订阅内，链接失效后最多补充搜索并转存的轮次
 MAX_AUTO_TRANSFER_LINK_FALLBACK_ROUNDS = 6
 _SUBSCRIPTION_SCAN_CONCURRENCY = 3
+_TMDDB_ID_TAG_RE = re.compile(
+    r"(?:\[?\s*)?(?:tmdb[_-]?id|tmdbid)[_:\-\s]*(\d+)(?:\s*\]?)",
+    re.IGNORECASE,
+)
+_EMBEDDED_MEDIA_TITLE_RE = re.compile(
+    r"(?:电视剧|电影|剧集|番剧)[：:]\s*(.+?)(?:\s*[\(\[（【]|\s*-\s*S\d|\s+\d{4}|\s*$)",
+    re.IGNORECASE,
+)
+_GENERIC_RESOURCE_LABEL_RE = re.compile(
+    r"^(?:115资源\s*#\d+|s\d+(?:e\d+)?(?:[\-\s~到至]+e?\d+)?|第\d+[季集话])\b",
+    re.IGNORECASE,
+)
 
 
 class SubscriptionService:
@@ -1523,6 +1535,7 @@ class SubscriptionService:
                 {"source_order": active_order, "attempts": [], "summary": "无可用来源"},
             )
 
+        media_context = await self._resolve_subscription_media_context(sub)
         primary_resources: list[dict[str, Any]] = []
         for source in active_order:
             source_resources: list[dict[str, Any]] = []
@@ -1536,7 +1549,9 @@ class SubscriptionService:
                 if source == "hdhive":
                     source_resources, source_traces = await self._fetch_from_hdhive(sub)
                 elif source == "tg":
-                    source_resources, source_traces = await self._fetch_from_tg(sub)
+                    source_resources, source_traces = await self._fetch_from_tg(
+                        sub, media_context=media_context
+                    )
                 else:
                     source_resources, source_traces = await self._fetch_from_pansou(sub)
             except Exception as exc:
@@ -1706,6 +1721,23 @@ class SubscriptionService:
                         "message": "已按全局画质偏好排序，优先尝试匹配勾选画质的资源",
                     }
                 )
+
+        primary_resources, relevance_excluded = self._filter_resources_for_subscription(
+            sub, primary_resources, media_context
+        )
+        if relevance_excluded > 0:
+            traces.append(
+                {
+                    "step": "resource_relevance_filtered",
+                    "status": "info",
+                    "message": f"已过滤 {relevance_excluded} 条与订阅不匹配的资源，避免串台转存",
+                    "payload": {
+                        "excluded_count": relevance_excluded,
+                        "subscription_title": sub.title,
+                        "tmdb_id": sub.tmdb_id,
+                    },
+                }
+            )
 
         return (
             primary_resources,
@@ -1936,7 +1968,9 @@ class SubscriptionService:
         return keyword_resources, traces
 
     async def _fetch_from_tg(
-        self, sub: "SubscriptionSnapshot"
+        self,
+        sub: "SubscriptionSnapshot",
+        media_context: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         traces: list[dict[str, Any]] = []
         keyword = self._build_tg_keyword(sub)
@@ -1950,17 +1984,26 @@ class SubscriptionService:
             )
             return [], traces
 
+        context = media_context or await self._resolve_subscription_media_context(sub)
         traces.append(
             {
                 "step": "fetch_tg_keyword_start",
                 "status": "info",
                 "message": "开始通过关键词调用 Telegram 频道搜索",
-                "payload": {"keyword": keyword},
+                "payload": {
+                    "keyword": keyword,
+                    "expected_title": context.get("title"),
+                    "expected_year": context.get("year"),
+                },
             }
         )
         media_type = "tv" if sub.media_type == MediaType.TV else "movie"
         resources = await tg_service.search_115_by_keyword(
-            keyword, media_type=media_type
+            keyword,
+            media_type=media_type,
+            expected_title=str(context.get("title") or sub.title or ""),
+            expected_original_title=str(context.get("original_title") or ""),
+            expected_year=str(context.get("year") or sub.year or ""),
         )
         traces.append(
             {
@@ -2842,6 +2885,7 @@ class SubscriptionService:
         )
         parent_folder_id = str(default_folder_id or "0")
         quality_filter = self._resolve_subscription_quality_filter(sub)
+        media_context = await self._resolve_subscription_media_context(sub)
 
         saved = 0
         failed = 0
@@ -2928,6 +2972,32 @@ class SubscriptionService:
                 )
 
         for record in records:
+            if not self._is_resource_relevant_for_subscription(
+                sub,
+                record,
+                media_context,
+            ):
+                record.status = MediaStatus.FAILED
+                record.error_message = "资源与订阅不匹配，已跳过转存"
+                failed += 1
+                await self._create_step_log(
+                    db,
+                    run_id=run_id,
+                    channel=channel,
+                    subscription_id=sub.id,
+                    subscription_title=sub.title,
+                    step="auto_transfer_item_skipped_mismatch",
+                    status="warning",
+                    message=f"资源与订阅不匹配，已跳过：{record.resource_name}",
+                    payload={
+                        "source": source,
+                        "record_id": record.id,
+                        "resource_name": record.resource_name,
+                        "subscription_title": sub.title,
+                        "tmdb_id": sub.tmdb_id,
+                    },
+                )
+                continue
             await self._create_step_log(
                 db,
                 run_id=run_id,
@@ -3629,6 +3699,153 @@ class SubscriptionService:
             item.get("resource_name") or item.get("title") or item.get("name") or ""
         ).strip()
         return name or "未命名资源"
+
+    async def _resolve_subscription_media_context(
+        self, sub: "SubscriptionSnapshot"
+    ) -> dict[str, Any]:
+        title = str(sub.title or "").strip()
+        year = str(sub.year or "").strip()
+        original_title = ""
+        if sub.tmdb_id is not None:
+            try:
+                from app.services.tmdb_service import tmdb_service
+
+                if sub.media_type == MediaType.TV:
+                    detail = await tmdb_service.get_tv_detail(sub.tmdb_id)
+                    original_title = str(detail.get("original_name") or "").strip()
+                    if not year:
+                        first_air_date = str(detail.get("first_air_date") or "")
+                        if len(first_air_date) >= 4:
+                            year = first_air_date[:4]
+                else:
+                    detail = await tmdb_service.get_movie_detail(sub.tmdb_id)
+                    original_title = str(detail.get("original_title") or "").strip()
+                    if not year:
+                        release_date = str(detail.get("release_date") or "")
+                        if len(release_date) >= 4:
+                            year = release_date[:4]
+            except Exception:
+                logger.debug(
+                    "加载订阅 TMDB 上下文失败: subscription_id=%s tmdb_id=%s",
+                    sub.id,
+                    sub.tmdb_id,
+                    exc_info=True,
+                )
+        return {
+            "title": title,
+            "original_title": original_title,
+            "year": year,
+        }
+
+    @staticmethod
+    def _resource_label(item: dict[str, Any] | DownloadRecord) -> str:
+        if isinstance(item, DownloadRecord):
+            return str(item.resource_name or "").strip()
+        return str(
+            item.get("resource_name")
+            or item.get("title")
+            or item.get("name")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _extract_tmdb_id_from_resource_text(text: str) -> int | None:
+        matched = _TMDDB_ID_TAG_RE.search(str(text or ""))
+        if not matched:
+            return None
+        try:
+            return int(matched.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _extract_embedded_media_title(text: str) -> str:
+        matched = _EMBEDDED_MEDIA_TITLE_RE.search(str(text or ""))
+        if not matched:
+            return ""
+        return str(matched.group(1) or "").strip()
+
+    @staticmethod
+    def _resource_has_identifiable_title(label: str) -> bool:
+        value = str(label or "").strip()
+        if not value:
+            return False
+        if SubscriptionService._extract_embedded_media_title(value):
+            return True
+        if _GENERIC_RESOURCE_LABEL_RE.match(value):
+            return False
+        # 纯集数/画质标签的资源名通常来自 TMDB 精确源，不强行按标题拦截。
+        if re.search(r"\bS\d{1,2}E\d{1,3}\b", value, re.IGNORECASE):
+            return False
+        if re.fullmatch(r"115资源\s*#\d+", value, re.IGNORECASE):
+            return False
+        # 含明显中文片名片段的资源，需要走相关性校验。
+        return bool(re.search(r"[\u4e00-\u9fff]{2,}", value))
+
+    def _is_resource_relevant_for_subscription(
+        self,
+        sub: "SubscriptionSnapshot",
+        item: dict[str, Any] | DownloadRecord,
+        media_context: dict[str, Any],
+    ) -> bool:
+        label = self._resource_label(item)
+        if not label:
+            return False
+
+        overview = ""
+        if isinstance(item, dict):
+            overview = str(
+                item.get("overview")
+                or item.get("matched_media_title")
+                or ""
+            ).strip()
+
+        embedded_tmdb_id = self._extract_tmdb_id_from_resource_text(label)
+        if embedded_tmdb_id is not None and sub.tmdb_id is not None:
+            return embedded_tmdb_id == sub.tmdb_id
+
+        expected_title = str(media_context.get("title") or sub.title or "")
+        expected_original_title = str(media_context.get("original_title") or "")
+        expected_year = str(media_context.get("year") or sub.year or "")
+
+        score, _, strong_hit = tg_service._score_row_relevance(
+            row_title=label,
+            row_overview=overview,
+            expected_title=expected_title,
+            expected_original_title=expected_original_title,
+            expected_year=expected_year,
+        )
+        if strong_hit and score >= 80:
+            return True
+
+        embedded_title = self._extract_embedded_media_title(label)
+        if embedded_title:
+            return False
+
+        if not self._resource_has_identifiable_title(label):
+            return True
+
+        return score >= 50 and strong_hit
+
+    def _filter_resources_for_subscription(
+        self,
+        sub: "SubscriptionSnapshot",
+        resources: list[dict[str, Any]],
+        media_context: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], int]:
+        if not resources:
+            return [], 0
+        kept: list[dict[str, Any]] = []
+        excluded = 0
+        for item in resources:
+            if not isinstance(item, dict):
+                excluded += 1
+                continue
+            if self._is_resource_relevant_for_subscription(sub, item, media_context):
+                kept.append(item)
+            else:
+                excluded += 1
+        return kept, excluded
 
     @staticmethod
     def _build_pansou_keyword(sub: "SubscriptionSnapshot") -> str:

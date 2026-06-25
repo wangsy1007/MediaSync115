@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.6
+
+### 重点更新
+- 修复订阅自动转存串台：TG 搜索补充片名/年份相关性过滤，入库与转存前校验资源归属（含 tmdbid 标签与 TG 资源标题）。
+- 不匹配订阅的资源将被过滤或跳过转存，并记录 `resource_relevance_filtered` / `auto_transfer_item_skipped_mismatch` 日志。
+
 ## 1.2.5
 
 ### 重点更新
