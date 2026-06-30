@@ -976,6 +976,14 @@ async def check_tmdb_credentials():
     return await _perform_tmdb_check()
 
 
+@router.get("/llm/check")
+async def check_llm_credentials():
+    """检查 LLM API 配置是否有效"""
+    from app.services.llm_service import llm_service
+
+    return await llm_service.check_connection()
+
+
 @router.get("/pansou/check")
 async def check_pansou_credentials():
     """检查 Pansou 服务是否可用"""

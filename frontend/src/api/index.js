@@ -313,6 +313,7 @@ export const settingsApi = {
   checkPansou: () => api.get('/settings/pansou/check'),
   checkEmby: (params) => api.get('/settings/emby/check', { params }),
   checkFeiniu: (params) => api.get('/settings/feiniu/check', { params }),
+  checkLlm: () => api.get('/settings/llm/check'),
   feiniuLogin: (username, password, url) =>
     api.post('/settings/feiniu/login', { username, password, url }, {
       timeout: 45000,

@@ -78,6 +78,82 @@ def _build_user_prompt(profile: dict[str, Any], count: int) -> str:
 class LlmService:
     """OpenAI 兼容 Chat Completions 客户端。"""
 
+    async def check_connection(self) -> dict[str, Any]:
+        """检测 LLM 配置是否可用。
+
+        发送一条极简请求来验证 base_url / api_key / model 是否有效。
+        """
+        base_url = runtime_settings_service.get_llm_base_url().rstrip("/")
+        api_key = runtime_settings_service.get_llm_api_key()
+        model = runtime_settings_service.get_llm_model()
+        if not base_url or not api_key or not model:
+            return {
+                "valid": False,
+                "message": "LLM 未完整配置（base_url / api_key / model）",
+                "model": None,
+            }
+
+        url = f"{base_url}/chat/completions"
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "user", "content": "hi"},
+            ],
+            "max_tokens": 4,
+            "temperature": 0,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        _LLM_CHECK_TIMEOUT = httpx.Timeout(15.0, connect=10.0)
+        try:
+            async with proxy_manager.create_httpx_client(
+                timeout=_LLM_CHECK_TIMEOUT, http2=False
+            ) as client:
+                response = await client.post(url, json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json() if response.content else {}
+                choices = data.get("choices") if isinstance(data, dict) else None
+                if not isinstance(choices, list) or not choices:
+                    return {
+                        "valid": False,
+                        "message": "模型返回了空响应，请检查模型名称是否正确",
+                        "model": model,
+                    }
+                return {
+                    "valid": True,
+                    "message": "连接成功",
+                    "model": model,
+                }
+        except httpx.HTTPStatusError as exc:
+            detail = ""
+            try:
+                body = exc.response.json() if exc.response.content else {}
+                if isinstance(body, dict):
+                    detail = body.get("error", {}).get("message", "") or str(body)
+            except Exception:
+                detail = str(exc)
+            return {
+                "valid": False,
+                "message": f"API 返回错误 (HTTP {exc.response.status_code})：{detail}",
+                "model": model,
+            }
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "auth" in msg or "401" in msg or "unauthorized" in msg:
+                return {
+                    "valid": False,
+                    "message": "API Key 无效或无权访问",
+                    "model": model,
+                }
+            return {
+                "valid": False,
+                "message": f"连接失败：{exc}",
+                "model": model,
+            }
+
     async def recommend(self, profile: dict[str, Any], count: int) -> list[dict[str, Any]]:
         """根据画像调用大模型返回推荐列表。
 

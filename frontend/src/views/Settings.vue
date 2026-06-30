@@ -777,6 +777,21 @@
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingRecommend" @click="handleSaveRecommend">保存</el-button>
+              <el-button :loading="testingLlm" @click="handleTestLlm">测试连接</el-button>
+            </el-form-item>
+            <el-form-item v-if="llmTestResult !== null">
+              <el-alert
+                :type="llmTestResult.valid ? 'success' : 'error'"
+                :closable="true"
+                @close="llmTestResult = null"
+                show-icon
+              >
+                <template #title>
+                  <span v-if="llmTestResult.valid">LLM 连接成功</span>
+                  <span v-else>LLM 连接失败</span>
+                </template>
+                {{ llmTestResult.message }}
+              </el-alert>
             </el-form-item>
           </el-form>
         </el-card>
@@ -2108,6 +2123,8 @@ const recommendForm = ref({
   embyRecommendUserId: ''
 })
 const savingRecommend = ref(false)
+const testingLlm = ref(false)
+const llmTestResult = ref(null)
 const feiniuLoginForm = ref({
   username: '',
   password: ''
@@ -3863,6 +3880,46 @@ const handleSaveRecommend = async () => {
     ElMessage.error(error.response?.data?.detail || 'AI 推荐配置保存失败')
   } finally {
     savingRecommend.value = false
+  }
+}
+
+const handleTestLlm = async () => {
+  if (!String(recommendForm.value.llmBaseUrl || '').trim()) {
+    ElMessage.warning('请先输入 LLM 接口地址')
+    return
+  }
+  if (!String(recommendForm.value.llmModel || '').trim()) {
+    ElMessage.warning('请先输入模型名称')
+    return
+  }
+  if (!recommendForm.value.apiKeySet && !String(recommendForm.value.llmApiKey || '').trim()) {
+    ElMessage.warning('请先输入 API Key')
+    return
+  }
+  testingLlm.value = true
+  llmTestResult.value = null
+  try {
+    // 如果填写了新的 api key，先临时保存以便测试
+    if (String(recommendForm.value.llmApiKey || '').trim()) {
+      await settingsApi.updateRuntime({
+        llm_base_url: recommendForm.value.llmBaseUrl,
+        llm_model: recommendForm.value.llmModel,
+        llm_api_key: recommendForm.value.llmApiKey
+      })
+    }
+    const { data } = await settingsApi.checkLlm()
+    llmTestResult.value = data
+    if (data.valid) {
+      ElMessage.success('LLM 连接成功')
+    } else {
+      ElMessage.error(data.message || 'LLM 连接失败')
+    }
+  } catch (error) {
+    const detail = error.response?.data?.detail || error.message || '测试失败'
+    llmTestResult.value = { valid: false, message: detail }
+    ElMessage.error(detail)
+  } finally {
+    testingLlm.value = false
   }
 }
 
