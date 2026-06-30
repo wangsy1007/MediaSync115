@@ -82,7 +82,14 @@ async def ensure_tables_exist(*table_names: str) -> bool:
             table_name in existing_tables for table_name in table_names
         ):
             return False
-        await conn.run_sync(Base.metadata.create_all)
+        try:
+            await conn.run_sync(Base.metadata.create_all)
+        except OperationalError as exc:
+            msg = str(exc or "").lower()
+            if "already exists" in msg:
+                pass
+            else:
+                raise
         return True
 
 
