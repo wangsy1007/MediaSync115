@@ -1487,7 +1487,7 @@ class Pan115Service:
         normalized_app = normalize_pan115_qr_login_app(app)
 
         raw_token = await asyncio.wait_for(
-            _get_p115_client_cls().login_qrcode_token(app=normalized_app, async_=True, timeout=8),
+            _get_p115_client_cls().login_qrcode_token(async_=True, timeout=8),
             timeout=8.5,
         )
         token_payload = self._extract_qr_data(raw_token)
@@ -1532,6 +1532,9 @@ class Pan115Service:
     async def get_qr_login_image(self, token: str) -> bytes:
         """
         获取扫码二维码PNG图片，供前端直接展示。
+
+        使用本地 qrcode 库编码完整的扫码 URL，而非依赖 115 的
+        图片生成 API（该 API 返回的二维码内容已过时/不含完整 uid）。
         """
         await self._clear_expired_qr_sessions()
         normalized = str(token or "").strip()
@@ -1541,18 +1544,34 @@ class Pan115Service:
             item = self._QR_LOGIN_PENDING.get(normalized)
         if not item:
             raise ValueError("扫码会话不存在或已过期，请重新生成二维码")
-        uid = str(item.get("uid") or "").strip()
-        if not uid:
-            raise RuntimeError("扫码会话缺少uid，无法获取二维码图片")
-        image_bytes = await asyncio.wait_for(
-            _get_p115_client_cls().login_qrcode(
-                uid, app="web", async_=True, timeout=8
-            ),
-            timeout=8.5,
+        qr_url = str(item.get("qr_url") or "").strip()
+        if not qr_url:
+            uid = str(item.get("uid") or "").strip()
+            if not uid:
+                raise RuntimeError("扫码会话缺少 uid 和 qr_url")
+            qr_url = f"https://115.com/scan/dg-{uid}"
+
+        import io
+        import qrcode
+        from qrcode.image.pil import PilImage
+
+        qr = qrcode.QRCode(
+            version=None,  # 自动选择最小版本
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
         )
-        if not isinstance(image_bytes, (bytes, bytearray)):
-            raise RuntimeError("二维码图片响应异常")
-        return bytes(image_bytes)
+        qr.add_data(qr_url)
+        qr.make(fit=True)
+
+        img = qr.make_image(
+            image_factory=PilImage,
+            fill_color="black",
+            back_color="white",
+        )
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
 
     async def check_qr_login_status(self, token: str) -> Dict[str, Any]:
         """
