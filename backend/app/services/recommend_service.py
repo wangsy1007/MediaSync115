@@ -28,8 +28,14 @@ _PROFILE_PLAYED_LIMIT = 40
 _PROFILE_RESUME_LIMIT = 16
 _PROFILE_FAVORITE_LIMIT = 24
 _PROFILE_LATEST_LIMIT = 16
+_RECENT_LIBRARY_MOVIES = 40
+_RECENT_LIBRARY_SERIES = 20
 _TOP_GENRES = 8
 _TOP_PEOPLE = 6
+
+# 观看完成度阈值
+_HIGH_COMPLETION = 0.8   # >= 80% → 强兴趣
+_LOW_COMPLETION = 0.3    # <  30% → 弱兴趣/弃剧
 
 
 def _extract_tmdb_id(item: dict[str, Any]) -> int | None:
@@ -88,6 +94,43 @@ def _item_people(item: dict[str, Any]) -> list[str]:
     return names
 
 
+def _item_directors(item: dict[str, Any]) -> list[str]:
+    """仅提取导演名称。"""
+    people = item.get("People")
+    if not isinstance(people, list):
+        return []
+    names: list[str] = []
+    for person in people:
+        if not isinstance(person, dict):
+            continue
+        if str(person.get("Type") or "").strip().lower() != "director":
+            continue
+        name = str(person.get("Name") or "").strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _item_watch_completion(item: dict[str, Any]) -> float | None:
+    """计算观看完成百分比（0.0~1.0），无法计算时返回 None。"""
+    try:
+        played_pct = item.get("PlayedPercentage")
+        if played_pct is not None:
+            return float(played_pct) / 100.0
+    except Exception:
+        pass
+    try:
+        pos = item.get("PlaybackPositionTicks")
+        run = item.get("RunTimeTicks")
+        if pos is not None and run is not None:
+            r = float(run)
+            if r > 0:
+                return float(pos) / r
+    except Exception:
+        pass
+    return None
+
+
 class RecommendService:
     def __init__(self) -> None:
         self._generate_lock = asyncio.Lock()
@@ -95,7 +138,7 @@ class RecommendService:
     # —— 画像构建 ——
 
     async def build_profile(self) -> dict[str, Any]:
-        """从 Emby 用户行为数据聚合出紧凑画像。"""
+        """从 Emby 用户行为数据聚合出紧凑画像（含入库权重 + 观看时长权重）。"""
         user_id = await emby_service.pick_user_id()
         profile: dict[str, Any] = {
             "user_id": user_id,
@@ -106,31 +149,91 @@ class RecommendService:
             "top_people": [],
             "year_range": "",
             "summary": "",
+            # —— 权重维度 ——
+            "high_interest_genres": [],       # 高权重类型（入库频繁 + 高完成度）
+            "high_interest_directors": [],    # 高权重导演
+            "low_interest_signals": [],       # 低兴趣信号（弃剧 / 低完成度类型）
         }
         if not user_id:
             profile["summary"] = "未配置 Emby 用户，无法获取观影画像。"
             return profile
 
-        played, resume, favorites, latest = await asyncio.gather(
+        # 并行拉取所有数据源
+        played, resume, favorites, latest, recent_movies, recent_series = await asyncio.gather(
             emby_service.get_user_played(user_id, _PROFILE_PLAYED_LIMIT),
             emby_service.get_user_resume(user_id, _PROFILE_RESUME_LIMIT),
             emby_service.get_user_favorites(user_id, _PROFILE_FAVORITE_LIMIT),
             emby_service.get_user_latest(user_id, _PROFILE_LATEST_LIMIT),
+            emby_service.list_recent_movies(_RECENT_LIBRARY_MOVIES),
+            emby_service.list_recent_series(_RECENT_LIBRARY_SERIES),
         )
 
         genre_counter: Counter[str] = Counter()
         people_counter: Counter[str] = Counter()
         years: list[int] = []
 
+        # —— 维度 1：频繁入库权重 ——
+        # 统计最近入库影视的类型和导演分布，反映用户"在追什么"
+        library_genre_counter: Counter[str] = Counter()
+        library_director_counter: Counter[str] = Counter()
+        for item in recent_movies + recent_series:
+            library_genre_counter.update(_item_genres(item))
+            library_director_counter.update(_item_directors(item))
+
+        # 最近添加的用户侧条目也计入
+        for item in latest:
+            library_genre_counter.update(_item_genres(item))
+
+        # —— 维度 2：观看时长权重 ——
+        # 对已看/续播条目按完成度分级，高完成度 → 高权重信号
+        high_completion_titles: list[str] = []
+        low_completion_signals: list[str] = []
+        played_full = 0
+        played_high = 0
+        played_low = 0
+
         for item in played:
             title = _item_title(item)
             year = _item_year(item)
+            completion = _item_watch_completion(item)
             if title:
-                profile["recent_played"].append({"title": title, "year": year})
-            genre_counter.update(_item_genres(item))
-            people_counter.update(_item_people(item))
+                profile["recent_played"].append({
+                    "title": title,
+                    "year": year,
+                    "completion": round(completion * 100, 1) if completion is not None else None,
+                })
+            # 高完成度 → 类型/导演获得更高权重（乘 2）
+            weight = 2 if (completion is not None and completion >= _HIGH_COMPLETION) else 1
+            genre_counter.update({g: weight for g in _item_genres(item)})
+            people_counter.update({p: weight for p in _item_people(item)})
             if year and year.isdigit():
                 years.append(int(year))
+            if completion is not None:
+                if completion >= _HIGH_COMPLETION:
+                    played_full += 1
+                    if title:
+                        high_completion_titles.append(title)
+                elif completion < _LOW_COMPLETION:
+                    played_low += 1
+                else:
+                    played_high += 1
+
+        # 续播中（resume）→ 中等兴趣信号
+        for item in resume:
+            title = _item_title(item)
+            completion = _item_watch_completion(item)
+            if title:
+                profile["in_progress"].append({
+                    "title": title,
+                    "year": _item_year(item),
+                    "completion": round(completion * 100, 1) if completion is not None else None,
+                })
+            weight = 1
+            if completion is not None and completion < _LOW_COMPLETION:
+                weight = 0  # 完全弃剧，不贡献权重
+                if title:
+                    low_completion_signals.append(title)
+            genre_counter.update({g: weight for g in _item_genres(item)})
 
         for item in favorites:
             title = _item_title(item)
@@ -139,22 +242,49 @@ class RecommendService:
             genre_counter.update(_item_genres(item))
             people_counter.update(_item_people(item))
 
-        for item in resume:
-            title = _item_title(item)
-            if title:
-                profile["in_progress"].append({"title": title, "year": _item_year(item)})
+        # 合并入库权重到主计数器
+        for g, count in library_genre_counter.items():
+            genre_counter[g] += count * 3  # 入库行为 ×3 权重（主动入库是最强信号）
 
-        # 最近添加也参与类型统计，丰富画像
-        for item in latest:
-            genre_counter.update(_item_genres(item))
+        for d, count in library_director_counter.items():
+            people_counter[d] += count * 3  # 入库导演 ×3 权重
 
         profile["top_genres"] = [g for g, _ in genre_counter.most_common(_TOP_GENRES)]
         profile["top_people"] = [p for p, _ in people_counter.most_common(_TOP_PEOPLE)]
         if years:
             profile["year_range"] = f"{min(years)}-{max(years)}"
 
-        if not profile["recent_played"] and not profile["favorites"]:
-            profile["summary"] = "用户观影数据较少，请结合大众口碑进行推荐。"
+        # 高兴趣信号
+        if library_genre_counter:
+            profile["high_interest_genres"] = [
+                f"{g}({c}部)" for g, c in library_genre_counter.most_common(5)
+            ]
+        if library_director_counter:
+            profile["high_interest_directors"] = [
+                f"{d}({c}部)" for d, c in library_director_counter.most_common(5)
+            ]
+
+        # 低兴趣信号
+        if low_completion_signals:
+            profile["low_interest_signals"] = low_completion_signals[:6]
+
+        # 总结文字
+        parts: list[str] = []
+        if profile["high_interest_genres"]:
+            parts.append("经常入库的类型：" + "、".join(profile["high_interest_genres"]))
+        if profile["high_interest_directors"]:
+            parts.append("常入库的导演：" + "、".join(profile["high_interest_directors"]))
+        if played_full > 0:
+            parts.append(f"高完成度观看 {played_full} 部（强兴趣）")
+        if played_low > 0:
+            parts.append(f"低完成度/弃剧 {played_low} 部（弱兴趣）")
+        if low_completion_signals:
+            parts.append("可能不感兴趣的类型：已弃或低完成度影片")
+        profile["summary"] = "；".join(parts) if parts else (
+            "用户观影数据较少，请结合大众口碑进行推荐。"
+            if not profile["recent_played"] and not profile["favorites"]
+            else ""
+        )
         return profile
 
     # —— TMDB 解析与过滤 ——

@@ -20,56 +20,77 @@ logger = logging.getLogger(__name__)
 _LLM_HTTP_TIMEOUT = httpx.Timeout(60.0, connect=15.0)
 
 _SYSTEM_PROMPT = (
-    "你是一位资深影视推荐助手。根据给出的用户观影画像，推荐该用户可能喜欢、"
+    "你是一位资深影视推荐助手。根据给出的用户观影画像与权重信号，推荐该用户可能喜欢、"
     "但尚未看过的影视剧。\n"
     "要求：\n"
-    "1. 综合画像中的偏好类型、近期观看、收藏与喜欢的导演/演员进行推算。\n"
-    "2. 不要推荐画像里已经出现过的作品。\n"
-    "3. 优先推荐口碑较好、真实存在的影视剧，片名使用官方中文译名（若无则用原名）。\n"
-    "4. 只返回 JSON 对象，格式为 {\"recommendations\": [{\"title\": \"\", \"year\": \"\", "
+    "1. 重点参考画像中的「高兴趣类型」「常入库导演」和「高完成度观看」这几项高权重信号。\n"
+    "2. 避免推荐与「低兴趣信号（弃剧/低完成度）」同类型或同导演的作品。\n"
+    "3. 不要推荐画像里已经出现过的作品。\n"
+    "4. 优先推荐口碑较好、真实存在的影视剧，片名使用官方中文译名（若无则用原名）。\n"
+    "5. 只返回 JSON 对象，格式为 {\"recommendations\": [{\"title\": \"\", \"year\": \"\", "
     "\"media_type\": \"movie|tv\", \"reason\": \"\"}]}。\n"
-    "5. year 为首播年份字符串（可为空），reason 用一句话说明推荐理由（中文，<=40 字）。\n"
-    "6. 不要输出 JSON 以外的任何内容。"
+    "6. year 为首播年份字符串（可为空），reason 用一句话说明推荐理由（中文，<=40 字），"
+    "理由中可提及与用户偏好的关联（如\"你常看科幻，这部评分不错的太空片应该对口\"）。\n"
+    "7. 不要输出 JSON 以外的任何内容。"
 )
 
 
 def _build_user_prompt(profile: dict[str, Any], count: int) -> str:
     parts: list[str] = [f"请推荐 {count} 部该用户可能喜欢的影视剧。"]
 
+    # —— 高权重信号（最重要）——
+    high_genres = profile.get("high_interest_genres") or []
+    if high_genres:
+        parts.append("【高权重-常入库类型】" + "、".join(high_genres) + "（用户主动收集，优先推荐这些类型）")
+    high_directors = profile.get("high_interest_directors") or []
+    if high_directors:
+        parts.append("【高权重-常入库导演】" + "、".join(high_directors) + "（用户主动收集，优先推荐这些导演的作品）")
+
+    # —— 偏好类型（综合权重）——
     top_genres = profile.get("top_genres") or []
     if top_genres:
-        parts.append("偏好类型：" + "、".join(top_genres))
+        parts.append("【偏好类型】" + "、".join(top_genres))
 
+    # —— 低兴趣信号（应规避）——
+    low_signals = profile.get("low_interest_signals") or []
+    if low_signals:
+        parts.append("【避雷】以下作品用户弃剧或仅短暂观看，请避免推荐同类型/同导演："
+                      + "、".join(low_signals))
+
+    # —— 已看 / 在看 / 收藏 ——
     played = profile.get("recent_played") or []
     if played:
         played_text = "、".join(
-            f"{p.get('title')}{('(' + str(p.get('year')) + ')') if p.get('year') else ''}"
+            f"{p.get('title')}{('(' + str(p.get('year')) + ')') if p.get('year') else ''}{('' if p.get('completion') is None else '·完成度'+str(int(p['completion']))+'%')}"
             for p in played
             if p.get("title")
         )
-        parts.append("近期已看：" + played_text)
+        parts.append("【近期已看（含完成度）】" + played_text)
 
     resume = profile.get("in_progress") or []
     if resume:
-        resume_text = "、".join(p.get("title", "") for p in resume if p.get("title"))
-        parts.append("在看：" + resume_text)
+        resume_text = "、".join(
+            f"{p.get('title')}{('' if p.get('completion') is None else '·进度'+str(int(p['completion']))+'%')}"
+            for p in resume if p.get("title")
+        )
+        parts.append("【在看】" + resume_text)
 
     favorites = profile.get("favorites") or []
     if favorites:
         fav_text = "、".join(p.get("title", "") for p in favorites if p.get("title"))
-        parts.append("收藏：" + fav_text)
+        parts.append("【收藏】" + fav_text)
 
     people = profile.get("top_people") or []
     if people:
-        parts.append("喜欢的导演/演员：" + "、".join(people))
+        parts.append("【关注导演/演员】" + "、".join(people))
 
     year_range = profile.get("year_range")
     if year_range:
-        parts.append(f"偏好年代区间：{year_range}")
+        parts.append(f"【偏好年代】{year_range}")
 
     profile_summary = profile.get("summary")
     if profile_summary:
-        parts.append(profile_summary)
+        parts.append("【画像总结】" + profile_summary)
 
     parts.append("请严格按系统要求的 JSON 格式返回。")
     return "\n".join(parts)

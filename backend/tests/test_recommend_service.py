@@ -72,13 +72,15 @@ class TestBuildProfile:
         async def fake_played(user_id, limit=50):
             return [
                 {"Name": "盗梦空间", "ProductionYear": 2010, "Genres": ["科幻", "悬疑"],
-                 "ProviderIds": {"Tmdb": "123"}, "People": [{"Name": "诺兰", "Type": "Director"}]},
+                 "ProviderIds": {"Tmdb": "123"}, "People": [{"Name": "诺兰", "Type": "Director"}],
+                 "PlayedPercentage": 95.0},
                 {"Name": "星际穿越", "ProductionYear": 2014, "Genres": ["科幻", "冒险"],
-                 "ProviderIds": {"Tmdb": "124"}},
+                 "ProviderIds": {"Tmdb": "124"}, "PlayedPercentage": 90.0},
             ]
 
         async def fake_resume(user_id, limit=20):
-            return [{"Name": "沙丘", "ProductionYear": 2021, "Genres": ["科幻"]}]
+            return [{"Name": "沙丘", "ProductionYear": 2021, "Genres": ["科幻"],
+                     "PlaybackPositionTicks": 500, "RunTimeTicks": 1000}]  # 50% 进度
 
         async def fake_favorites(user_id, limit=30):
             return [{"Name": "银翼杀手", "ProductionYear": 2017, "Genres": ["科幻", "剧情"]}]
@@ -86,11 +88,19 @@ class TestBuildProfile:
         async def fake_latest(user_id, limit=20):
             return [{"Name": "奥本海默", "Genres": ["传记"]}]
 
+        async def fake_recent_movies(limit=30):
+            return []
+
+        async def fake_recent_series(limit=30):
+            return []
+
         monkeypatch.setattr(emby_service, "pick_user_id", fake_pick_user_id)
         monkeypatch.setattr(emby_service, "get_user_played", fake_played)
         monkeypatch.setattr(emby_service, "get_user_resume", fake_resume)
         monkeypatch.setattr(emby_service, "get_user_favorites", fake_favorites)
         monkeypatch.setattr(emby_service, "get_user_latest", fake_latest)
+        monkeypatch.setattr(emby_service, "list_recent_movies", fake_recent_movies)
+        monkeypatch.setattr(emby_service, "list_recent_series", fake_recent_series)
 
         service = RecommendService()
         profile = await service.build_profile()
@@ -98,12 +108,57 @@ class TestBuildProfile:
         assert profile["user_id"] == "user-1"
         titles = {p["title"] for p in profile["recent_played"]}
         assert "盗梦空间" in titles and "星际穿越" in titles
+        # 已看条目现在包含 completion
+        assert profile["recent_played"][0].get("completion") is not None
         assert "银翼杀手" in {p["title"] for p in profile["favorites"]}
         assert "沙丘" in {p["title"] for p in profile["in_progress"]}
-        # 科幻出现 4 次，应排第一
+        # 沙丘进度 50%
+        assert profile["in_progress"][0].get("completion") == 50.0
+        # 科幻出现多次，应排第一
         assert profile["top_genres"][0] == "科幻"
         assert "诺兰" in profile["top_people"]
         assert profile["year_range"] == "2010-2014"
+        # 新增权重字段
+        assert isinstance(profile.get("high_interest_genres"), list)
+        assert isinstance(profile.get("high_interest_directors"), list)
+        assert isinstance(profile.get("low_interest_signals"), list)
+
+    @pytest.mark.asyncio
+    async def test_build_profile_with_library_weight(self, monkeypatch) -> None:
+        """入库权重：最近入库的科幻/悬疑片 + 诺兰导演应有高权重。"""
+        async def fake_pick():
+            return "user-1"
+        async def fake_played(uid, limit):
+            return []
+        async def fake_resume(uid, limit):
+            return []
+        async def fake_fav(uid, limit):
+            return []
+        async def fake_latest(uid, limit):
+            return []
+        async def fake_recent_movies(limit):
+            return [
+                {"Name": "信条", "ProductionYear": 2020, "Genres": ["科幻", "动作"],
+                 "People": [{"Name": "诺兰", "Type": "Director"}]},
+                {"Name": "沙丘2", "ProductionYear": 2024, "Genres": ["科幻", "冒险"],
+                 "People": [{"Name": "维伦纽瓦", "Type": "Director"}]},
+            ]
+        async def fake_recent_series(limit):
+            return [
+                {"Name": "基地", "ProductionYear": 2021, "Genres": ["科幻", "剧情"]},
+            ]
+
+        for attr, fn in [("pick_user_id", fake_pick), ("get_user_played", fake_played),
+                          ("get_user_resume", fake_resume), ("get_user_favorites", fake_fav),
+                          ("get_user_latest", fake_latest), ("list_recent_movies", fake_recent_movies),
+                          ("list_recent_series", fake_recent_series)]:
+            monkeypatch.setattr(emby_service, attr, fn)
+
+        profile = await RecommendService().build_profile()
+        assert len(profile["high_interest_genres"]) >= 1
+        assert "科幻" in str(profile["high_interest_genres"])
+        assert profile["top_genres"][0] == "科幻"  # 3*3=9 次 > 其它
+        assert any("诺兰" in d for d in profile["high_interest_directors"])
 
     @pytest.mark.asyncio
     async def test_build_profile_no_user(self, monkeypatch) -> None:

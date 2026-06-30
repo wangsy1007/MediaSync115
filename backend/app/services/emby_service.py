@@ -257,6 +257,38 @@ class EmbyService:
             return str(user_id)
         return None
 
+    async def list_recent_movies(self, limit: int = 30) -> list[dict[str, Any]]:
+        """获取最近入库的电影（按 DateCreated 倒序），用于分析入库偏好。"""
+        if not self.base_url or not self.api_key:
+            return []
+        return await self._fetch_items(
+            self._get_client(),
+            {
+                "IncludeItemTypes": "Movie",
+                "Recursive": "true",
+                "SortBy": "DateCreated",
+                "SortOrder": "Descending",
+                "Fields": "ProviderIds,Genres,ProductionYear,Studios,People,DateCreated,RunTimeTicks,PlaybackPositionTicks,PlayedPercentage",
+                "Limit": str(limit),
+            },
+        )
+
+    async def list_recent_series(self, limit: int = 15) -> list[dict[str, Any]]:
+        """获取最近入库的剧集（按 DateCreated 倒序）。"""
+        if not self.base_url or not self.api_key:
+            return []
+        return await self._fetch_items(
+            self._get_client(),
+            {
+                "IncludeItemTypes": "Series",
+                "Recursive": "true",
+                "SortBy": "DateCreated",
+                "SortOrder": "Descending",
+                "Fields": "ProviderIds,Genres,ProductionYear,Studios,People,DateCreated,RunTimeTicks,PlaybackPositionTicks,PlayedPercentage",
+                "Limit": str(limit),
+            },
+        )
+
     async def _fetch_user_items(
         self,
         client: httpx.AsyncClient,
@@ -271,7 +303,7 @@ class EmbyService:
         params: dict[str, Any] = {
             "api_key": self.api_key,
             "Recursive": "true",
-            "Fields": "ProviderIds,Genres,ProductionYear,Studios,People",
+            "Fields": "ProviderIds,Genres,ProductionYear,Studios,People,RunTimeTicks,PlaybackPositionTicks,PlayedPercentage",
         }
         params.update(extra_params)
         url = f"{self.base_url}/emby/Users/{user_id}{endpoint}"
@@ -335,7 +367,7 @@ class EmbyService:
                     "api_key": self.api_key,
                     "Recursive": "true",
                     "IncludeItemTypes": "Movie,Series",
-                    "Fields": "ProviderIds,Genres,ProductionYear,Studios,People",
+                    "Fields": "ProviderIds,Genres,ProductionYear,Studios,People,RunTimeTicks,PlaybackPositionTicks,PlayedPercentage",
                     "Limit": str(limit),
                 },
                 timeout=15.0,
@@ -379,7 +411,7 @@ class EmbyService:
                 params={
                     "api_key": self.api_key,
                     "IncludeItemTypes": "Movie,Series",
-                    "Fields": "ProviderIds,Genres,ProductionYear,Studios,People",
+                    "Fields": "ProviderIds,Genres,ProductionYear,Studios,People,RunTimeTicks,PlaybackPositionTicks,PlayedPercentage",
                     "Limit": str(limit),
                 },
                 timeout=15.0,
