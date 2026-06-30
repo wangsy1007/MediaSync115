@@ -250,11 +250,11 @@ class EmbyService:
 
         users = await self.list_users()
         for user in users:
-            user_id = self._safe_int(user.get("Id"))
-            if user_id is None:
+            user_id = str(user.get("Id") or "").strip()
+            if not user_id:
                 continue
-            self._picked_user_cache = (str(user_id), now + 600)
-            return str(user_id)
+            self._picked_user_cache = (user_id, now + 600)
+            return user_id
         return None
 
     async def list_recent_movies(self, limit: int = 30) -> list[dict[str, Any]]:
