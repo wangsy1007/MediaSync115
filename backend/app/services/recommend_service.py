@@ -24,18 +24,22 @@ from app.services.tmdb_service import tmdb_service
 
 logger = logging.getLogger(__name__)
 
-_PROFILE_PLAYED_LIMIT = 40
+_PROFILE_PLAYED_LIMIT = 50
 _PROFILE_RESUME_LIMIT = 16
 _PROFILE_FAVORITE_LIMIT = 24
 _PROFILE_LATEST_LIMIT = 16
-_RECENT_LIBRARY_MOVIES = 40
-_RECENT_LIBRARY_SERIES = 20
+_RECENT_LIBRARY_MOVIES = 20
+_RECENT_LIBRARY_SERIES = 10
 _TOP_GENRES = 8
 _TOP_PEOPLE = 6
 
 # 观看完成度阈值
 _HIGH_COMPLETION = 0.8   # >= 80% → 强兴趣
 _LOW_COMPLETION = 0.3    # <  30% → 弱兴趣/弃剧
+
+# 最近条目数量（用于分离近期/历史信号）
+_RECENT_WATCHED_COUNT = 12   # 前 N 条是"最近观看"
+_RECENT_ADDED_COUNT = 15     # 前 N 条是"最近入库"
 
 
 def _extract_tmdb_id(item: dict[str, Any]) -> int | None:
@@ -138,21 +142,32 @@ class RecommendService:
     # —— 画像构建 ——
 
     async def build_profile(self) -> dict[str, Any]:
-        """从 Emby 用户行为数据聚合出紧凑画像（含入库权重 + 观看时长权重）。"""
+        """从 Emby 用户行为数据聚合出紧凑画像。
+
+        权重体系（从高到低）：
+        - 最近入库 ×5（主动收集 → 当前最想看的）
+        - 最近观看 ×4（刚看完的印象最深 → 趁热打铁）
+        - 收藏 ×2
+        - 历史观看 ×1
+        - 库内总量 ×2（长期偏好）
+        """
         user_id = await emby_service.pick_user_id()
         profile: dict[str, Any] = {
             "user_id": user_id,
             "top_genres": [],
-            "recent_played": [],
-            "in_progress": [],
-            "favorites": [],
             "top_people": [],
             "year_range": "",
             "summary": "",
-            # —— 权重维度 ——
-            "high_interest_genres": [],       # 高权重类型（入库频繁 + 高完成度）
-            "high_interest_directors": [],    # 高权重导演
-            "low_interest_signals": [],       # 低兴趣信号（弃剧 / 低完成度类型）
+            # —— 时间维度信号 ——
+            "recently_watched": [],          # 最近观看（前12条，最重要）
+            "recently_added": [],            # 最近入库（前15条，最强信号）
+            "older_watched_summary": "",     # 历史已看的偏好总结
+            "in_progress": [],
+            "favorites": [],
+            # —— 权重信号 ——
+            "high_interest_genres": [],
+            "high_interest_directors": [],
+            "low_interest_signals": [],
         }
         if not user_id:
             profile["summary"] = "未配置 Emby 用户，无法获取观影画像。"
@@ -171,54 +186,88 @@ class RecommendService:
         genre_counter: Counter[str] = Counter()
         people_counter: Counter[str] = Counter()
         years: list[int] = []
-
-        # —— 维度 1：频繁入库权重 ——
-        # 统计最近入库影视的类型和导演分布，反映用户"在追什么"
         library_genre_counter: Counter[str] = Counter()
         library_director_counter: Counter[str] = Counter()
-        for item in recent_movies + recent_series:
-            library_genre_counter.update(_item_genres(item))
-            library_director_counter.update(_item_directors(item))
 
-        # 最近添加的用户侧条目也计入
-        for item in latest:
-            library_genre_counter.update(_item_genres(item))
+        # ============================================================
+        # 信号 1：最近入库（最高权重 ×5）—— 用户刚主动收集的影视
+        # ============================================================
+        recently_added_items = (recent_movies + recent_series)[:_RECENT_ADDED_COUNT]
+        recent_added_titles: list[str] = []
+        for item in recently_added_items:
+            title = _item_title(item)
+            if title:
+                genres = _item_genres(item)
+                dirs = _item_directors(item)
+                recent_added_titles.append(title)
+                library_genre_counter.update(genres)
+                library_director_counter.update(dirs)
+                # 最近入库 ×5 进入主计数器
+                genre_counter.update({g: 5 for g in genres})
+                people_counter.update({p: 5 for p in _item_people(item)})
+                people_counter.update({d: 5 for d in dirs})
+        profile["recently_added"] = recent_added_titles[:15]
 
-        # —— 维度 2：观看时长权重 ——
-        # 对已看/续播条目按完成度分级，高完成度 → 高权重信号
-        high_completion_titles: list[str] = []
-        low_completion_signals: list[str] = []
-        played_full = 0
-        played_high = 0
-        played_low = 0
+        # ============================================================
+        # 信号 2：最近观看（高权重 ×4）—— 刚看完的印象最深
+        # ============================================================
+        recently_watched = played[:_RECENT_WATCHED_COUNT]
+        older_watched = played[_RECENT_WATCHED_COUNT:]
+        recently_watched_titles: list[str] = []
+        recently_watched_genres: Counter[str] = Counter()
+        recently_watched_people: Counter[str] = Counter()
 
-        for item in played:
+        for item in recently_watched:
             title = _item_title(item)
             year = _item_year(item)
             completion = _item_watch_completion(item)
             if title:
-                profile["recent_played"].append({
-                    "title": title,
-                    "year": year,
-                    "completion": round(completion * 100, 1) if completion is not None else None,
-                })
-            # 高完成度 → 类型/导演获得更高权重（乘 2）
-            weight = 2 if (completion is not None and completion >= _HIGH_COMPLETION) else 1
-            genre_counter.update({g: weight for g in _item_genres(item)})
-            people_counter.update({p: weight for p in _item_people(item)})
+                recently_watched_titles.append(
+                    f"{title}{'(' + year + ')' if year else ''}"
+                )
+            w = 4 if (completion is None or completion >= _HIGH_COMPLETION) else 2
+            genre_counter.update({g: w for g in _item_genres(item)})
+            people_counter.update({p: w for p in _item_people(item)})
+            recently_watched_genres.update(_item_genres(item))
+            recently_watched_people.update(_item_people(item))
             if year and year.isdigit():
                 years.append(int(year))
+        profile["recently_watched"] = recently_watched_titles
+
+        # ============================================================
+        # 信号 3：历史观看（基础权重 ×1）
+        # ============================================================
+        played_full = 0
+        played_low = 0
+        low_completion_signals: list[str] = []
+        older_genres: Counter[str] = Counter()
+
+        for item in older_watched:
+            title = _item_title(item)
+            year = _item_year(item)
+            completion = _item_watch_completion(item)
+            if year and year.isdigit():
+                years.append(int(year))
+            w = 2 if (completion is not None and completion >= _HIGH_COMPLETION) else 1
+            genre_counter.update({g: w for g in _item_genres(item)})
+            people_counter.update({p: w for p in _item_people(item)})
+            older_genres.update(_item_genres(item))
             if completion is not None:
                 if completion >= _HIGH_COMPLETION:
                     played_full += 1
-                    if title:
-                        high_completion_titles.append(title)
                 elif completion < _LOW_COMPLETION:
                     played_low += 1
-                else:
-                    played_high += 1
 
-        # 续播中（resume）→ 中等兴趣信号
+        # 历史偏好总结
+        older_parts: list[str] = []
+        if older_genres:
+            older_parts.append(f"偏好类型：{'、'.join(g for g,_ in older_genres.most_common(6))}")
+        if older_parts:
+            profile["older_watched_summary"] = "；".join(older_parts)
+
+        # ============================================================
+        # 信号 4：续播/在看（中权重 ×1.5，弃剧 ×0）
+        # ============================================================
         for item in resume:
             title = _item_title(item)
             completion = _item_watch_completion(item)
@@ -228,61 +277,72 @@ class RecommendService:
                     "year": _item_year(item),
                     "completion": round(completion * 100, 1) if completion is not None else None,
                 })
-            weight = 1
+            w = 1.5 if (completion is None or completion >= _LOW_COMPLETION) else 0
             if completion is not None and completion < _LOW_COMPLETION:
-                weight = 0  # 完全弃剧，不贡献权重
                 if title:
                     low_completion_signals.append(title)
-            genre_counter.update({g: weight for g in _item_genres(item)})
+            genre_counter.update({g: w for g in _item_genres(item)})
 
+        # ============================================================
+        # 信号 5：收藏（×2）
+        # ============================================================
         for item in favorites:
             title = _item_title(item)
             if title:
                 profile["favorites"].append({"title": title, "year": _item_year(item)})
-            genre_counter.update(_item_genres(item))
-            people_counter.update(_item_people(item))
+            genre_counter.update({g: 2 for g in _item_genres(item)})
+            people_counter.update({p: 2 for p in _item_people(item)})
 
-        # 合并入库权重到主计数器
+        # ============================================================
+        # 合并：库内长期偏好（×2）补充全局信息
+        # ============================================================
         for g, count in library_genre_counter.items():
-            genre_counter[g] += count * 3  # 入库行为 ×3 权重（主动入库是最强信号）
-
+            genre_counter[g] += count * 2
         for d, count in library_director_counter.items():
-            people_counter[d] += count * 3  # 入库导演 ×3 权重
+            people_counter[d] += count * 2
 
+        # ============================================================
+        # 输出汇总
+        # ============================================================
         profile["top_genres"] = [g for g, _ in genre_counter.most_common(_TOP_GENRES)]
         profile["top_people"] = [p for p, _ in people_counter.most_common(_TOP_PEOPLE)]
         if years:
             profile["year_range"] = f"{min(years)}-{max(years)}"
 
-        # 高兴趣信号
-        if library_genre_counter:
+        # 高兴趣信号（最近入库 + 最近观看）
+        combined_high_genres: Counter[str] = Counter()
+        combined_high_genres.update(recently_watched_genres)
+        combined_high_genres.update({g: c * 2 for g, c in library_genre_counter.items()})
+        if combined_high_genres:
             profile["high_interest_genres"] = [
-                f"{g}({c}部)" for g, c in library_genre_counter.most_common(5)
+                f"{g}({c}条)" for g, c in combined_high_genres.most_common(6)
             ]
-        if library_director_counter:
+        combined_high_people: Counter[str] = Counter()
+        combined_high_people.update(recently_watched_people)
+        combined_high_people.update({d: c * 2 for d, c in library_director_counter.items()})
+        if combined_high_people:
             profile["high_interest_directors"] = [
-                f"{d}({c}部)" for d, c in library_director_counter.most_common(5)
+                f"{d}({c}条)" for d, c in combined_high_people.most_common(6)
             ]
 
-        # 低兴趣信号
         if low_completion_signals:
             profile["low_interest_signals"] = low_completion_signals[:6]
 
         # 总结文字
         parts: list[str] = []
-        if profile["high_interest_genres"]:
-            parts.append("经常入库的类型：" + "、".join(profile["high_interest_genres"]))
-        if profile["high_interest_directors"]:
-            parts.append("常入库的导演：" + "、".join(profile["high_interest_directors"]))
-        if played_full > 0:
-            parts.append(f"高完成度观看 {played_full} 部（强兴趣）")
+        if profile["recently_added"]:
+            parts.append(f"最近入库：{'、'.join(profile['recently_added'][:8])}")
+        if profile["recently_watched"]:
+            parts.append(f"最近观看：{'、'.join(profile['recently_watched'][:8])}")
+        if profile.get("older_watched_summary"):
+            parts.append(profile["older_watched_summary"])
         if played_low > 0:
-            parts.append(f"低完成度/弃剧 {played_low} 部（弱兴趣）")
+            parts.append(f"弃剧 {played_low} 部（弱兴趣）")
         if low_completion_signals:
-            parts.append("可能不感兴趣的类型：已弃或低完成度影片")
+            parts.append("已弃：" + "、".join(low_completion_signals[:4]))
         profile["summary"] = "；".join(parts) if parts else (
             "用户观影数据较少，请结合大众口碑进行推荐。"
-            if not profile["recent_played"] and not profile["favorites"]
+            if not profile["recently_watched"]
             else ""
         )
         return profile

@@ -106,22 +106,20 @@ class TestBuildProfile:
         profile = await service.build_profile()
 
         assert profile["user_id"] == "user-1"
-        titles = {p["title"] for p in profile["recent_played"]}
-        assert "盗梦空间" in titles and "星际穿越" in titles
-        # 已看条目现在包含 completion
-        assert profile["recent_played"][0].get("completion") is not None
+        # 最近观看是字符串列表（title(year) 格式）
+        assert any("盗梦空间" in t for t in profile["recently_watched"])
+        assert any("星际穿越" in t for t in profile["recently_watched"])
         assert "银翼杀手" in {p["title"] for p in profile["favorites"]}
         assert "沙丘" in {p["title"] for p in profile["in_progress"]}
         # 沙丘进度 50%
         assert profile["in_progress"][0].get("completion") == 50.0
-        # 科幻出现多次，应排第一
+        # 科幻出现多次（最近观看 ×4），应排第一
         assert profile["top_genres"][0] == "科幻"
         assert "诺兰" in profile["top_people"]
         assert profile["year_range"] == "2010-2014"
-        # 新增权重字段
-        assert isinstance(profile.get("high_interest_genres"), list)
-        assert isinstance(profile.get("high_interest_directors"), list)
-        assert isinstance(profile.get("low_interest_signals"), list)
+        # 新增字段
+        assert isinstance(profile.get("recently_added"), list)
+        assert isinstance(profile.get("older_watched_summary"), str)
 
     @pytest.mark.asyncio
     async def test_build_profile_with_library_weight(self, monkeypatch) -> None:
@@ -169,7 +167,7 @@ class TestBuildProfile:
         service = RecommendService()
         profile = await service.build_profile()
         assert profile["user_id"] is None
-        assert profile["recent_played"] == []
+        assert profile["recently_watched"] == []
         assert "未配置" in profile["summary"]
 
 

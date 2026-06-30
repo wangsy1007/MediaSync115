@@ -569,13 +569,19 @@ class EmbyService:
 
         url = f"{self.base_url}{endpoint}"
         start_index = 0
-        limit = 200
+        page_size = 200
+        # 若调用方指定了 Limit，用它作为单页大小及总上限
+        caller_limit = self._safe_int(params.get("Limit"))
+        max_items = caller_limit if caller_limit else None
+
         merged: list[dict[str, Any]] = []
         while True:
             query = dict(params)
             query["api_key"] = self.api_key
             query["StartIndex"] = start_index
-            query["Limit"] = limit
+            # 如果设置了上限，单页大小取上限和默认页大小的较小值
+            effective_limit = min(max_items, page_size) if max_items else page_size
+            query["Limit"] = effective_limit
             response = await client.get(url, params=query, timeout=timeout)
             response.raise_for_status()
             payload = response.json() if response.content else {}
@@ -587,13 +593,18 @@ class EmbyService:
             dict_rows = [row for row in rows if isinstance(row, dict)]
             merged.extend(dict_rows)
 
+            # 达到调用方要求的上限即停止
+            if max_items and len(merged) >= max_items:
+                merged = merged[:max_items]
+                break
+
             total = self._safe_int(payload.get("TotalRecordCount"), default=0) or 0
             if not dict_rows:
                 break
             start_index += len(dict_rows)
             if total > 0 and start_index >= total:
                 break
-            if len(dict_rows) < limit:
+            if len(dict_rows) < effective_limit:
                 break
         return merged
 

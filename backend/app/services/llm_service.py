@@ -20,73 +20,84 @@ logger = logging.getLogger(__name__)
 _LLM_HTTP_TIMEOUT = httpx.Timeout(60.0, connect=15.0)
 
 _SYSTEM_PROMPT = (
-    "你是一位资深影视推荐助手。根据给出的用户观影画像与权重信号，推荐该用户可能喜欢、"
+    "你是一位资深影视推荐助手。根据给出的用户观影画像，推荐该用户可能喜欢、"
     "但尚未看过的影视剧。\n"
+    "推荐优先级（从高到低）：\n"
+    "1. 与「最近入库」影片同类型、同导演或同题材的影视。用户刚把这些加入库中，"
+    "说明此刻正对这些内容有强烈兴趣，趁热推荐同类佳作效果最好。\n"
+    "2. 与「最近观看」影片相似的作品。用户刚看完这些，印象最深，关联推荐最精准。\n"
+    "3. 与长期偏好类型/导演匹配的口碑作品。\n"
+    "4. 避开「弃剧/低完成度」作品的类型和导演。\n"
     "要求：\n"
-    "1. 重点参考画像中的「高兴趣类型」「常入库导演」和「高完成度观看」这几项高权重信号。\n"
-    "2. 避免推荐与「低兴趣信号（弃剧/低完成度）」同类型或同导演的作品。\n"
-    "3. 不要推荐画像里已经出现过的作品。\n"
-    "4. 优先推荐口碑较好、真实存在的影视剧，片名使用官方中文译名（若无则用原名）。\n"
-    "5. 只返回 JSON 对象，格式为 {\"recommendations\": [{\"title\": \"\", \"year\": \"\", "
+    "5. 不要推荐画像里已经出现过的作品（尤其是最近观看和最近入库列表里的）。\n"
+    "6. 片名使用官方中文译名（若无则用原名），优先推荐评分较高的作品。\n"
+    "7. 只返回 JSON 对象，格式为 {\"recommendations\": [{\"title\": \"\", \"year\": \"\", "
     "\"media_type\": \"movie|tv\", \"reason\": \"\"}]}。\n"
-    "6. year 为首播年份字符串（可为空），reason 用一句话说明推荐理由（中文，<=40 字），"
-    "理由中可提及与用户偏好的关联（如\"你常看科幻，这部评分不错的太空片应该对口\"）。\n"
-    "7. 不要输出 JSON 以外的任何内容。"
+    "8. year 为首播年份字符串（可为空），reason 用一句话说明推荐理由（中文，<=40 字），"
+    "理由需提及与用户画像的关联（如\"刚入库《星际穿越》，这部同导演的太空片不容错过\"）。\n"
+    "9. 不要输出 JSON 以外的任何内容。"
 )
 
 
 def _build_user_prompt(profile: dict[str, Any], count: int) -> str:
     parts: list[str] = [f"请推荐 {count} 部该用户可能喜欢的影视剧。"]
 
-    # —— 高权重信号（最重要）——
+    # ====== 第一优先级：最近入库（最强信号） ======
+    recently_added = profile.get("recently_added") or []
+    if recently_added:
+        parts.append(
+            "【🔴 最近入库 - 最重要参考】用户刚把这些影视加进库中："
+            + "、".join(recently_added)
+            + "。请优先推荐与这些影片同类型、同导演、同题材的作品！"
+        )
+
+    # ====== 第二优先级：最近观看 ======
+    recently_watched = profile.get("recently_watched") or []
+    if recently_watched:
+        parts.append(
+            "【🟡 最近观看 - 重要参考】用户刚看完这些："
+            + "、".join(recently_watched)
+            + "。如果这些还在兴头上，趁热推荐同类影片。"
+        )
+
+    # ====== 高权重类型/导演 ======
     high_genres = profile.get("high_interest_genres") or []
     if high_genres:
-        parts.append("【高权重-常入库类型】" + "、".join(high_genres) + "（用户主动收集，优先推荐这些类型）")
+        parts.append("【高关注类型】" + "、".join(high_genres))
     high_directors = profile.get("high_interest_directors") or []
     if high_directors:
-        parts.append("【高权重-常入库导演】" + "、".join(high_directors) + "（用户主动收集，优先推荐这些导演的作品）")
+        parts.append("【高关注导演】" + "、".join(high_directors))
 
-    # —— 偏好类型（综合权重）——
+    # ====== 长期偏好背景 ======
     top_genres = profile.get("top_genres") or []
     if top_genres:
-        parts.append("【偏好类型】" + "、".join(top_genres))
-
-    # —— 低兴趣信号（应规避）——
-    low_signals = profile.get("low_interest_signals") or []
-    if low_signals:
-        parts.append("【避雷】以下作品用户弃剧或仅短暂观看，请避免推荐同类型/同导演："
-                      + "、".join(low_signals))
-
-    # —— 已看 / 在看 / 收藏 ——
-    played = profile.get("recent_played") or []
-    if played:
-        played_text = "、".join(
-            f"{p.get('title')}{('(' + str(p.get('year')) + ')') if p.get('year') else ''}{('' if p.get('completion') is None else '·完成度'+str(int(p['completion']))+'%')}"
-            for p in played
-            if p.get("title")
-        )
-        parts.append("【近期已看（含完成度）】" + played_text)
-
-    resume = profile.get("in_progress") or []
-    if resume:
-        resume_text = "、".join(
-            f"{p.get('title')}{('' if p.get('completion') is None else '·进度'+str(int(p['completion']))+'%')}"
-            for p in resume if p.get("title")
-        )
-        parts.append("【在看】" + resume_text)
-
-    favorites = profile.get("favorites") or []
-    if favorites:
-        fav_text = "、".join(p.get("title", "") for p in favorites if p.get("title"))
-        parts.append("【收藏】" + fav_text)
-
-    people = profile.get("top_people") or []
-    if people:
-        parts.append("【关注导演/演员】" + "、".join(people))
-
+        parts.append("【长期偏好类型】" + "、".join(top_genres))
+    top_people = profile.get("top_people") or []
+    if top_people:
+        parts.append("【长期关注导演/演员】" + "、".join(top_people))
+    older_summary = profile.get("older_watched_summary") or ""
+    if older_summary:
+        parts.append("【历史偏好】" + older_summary)
     year_range = profile.get("year_range")
     if year_range:
         parts.append(f"【偏好年代】{year_range}")
+
+    # ====== 正在看 ======
+    in_progress = profile.get("in_progress") or []
+    if in_progress:
+        resume_text = "、".join(
+            f"{p.get('title')}{'(' + str(int(p['completion'])) + '%)' if p.get('completion') is not None else ''}"
+            for p in in_progress if p.get("title")
+        )
+        parts.append("【正在看】" + resume_text)
+
+    # ====== 避雷 ======
+    low_signals = profile.get("low_interest_signals") or []
+    if low_signals:
+        parts.append(
+            "【⚠️ 避雷】用户弃剧或不喜欢这些，请避免推荐同类型/同导演："
+            + "、".join(low_signals)
+        )
 
     profile_summary = profile.get("summary")
     if profile_summary:
