@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.services.operation_log_service import operation_log_service
 from app.services.recommend_service import recommend_service
@@ -18,9 +18,21 @@ _refresh_lock = asyncio.Lock()
 
 
 @router.get("")
-async def get_recommendations():
-    """读取缓存的推荐列表与新鲜度信息。"""
-    return await recommend_service.get_cached()
+async def get_recommendations(
+    start: int = Query(0, ge=0),
+    limit: int = Query(12, ge=1, le=50),
+):
+    """读取缓存的推荐列表，支持分页。"""
+    cached = await recommend_service.get_cached()
+    all_items = cached.get("items") or []
+    sliced = all_items[start : start + limit]
+    return {
+        **cached,
+        "items": sliced,
+        "start": start,
+        "limit": limit,
+        "has_more": (start + limit) < len(all_items),
+    }
 
 
 @router.get("/status")

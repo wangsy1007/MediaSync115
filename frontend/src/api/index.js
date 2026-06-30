@@ -580,7 +580,7 @@ export const quarkApi = {
 }
 
 export const recommendApi = {
-  getList: () => api.get('/recommend'),
+  getList: (params = {}) => api.get('/recommend', { params }),
   getStatus: () => api.get('/recommend/status'),
   refresh: () => api.post('/recommend/refresh', null, { timeout: 120000 }),
 }

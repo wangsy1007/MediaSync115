@@ -757,7 +757,7 @@
               <el-input-number
                 v-model="recommendForm.recommendCount"
                 :min="4"
-                :max="40"
+                :max="50"
                 :step="1"
               />
             </el-form-item>

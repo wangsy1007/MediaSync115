@@ -201,7 +201,7 @@ class RuntimeSettingsService:
             "llm_enabled": False,
             "recommend_enabled": False,
             "recommend_cron": "0 3 * * *",
-            "recommend_count": 12,
+            "recommend_count": 30,
             "emby_recommend_user_id": "",
         }
         self._data = dict(self._defaults)
@@ -747,7 +747,7 @@ class RuntimeSettingsService:
 
     def get_recommend_count(self) -> int:
         try:
-            return max(4, min(40, int(self._data.get("recommend_count", 12) or 12)))
+            return max(4, min(50, int(self._data.get("recommend_count", 30) or 30)))
         except Exception:
             return 12
 
