@@ -1546,7 +1546,7 @@ class Pan115Service:
             raise RuntimeError("扫码会话缺少uid，无法获取二维码图片")
         image_bytes = await asyncio.wait_for(
             _get_p115_client_cls().login_qrcode(
-                uid, app=item.get("app", "alipaymini"), async_=True, timeout=8
+                uid, app="web", async_=True, timeout=8
             ),
             timeout=8.5,
         )
