@@ -1487,7 +1487,7 @@ class Pan115Service:
         normalized_app = normalize_pan115_qr_login_app(app)
 
         raw_token = await asyncio.wait_for(
-            _get_p115_client_cls().login_qrcode_token(async_=True, timeout=8),
+            _get_p115_client_cls().login_qrcode_token(app=normalized_app, async_=True, timeout=8),
             timeout=8.5,
         )
         token_payload = self._extract_qr_data(raw_token)
@@ -1545,7 +1545,9 @@ class Pan115Service:
         if not uid:
             raise RuntimeError("扫码会话缺少uid，无法获取二维码图片")
         image_bytes = await asyncio.wait_for(
-            _get_p115_client_cls().login_qrcode(uid, async_=True, timeout=8),
+            _get_p115_client_cls().login_qrcode(
+                uid, app=item.get("app", "alipaymini"), async_=True, timeout=8
+            ),
             timeout=8.5,
         )
         if not isinstance(image_bytes, (bytes, bytearray)):
