@@ -717,6 +717,71 @@
         </el-card>
       </el-tab-pane>
 
+      <el-tab-pane label="AI 推荐" name="recommend">
+        <el-card class="settings-card">
+          <template #header>
+            <div class="card-header">
+              <span>AI 推荐（猜你想看）</span>
+              <el-tag v-if="recommendForm.apiKeySet" type="success" size="small">已配置 Key</el-tag>
+            </div>
+          </template>
+          <el-form :model="recommendForm" label-width="140px">
+            <el-form-item label="启用推荐">
+              <el-switch v-model="recommendForm.recommendEnabled" />
+              <span class="form-tip">开启后将在「猜你想看」页面展示 AI 推荐影视</span>
+            </el-form-item>
+            <el-form-item label="LLM 接口地址">
+              <el-input
+                v-model="recommendForm.llmBaseUrl"
+                placeholder="例如: https://api.deepseek.com/v1"
+              />
+            </el-form-item>
+            <el-form-item label="模型名称">
+              <el-input
+                v-model="recommendForm.llmModel"
+                placeholder="例如: deepseek-chat"
+              />
+            </el-form-item>
+            <el-form-item label="API Key">
+              <el-input
+                v-model="recommendForm.llmApiKey"
+                type="password"
+                show-password
+                :placeholder="recommendForm.apiKeySet ? '已配置，留空则不修改' : '请输入 API Key'"
+              />
+            </el-form-item>
+            <el-form-item label="启用 LLM">
+              <el-switch v-model="recommendForm.llmEnabled" />
+            </el-form-item>
+            <el-form-item label="推荐数量">
+              <el-input-number
+                v-model="recommendForm.recommendCount"
+                :min="4"
+                :max="40"
+                :step="1"
+              />
+            </el-form-item>
+            <el-form-item label="定时刷新 Cron">
+              <el-input
+                v-model="recommendForm.recommendCron"
+                placeholder="0 3 * * *（每日 03:00）"
+              />
+              <span class="form-tip">标准 5 段 Cron，留空默认每日 03:00</span>
+            </el-form-item>
+            <el-form-item label="Emby 用户 ID">
+              <el-input
+                v-model="recommendForm.embyRecommendUserId"
+                placeholder="留空则自动取首个 Emby 用户"
+              />
+              <span class="form-tip">用于读取观影画像，留空自动选取</span>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingRecommend" @click="handleSaveRecommend">保存</el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
+      </el-tab-pane>
+
       <el-tab-pane label="Telegram" name="tg">
         <el-card class="settings-card">
           <template #header>
@@ -2031,6 +2096,18 @@ const feiniuForm = ref({
   syncEnabled: false,
   syncIntervalMinutes: 1440
 })
+const recommendForm = ref({
+  recommendEnabled: false,
+  llmBaseUrl: '',
+  llmModel: '',
+  llmApiKey: '',
+  apiKeySet: false,
+  llmEnabled: false,
+  recommendCount: 12,
+  recommendCron: '0 3 * * *',
+  embyRecommendUserId: ''
+})
+const savingRecommend = ref(false)
 const feiniuLoginForm = ref({
   username: '',
   password: ''
@@ -3750,6 +3827,45 @@ const handleSaveEmby = async () => {
   }
 }
 
+const handleSaveRecommend = async () => {
+  if (recommendForm.value.recommendEnabled || recommendForm.value.llmEnabled) {
+    if (!String(recommendForm.value.llmBaseUrl || '').trim()) {
+      ElMessage.warning('请输入 LLM 接口地址')
+      return
+    }
+    if (!String(recommendForm.value.llmModel || '').trim()) {
+      ElMessage.warning('请输入模型名称')
+      return
+    }
+    if (!recommendForm.value.apiKeySet && !String(recommendForm.value.llmApiKey || '').trim()) {
+      ElMessage.warning('请输入 API Key')
+      return
+    }
+  }
+  savingRecommend.value = true
+  try {
+    const payload = {
+      recommend_enabled: recommendForm.value.recommendEnabled,
+      llm_base_url: recommendForm.value.llmBaseUrl,
+      llm_model: recommendForm.value.llmModel,
+      llm_enabled: recommendForm.value.llmEnabled,
+      recommend_count: Number(recommendForm.value.recommendCount || 12),
+      recommend_cron: recommendForm.value.recommendCron,
+      emby_recommend_user_id: recommendForm.value.embyRecommendUserId
+    }
+    if (String(recommendForm.value.llmApiKey || '').trim()) {
+      payload.llm_api_key = recommendForm.value.llmApiKey
+    }
+    await settingsApi.updateRuntime(payload)
+    await fetchRuntimeSettings()
+    ElMessage.success('AI 推荐配置已保存')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || 'AI 推荐配置保存失败')
+  } finally {
+    savingRecommend.value = false
+  }
+}
+
 const handleTestEmby = async () => {
   if (!String(embyForm.value.url || '').trim()) {
     ElMessage.warning('请输入 Emby URL')
@@ -4635,6 +4751,16 @@ const fetchRuntimeSettings = async () => {
     feiniuForm.value.syncEnabled = !!data.feiniu_sync_enabled
     feiniuForm.value.syncIntervalMinutes = Number(data.feiniu_sync_interval_minutes || data.feiniu_sync_interval_hours * 60 || 1440)
 
+    recommendForm.value.recommendEnabled = !!data.recommend_enabled
+    recommendForm.value.llmBaseUrl = data.llm_base_url || ''
+    recommendForm.value.llmModel = data.llm_model || ''
+    recommendForm.value.apiKeySet = !!data.llm_api_key_set
+    recommendForm.value.llmApiKey = ''
+    recommendForm.value.llmEnabled = !!data.llm_enabled
+    recommendForm.value.recommendCount = Number(data.recommend_count || 12)
+    recommendForm.value.recommendCron = data.recommend_cron || '0 3 * * *'
+    recommendForm.value.embyRecommendUserId = data.emby_recommend_user_id || ''
+
     if (!pansouForm.value.baseUrl) {
       pansouForm.value.baseUrl = data.pansou_base_url || ''
     }
@@ -5229,6 +5355,13 @@ onBeforeUnmount(() => {
     :deep(.el-tabs__nav-wrap::-webkit-scrollbar) {
       display: none;
     }
+  }
+
+  .form-tip {
+    display: inline-block;
+    margin-left: 10px;
+    font-size: 12px;
+    color: var(--ms-text-muted);
   }
 
   h2 {

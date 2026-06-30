@@ -194,6 +194,15 @@ class RuntimeSettingsService:
             "strm_token_secret": "",
             "strm_proxy_enabled": False,
             "strm_proxy_port": 8099,
+            # —— AI 推荐（猜你想看）——
+            "llm_base_url": "https://api.deepseek.com/v1",
+            "llm_api_key_enc": "",
+            "llm_model": "deepseek-chat",
+            "llm_enabled": False,
+            "recommend_enabled": False,
+            "recommend_cron": "0 3 * * *",
+            "recommend_count": 12,
+            "emby_recommend_user_id": "",
         }
         self._data = dict(self._defaults)
         self._load()
@@ -696,6 +705,64 @@ class RuntimeSettingsService:
 
     def get_feiniu_url(self) -> str:
         return str(self._data.get("feiniu_url") or "")
+
+    # —— AI 推荐（猜你想看）配置 ——
+    def get_llm_base_url(self) -> str:
+        return str(self._data.get("llm_base_url") or "").strip()
+
+    def get_llm_model(self) -> str:
+        return str(self._data.get("llm_model") or "").strip()
+
+    def get_llm_api_key(self) -> str:
+        """解密读取 LLM API Key。"""
+        from app.utils.credential_crypto import decrypt_credential
+
+        encrypted = str(self._data.get("llm_api_key_enc") or "")
+        if not encrypted:
+            return ""
+        return decrypt_credential(encrypted, self.get_auth_secret())
+
+    def set_llm_api_key(self, api_key: str) -> None:
+        """加密保存 LLM API Key，空字符串清除。"""
+        from app.utils.credential_crypto import encrypt_credential
+
+        plain = str(api_key or "").strip()
+        self._data["llm_api_key_enc"] = (
+            encrypt_credential(plain, self.get_auth_secret()) if plain else ""
+        )
+        self._loaded_keys.add("llm_api_key_enc")
+        self._save()
+
+    def has_llm_api_key(self) -> bool:
+        return bool(str(self._data.get("llm_api_key_enc") or "").strip())
+
+    def get_llm_enabled(self) -> bool:
+        return bool(self._data.get("llm_enabled", False))
+
+    def get_recommend_enabled(self) -> bool:
+        return bool(self._data.get("recommend_enabled", False))
+
+    def get_recommend_cron(self) -> str:
+        return str(self._data.get("recommend_cron") or "0 3 * * *").strip() or "0 3 * * *"
+
+    def get_recommend_count(self) -> int:
+        try:
+            return max(4, min(40, int(self._data.get("recommend_count", 12) or 12)))
+        except Exception:
+            return 12
+
+    def get_emby_recommend_user_id(self) -> str:
+        return str(self._data.get("emby_recommend_user_id") or "").strip()
+
+    def is_recommend_ready(self) -> bool:
+        """是否具备生成推荐所需的前置条件。"""
+        return (
+            self.get_recommend_enabled()
+            and self.get_llm_enabled()
+            and bool(self.get_llm_base_url())
+            and bool(self.get_llm_model())
+            and self.has_llm_api_key()
+        )
 
     def get_feiniu_secret(self) -> str:
         return str(self._data.get("feiniu_secret") or "")
@@ -1425,6 +1492,14 @@ class RuntimeSettingsService:
             "strm_refresh_feiniu_after_generate": self.get_strm_refresh_feiniu_after_generate(),
             "strm_proxy_enabled": self.get_strm_proxy_enabled(),
             "strm_proxy_port": self.get_strm_proxy_port(),
+            "llm_base_url": self.get_llm_base_url(),
+            "llm_model": self.get_llm_model(),
+            "llm_api_key_set": self.has_llm_api_key(),
+            "llm_enabled": self.get_llm_enabled(),
+            "recommend_enabled": self.get_recommend_enabled(),
+            "recommend_cron": self.get_recommend_cron(),
+            "recommend_count": self.get_recommend_count(),
+            "emby_recommend_user_id": self.get_emby_recommend_user_id(),
         }
 
 

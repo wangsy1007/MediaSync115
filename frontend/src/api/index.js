@@ -578,4 +578,10 @@ export const quarkApi = {
     api.post('/quark/share/save-to-folder', payload, { timeout: SAVE_OPERATION_TIMEOUT }),
 }
 
+export const recommendApi = {
+  getList: () => api.get('/recommend'),
+  getStatus: () => api.get('/recommend/status'),
+  refresh: () => api.post('/recommend/refresh', null, { timeout: 120000 }),
+}
+
 export default api

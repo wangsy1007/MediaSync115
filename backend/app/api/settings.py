@@ -28,6 +28,7 @@ from app.services.emby_sync_index_service import emby_sync_index_service
 from app.services.emby_sync_scheduler_service import emby_sync_scheduler_service
 from app.services.feiniu_sync_index_service import feiniu_sync_index_service
 from app.services.feiniu_sync_scheduler_service import feiniu_sync_scheduler_service
+from app.services.recommend_scheduler_service import recommend_scheduler_service
 from app.services.tg_sync_service import tg_sync_service
 from app.services.tg_service import tg_service
 from app.services.tmdb_service import tmdb_service
@@ -127,6 +128,14 @@ class RuntimeSettingsRequest(BaseModel):
     person_follow_enabled: Optional[bool] = None
     person_follow_interval_hours: Optional[int] = None
     person_follow_auto_subscribe: Optional[bool] = None
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    llm_enabled: Optional[bool] = None
+    recommend_enabled: Optional[bool] = None
+    recommend_cron: Optional[str] = None
+    recommend_count: Optional[int] = None
+    emby_recommend_user_id: Optional[str] = None
 
 
 _SUBSCRIPTION_SCHEDULER_SETTING_KEYS = frozenset(
@@ -204,6 +213,18 @@ _TG_BOT_SETTING_KEYS = frozenset(
         "tg_bot_allowed_users",
         "tg_bot_notify_chat_ids",
         "tg_bot_hdhive_auto_unlock",
+    }
+)
+_RECOMMEND_SETTING_KEYS = frozenset(
+    {
+        "llm_base_url",
+        "llm_model",
+        "llm_api_key",
+        "llm_enabled",
+        "recommend_enabled",
+        "recommend_cron",
+        "recommend_count",
+        "emby_recommend_user_id",
     }
 )
 
@@ -701,6 +722,11 @@ async def update_runtime_settings(
     payload = request.model_dump(exclude_unset=True)
     merged_settings = runtime_settings_service.get_all()
     merged_settings.update(payload)
+    # LLM API Key 单独加密存储，不进入 update_bulk 的明文流程
+    if "llm_api_key" in payload:
+        api_key_value = payload.pop("llm_api_key")
+        if api_key_value is not None:
+            runtime_settings_service.set_llm_api_key(str(api_key_value))
     if "subscription_resource_priority" in payload:
         await _validate_priority_source_config(merged_settings)
     unlock_keys = {
@@ -768,6 +794,8 @@ async def update_runtime_settings(
             await emby_sync_scheduler_service.ensure_sync_task()
         if payload_keys & _FEINIU_SYNC_SETTING_KEYS:
             await feiniu_sync_scheduler_service.ensure_sync_task()
+        if payload_keys & _RECOMMEND_SETTING_KEYS:
+            await recommend_scheduler_service.ensure_sync_task()
         if payload_keys & _TG_BOT_SETTING_KEYS:
             background_tasks.add_task(_restart_tg_bot_background)
     except ValueError as exc:
@@ -786,6 +814,8 @@ async def update_runtime_settings(
         "feiniu_password_enc",
         "tg_bot_token",
         "license_key",
+        "llm_api_key",
+        "llm_api_key_enc",
     }
     safe_keys = [k for k in payload.keys() if k not in _secret_keys]
     redacted_keys = [k for k in payload.keys() if k in _secret_keys]

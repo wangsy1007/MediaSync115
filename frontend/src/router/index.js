@@ -36,6 +36,11 @@ const routes = [
     component: () => import('@/views/ExploreSection.vue')
   },
   {
+    path: '/recommend',
+    name: 'Recommend',
+    component: () => import('@/views/Recommend.vue')
+  },
+  {
     path: '/subscriptions',
     name: 'Subscriptions',
     component: () => import('@/views/Subscriptions.vue')
