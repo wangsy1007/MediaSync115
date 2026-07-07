@@ -23,6 +23,12 @@ from app.core.timezone_utils import beijing_now
 
 logger = logging.getLogger(__name__)
 
+# 调度任务单次执行硬超时（秒）：兜底防止任务卡死拖垮后续轮次。
+# 历史上 subscription.check 曾因 DB 锁竞争/外部调用卡住而永不返回，
+# 配合 max_instances=1 导致整个 job 停摆。此处给所有调度任务加看门狗。
+DEFAULT_JOB_TIMEOUT_SECONDS = 7200  # 2 小时硬上限
+MIN_JOB_TIMEOUT_SECONDS = 300  # 5 分钟下限
+
 
 class SchedulerManager:
     _instance = None
@@ -110,12 +116,22 @@ class SchedulerManager:
             trace_id=job_id,
         )
 
+        func = meta.get("func")
+        kwargs = dict(meta.get("kwargs") or {})
+        job_timeout = float(meta.get("timeout") or DEFAULT_JOB_TIMEOUT_SECONDS)
         try:
-            func = meta.get("func")
-            kwargs = dict(meta.get("kwargs") or {})
-            result = await self._run_callable(func, kwargs)
+            result = await asyncio.wait_for(
+                self._run_callable(func, kwargs), timeout=job_timeout
+            )
             run_ok = True
             run_error = ""
+        except asyncio.TimeoutError:
+            logger.error(
+                "Scheduled job timed out after %ss: %s", job_timeout, job_id
+            )
+            result = None
+            run_ok = False
+            run_error = f"job timed out after {job_timeout}s"
         except Exception as exc:
             logger.exception("Scheduled job failed: %s", job_id)
             result = None
@@ -227,6 +243,7 @@ class SchedulerManager:
             "running": False,
             "kind": "dynamic",
             "ref_id": task.id,
+            "timeout": self._derive_job_timeout(task),
         }
 
         if not task.enabled:
@@ -276,6 +293,7 @@ class SchedulerManager:
             "running": False,
             "kind": "workflow",
             "ref_id": workflow.id,
+            "timeout": DEFAULT_JOB_TIMEOUT_SECONDS,
         }
 
         if workflow.trigger_type != "timer" or workflow.state != "W" or not workflow.timer:
@@ -405,6 +423,22 @@ class SchedulerManager:
         if asyncio.iscoroutine(result):
             return await result
         return result
+
+    @staticmethod
+    def _derive_job_timeout(task: SchedulerTask) -> float:
+        """根据触发间隔推导单次执行超时：留 20% 余量，夹在 [5min, 2h]。
+
+        interval 触发器按间隔 * 0.8 取值（保证下一轮到点前能释放 max_instances 占用）；
+        cron 触发器无固定间隔，取 2 小时硬上限。
+        """
+        if (task.trigger_type or "").strip().lower() == "interval":
+            interval = int(task.interval_seconds or 0)
+            if interval > 0:
+                return max(
+                    MIN_JOB_TIMEOUT_SECONDS,
+                    min(interval * 0.8, DEFAULT_JOB_TIMEOUT_SECONDS),
+                )
+        return DEFAULT_JOB_TIMEOUT_SECONDS
 
     @staticmethod
     def _build_cron_trigger(cron_expr: str | None):
