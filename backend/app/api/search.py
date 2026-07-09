@@ -1417,7 +1417,7 @@ def _find_tmdb_source(section_key: str):
 _DOUBAN_EXPLORE_PAGINATION_SYNC_PRIME_CAP = 0
 _DOUBAN_EXPLORE_SECTION_FIRST_SCREEN_SYNC_PRIME_CAP = 6
 # 单批返回条目数较多时，Emby/飞牛角标查询也限制条数，避免首屏阻塞
-_EXPLORE_SECTION_LIBRARY_BADGE_CAP = 12
+_EXPLORE_SECTION_LIBRARY_BADGE_CAP = 50
 
 
 def _douban_explore_sync_prime_limit(limit: int, start: int) -> int:
