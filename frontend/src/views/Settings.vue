@@ -3342,7 +3342,7 @@ const checkHdhive = async (notify = false) => {
     hdhiveStatus.user = data.user || null
     hdhiveStatus.message = data.valid
       ? String(data.message || `连接成功：${data.user?.username || data.user?.nickname || '已连接'}`)
-      : `连接失败：${data.message || '请检查 Cookie 或账号密码'}`
+      : `连接失败：${data.message || '请检查 Cookie 配置'}`
 
     if (notify) {
       if (data.valid) {
@@ -3355,7 +3355,7 @@ const checkHdhive = async (notify = false) => {
     hdhiveStatus.checked = true
     hdhiveStatus.valid = false
     hdhiveStatus.user = null
-    hdhiveStatus.message = error.response?.data?.detail || '连接失败，请检查 Cookie 或账号密码配置'
+    hdhiveStatus.message = error.response?.data?.detail || '连接失败，请检查 Cookie 配置'
     if (notify) {
       ElMessage.error(hdhiveStatus.message)
     }

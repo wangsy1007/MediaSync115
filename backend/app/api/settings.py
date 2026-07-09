@@ -313,7 +313,7 @@ async def _validate_priority_source_config(merged_settings: dict) -> None:
             if not base_url:
                 errors.append("HDHive 优先级已启用，但缺少 Base URL 配置")
             elif not runtime_settings_service.has_hdhive_credentials(merged_settings):
-                errors.append("HDHive 优先级已启用，但缺少 Cookie 或账号密码配置")
+                errors.append("HDHive 优先级已启用，但缺少 Cookie 配置")
         elif source == "pansou":
             base_url = str(merged_settings.get("pansou_base_url") or "").strip()
             if not base_url:
@@ -345,7 +345,7 @@ def _validate_hdhive_unlock_settings(merged_settings: dict) -> None:
     if not base_url or not runtime_settings_service.has_hdhive_credentials(merged_settings):
         raise HTTPException(
             status_code=400,
-            detail="启用 HDHive 自动解锁时必须配置 Base URL，以及 Cookie 或账号密码",
+            detail="启用 HDHive 自动解锁时必须配置 Base URL 和 Cookie",
         )
 
     try:
@@ -387,13 +387,13 @@ def _validate_hdhive_checkin_settings(merged_settings: dict) -> None:
         if not base_url or not runtime_settings_service.has_hdhive_credentials(merged_settings):
             raise HTTPException(
                 status_code=400,
-                detail="使用网页签到时必须配置 HDHive Base URL，以及 Cookie 或账号密码",
+                detail="使用网页签到时必须配置 HDHive Base URL 和 Cookie",
             )
     elif method == "cookie":
         if not base_url or not runtime_settings_service.has_hdhive_credentials(merged_settings):
             raise HTTPException(
                 status_code=400,
-                detail="使用 Cookie 签到时必须配置 HDHive Base URL，以及 Cookie 或账号密码",
+                detail="使用 Cookie 签到时必须配置 HDHive Base URL 和 Cookie",
             )
     else:
         raise HTTPException(

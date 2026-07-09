@@ -103,7 +103,7 @@ class HDHiveService:
             if runtime_settings_service.has_hdhive_credentials():
                 await self.ensure_authenticated(persist_cookie=True)
             else:
-                raise ValueError("未配置 HDHive Cookie 或账号密码")
+                raise ValueError("未配置 HDHive Cookie")
 
         return await self._web.check_connection()
 
