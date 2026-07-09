@@ -1722,7 +1722,7 @@ class SubscriptionService:
                     }
                 )
 
-        primary_resources, relevance_excluded = self._filter_resources_for_subscription(
+        primary_resources, relevance_excluded = await self._filter_resources_for_subscription(
             sub, primary_resources, media_context
         )
         if relevance_excluded > 0:
@@ -1830,6 +1830,7 @@ class SubscriptionService:
                 )
                 pansou_list = list(pansou_result.get("list") or [])
                 if pansou_list:
+                    pansou_list = self._filter_pansou_by_title(pansou_list, sub)
                     traces.append(
                         {
                             "step": "fetch_pansou_tmdb_done",
@@ -1876,6 +1877,7 @@ class SubscriptionService:
         )
         payload = await pansou_service.search_115(keyword, res="results")
         resources = _normalize_pansou_pan115_list(payload)
+        resources = self._filter_pansou_by_title(resources, sub)
         traces.append(
             {
                 "step": "fetch_pansou_keyword_done",
@@ -2972,7 +2974,7 @@ class SubscriptionService:
                 )
 
         for record in records:
-            if not self._is_resource_relevant_for_subscription(
+            if not await self._is_resource_relevant_for_subscription(
                 sub,
                 record,
                 media_context,
@@ -3782,7 +3784,68 @@ class SubscriptionService:
         # 含明显中文片名片段的资源，需要走相关性校验。
         return bool(re.search(r"[\u4e00-\u9fff]{2,}", value))
 
-    def _is_resource_relevant_for_subscription(
+    @staticmethod
+    def _extract_share_link_from_item(item: dict[str, Any] | DownloadRecord) -> str:
+        """从资源条目中提取 115 分享链接。"""
+        if isinstance(item, DownloadRecord):
+            return str(item.resource_url or "").strip()
+        return str(
+            item.get("pan115_share_link")
+            or item.get("share_link")
+            or item.get("shareLink")
+            or item.get("share_url")
+            or item.get("resource_url")
+            or ""
+        ).strip()
+
+    async def _verify_share_content_matches_subscription(
+        self,
+        share_link: str,
+        expected_title: str,
+        expected_original_title: str,
+        expected_year: str,
+    ) -> bool:
+        """通过 115 分享文件名校验内容是否匹配目标影视。"""
+        try:
+            share_code, receive_code = self._split_share_link_and_receive_code(share_link)
+            if not share_code:
+                return True  # 无法解析分享码，放行兜底
+
+            from app.services.pan115_service import pan115_service
+
+            files = await pan115_service.get_share_all_files_recursive(
+                share_code, receive_code
+            )
+            if not files:
+                return True  # 获取文件列表失败，放行兜底
+
+            video_names = []
+            for f in files[:30]:
+                name = str(f.get("path") or f.get("name") or "").strip()
+                if name and self._is_video_filename(name):
+                    video_names.append(name)
+                if len(video_names) >= 10:
+                    break
+
+            if not video_names:
+                return True  # 无视频文件，放行兜底
+
+            for filename in video_names:
+                score, _, strong_hit = tg_service._score_row_relevance(
+                    row_title=filename,
+                    row_overview="",
+                    expected_title=expected_title,
+                    expected_original_title=expected_original_title,
+                    expected_year=expected_year,
+                )
+                if strong_hit and score >= 80:
+                    return True
+
+            return False
+        except Exception:
+            return True  # 异常时放行兜底
+
+    async def _is_resource_relevant_for_subscription(
         self,
         sub: "SubscriptionSnapshot",
         item: dict[str, Any] | DownloadRecord,
@@ -3823,11 +3886,16 @@ class SubscriptionService:
             return False
 
         if not self._resource_has_identifiable_title(label):
+            share_link = self._extract_share_link_from_item(item)
+            if share_link:
+                return await self._verify_share_content_matches_subscription(
+                    share_link, expected_title, expected_original_title, expected_year
+                )
             return True
 
         return score >= 50 and strong_hit
 
-    def _filter_resources_for_subscription(
+    async def _filter_resources_for_subscription(
         self,
         sub: "SubscriptionSnapshot",
         resources: list[dict[str, Any]],
@@ -3841,7 +3909,7 @@ class SubscriptionService:
             if not isinstance(item, dict):
                 excluded += 1
                 continue
-            if self._is_resource_relevant_for_subscription(sub, item, media_context):
+            if await self._is_resource_relevant_for_subscription(sub, item, media_context):
                 kept.append(item)
             else:
                 excluded += 1
@@ -3852,6 +3920,41 @@ class SubscriptionService:
         if sub.year:
             return f"{sub.title} {sub.year}".strip()
         return sub.title
+
+    @staticmethod
+    def _filter_pansou_by_title(
+        resources: list[dict[str, Any]], sub: "SubscriptionSnapshot"
+    ) -> list[dict[str, Any]]:
+        """轻量级预过滤：剔除资源名完全不含目标影视关键词的 pansou 结果。"""
+        if not resources:
+            return []
+
+        title = str(sub.title or "").strip()
+        if not title:
+            return resources
+
+        title_lower = title.lower()
+        year = str(sub.year or "").strip()
+        keywords = [title_lower]
+        if year:
+            keywords.append(year)
+
+        kept: list[dict[str, Any]] = []
+        for item in resources:
+            if not isinstance(item, dict):
+                continue
+            label = str(
+                item.get("resource_name")
+                or item.get("title")
+                or item.get("name")
+                or ""
+            ).strip().lower()
+            if not label or label.startswith("115资源"):
+                kept.append(item)
+                continue
+            if any(kw in label for kw in keywords):
+                kept.append(item)
+        return kept
 
     @staticmethod
     def _build_hdhive_keyword(sub: "SubscriptionSnapshot") -> str:
