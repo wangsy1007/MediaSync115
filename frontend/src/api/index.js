@@ -308,7 +308,6 @@ export const settingsApi = {
   checkPansou: () => api.get('/settings/pansou/check'),
   checkEmby: (params) => api.get('/settings/emby/check', { params }),
   checkFeiniu: (params) => api.get('/settings/feiniu/check', { params }),
-  checkLlm: () => api.get('/settings/llm/check'),
   feiniuLogin: (username, password, url) =>
     api.post('/settings/feiniu/login', { username, password, url }, {
       timeout: 45000,
@@ -572,12 +571,6 @@ export const quarkApi = {
     api.post('/quark/default-folder', { folder_id: folderId, folder_name: folderName }),
   saveShareToFolder: (payload) =>
     api.post('/quark/share/save-to-folder', payload, { timeout: SAVE_OPERATION_TIMEOUT }),
-}
-
-export const recommendApi = {
-  getList: (params = {}) => api.get('/recommend', { params }),
-  getStatus: () => api.get('/recommend/status'),
-  refresh: () => api.post('/recommend/refresh', null, { timeout: 120000 }),
 }
 
 export default api

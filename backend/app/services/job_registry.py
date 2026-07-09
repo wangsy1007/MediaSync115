@@ -28,7 +28,6 @@ class JobRegistry:
             "system.noop": self._noop,
             "system.archive_scan": self._archive_scan,
             "system.offline_monitor": self._offline_monitor,
-            "system.recommend_refresh": self._recommend_refresh,
             "hdhive.checkin": self._hdhive_checkin,
             "subscription.check": self._check_subscription,
             "chart_subscription.sync": self._chart_subscription_sync,
@@ -84,37 +83,6 @@ class JobRegistry:
 
     async def _offline_monitor(self, **kwargs) -> dict[str, Any]:
         return await offline_monitor_service.check_and_trigger()
-
-    async def _recommend_refresh(self, **kwargs) -> dict[str, Any]:
-        from app.services.recommend_service import recommend_service
-
-        await operation_log_service.log_background_event(
-            source_type="scheduler",
-            module="recommend",
-            action="recommend.refresh.start",
-            status="info",
-            message="AI 推荐刷新（猜你想看）开始",
-        )
-        try:
-            result = await recommend_service.generate(force=True)
-        except Exception as exc:
-            await operation_log_service.log_background_event(
-                source_type="scheduler",
-                module="recommend",
-                action="recommend.refresh.failed",
-                status="failed",
-                message=f"AI 推荐刷新失败：{exc}",
-            )
-            raise
-        count = result.get("total") or 0
-        await operation_log_service.log_background_event(
-            source_type="scheduler",
-            module="recommend",
-            action="recommend.refresh.success",
-            status="success",
-            message=f"AI 推荐刷新完成，共 {count} 条推荐",
-        )
-        return {"success": True, "message": f"recommend refreshed: {count} items"}
 
     async def _hdhive_checkin(self, **kwargs) -> dict[str, Any]:
         gamble = runtime_settings_service.get_hdhive_auto_checkin_mode() == "gamble"

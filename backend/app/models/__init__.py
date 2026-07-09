@@ -25,7 +25,6 @@ from app.models.douban_tmdb_mapping import (
 )
 from app.models.watchlist import Watchlist, WatchlistItem
 from app.models.person_follow import PersonFollow, PersonFollowCredit
-from app.models.recommendation import RecommendationCache
 
 __all__ = [
     "Subscription",
@@ -54,5 +53,4 @@ __all__ = [
     "WatchlistItem",
     "PersonFollow",
     "PersonFollowCredit",
-    "RecommendationCache",
 ]

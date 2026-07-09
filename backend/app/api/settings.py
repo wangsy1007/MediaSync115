@@ -28,7 +28,6 @@ from app.services.emby_sync_index_service import emby_sync_index_service
 from app.services.emby_sync_scheduler_service import emby_sync_scheduler_service
 from app.services.feiniu_sync_index_service import feiniu_sync_index_service
 from app.services.feiniu_sync_scheduler_service import feiniu_sync_scheduler_service
-from app.services.recommend_scheduler_service import recommend_scheduler_service
 from app.services.tg_sync_service import tg_sync_service
 from app.services.tg_service import tg_service
 from app.services.tmdb_service import tmdb_service
@@ -131,10 +130,6 @@ class RuntimeSettingsRequest(BaseModel):
     llm_model: Optional[str] = None
     llm_api_key: Optional[str] = None
     llm_enabled: Optional[bool] = None
-    recommend_enabled: Optional[bool] = None
-    recommend_cron: Optional[str] = None
-    recommend_count: Optional[int] = None
-    emby_recommend_user_id: Optional[str] = None
 
 
 _SUBSCRIPTION_SCHEDULER_SETTING_KEYS = frozenset(
@@ -214,20 +209,6 @@ _TG_BOT_SETTING_KEYS = frozenset(
         "tg_bot_hdhive_auto_unlock",
     }
 )
-_RECOMMEND_SETTING_KEYS = frozenset(
-    {
-        "llm_base_url",
-        "llm_model",
-        "llm_api_key",
-        "llm_enabled",
-        "recommend_enabled",
-        "recommend_cron",
-        "recommend_count",
-        "emby_recommend_user_id",
-    }
-)
-
-
 class TgVerifyPasswordRequest(BaseModel):
     password: str
     session: str
@@ -787,8 +768,6 @@ async def update_runtime_settings(
             await emby_sync_scheduler_service.ensure_sync_task()
         if payload_keys & _FEINIU_SYNC_SETTING_KEYS:
             await feiniu_sync_scheduler_service.ensure_sync_task()
-        if payload_keys & _RECOMMEND_SETTING_KEYS:
-            await recommend_scheduler_service.ensure_sync_task()
         if payload_keys & _TG_BOT_SETTING_KEYS:
             background_tasks.add_task(_restart_tg_bot_background)
     except ValueError as exc:
@@ -917,14 +896,6 @@ async def check_tg_credentials():
 async def check_tmdb_credentials():
     """检查 TMDB API 配置是否有效"""
     return await _perform_tmdb_check()
-
-
-@router.get("/llm/check")
-async def check_llm_credentials():
-    """检查 LLM API 配置是否有效"""
-    from app.services.llm_service import llm_service
-
-    return await llm_service.check_connection()
 
 
 @router.get("/pansou/check")

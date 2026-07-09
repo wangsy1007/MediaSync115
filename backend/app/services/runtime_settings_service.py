@@ -192,15 +192,11 @@ class RuntimeSettingsService:
             "strm_token_secret": "",
             "strm_proxy_enabled": False,
             "strm_proxy_port": 8099,
-            # —— AI 推荐（猜你想看）——
+            # —— LLM 配置 ——
             "llm_base_url": "https://api.deepseek.com/v1",
             "llm_api_key_enc": "",
             "llm_model": "deepseek-chat",
             "llm_enabled": False,
-            "recommend_enabled": False,
-            "recommend_cron": "0 3 * * *",
-            "recommend_count": 30,
-            "emby_recommend_user_id": "",
         }
         self._data = dict(self._defaults)
         self._load()
@@ -669,7 +665,6 @@ class RuntimeSettingsService:
     def get_feiniu_url(self) -> str:
         return str(self._data.get("feiniu_url") or "")
 
-    # —— AI 推荐（猜你想看）配置 ——
     def get_llm_base_url(self) -> str:
         return str(self._data.get("llm_base_url") or "").strip()
 
@@ -701,31 +696,6 @@ class RuntimeSettingsService:
 
     def get_llm_enabled(self) -> bool:
         return bool(self._data.get("llm_enabled", False))
-
-    def get_recommend_enabled(self) -> bool:
-        return bool(self._data.get("recommend_enabled", False))
-
-    def get_recommend_cron(self) -> str:
-        return str(self._data.get("recommend_cron") or "0 3 * * *").strip() or "0 3 * * *"
-
-    def get_recommend_count(self) -> int:
-        try:
-            return max(4, min(50, int(self._data.get("recommend_count", 30) or 30)))
-        except Exception:
-            return 12
-
-    def get_emby_recommend_user_id(self) -> str:
-        return str(self._data.get("emby_recommend_user_id") or "").strip()
-
-    def is_recommend_ready(self) -> bool:
-        """是否具备生成推荐所需的前置条件。"""
-        return (
-            self.get_recommend_enabled()
-            and self.get_llm_enabled()
-            and bool(self.get_llm_base_url())
-            and bool(self.get_llm_model())
-            and self.has_llm_api_key()
-        )
 
     def get_feiniu_secret(self) -> str:
         return str(self._data.get("feiniu_secret") or "")
@@ -1458,10 +1428,6 @@ class RuntimeSettingsService:
             "llm_model": self.get_llm_model(),
             "llm_api_key_set": self.has_llm_api_key(),
             "llm_enabled": self.get_llm_enabled(),
-            "recommend_enabled": self.get_recommend_enabled(),
-            "recommend_cron": self.get_recommend_cron(),
-            "recommend_count": self.get_recommend_count(),
-            "emby_recommend_user_id": self.get_emby_recommend_user_id(),
         }
 
 

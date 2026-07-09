@@ -228,25 +228,11 @@ class EmbyService:
             return []
 
     async def pick_user_id(self) -> str | None:
-        """选取用于推荐画像的用户 id。
-
-        优先使用运行时配置的 emby_recommend_user_id；否则取第一个非系统用户。
-        结果在进程内缓存 10 分钟。
-        """
+        """选取 Emby 用户 id（取第一个非系统用户），结果缓存 10 分钟。"""
         now = time.time()
         cached = getattr(self, "_picked_user_cache", None)
         if cached and now < cached[1]:
             return cached[0]
-
-        configured = ""
-        try:
-            from app.services.runtime_settings_service import runtime_settings_service
-            configured = runtime_settings_service.get_emby_recommend_user_id()
-        except Exception:
-            configured = ""
-        if configured:
-            self._picked_user_cache = (configured, now + 600)
-            return configured
 
         users = await self.list_users()
         for user in users:

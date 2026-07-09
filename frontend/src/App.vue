@@ -42,7 +42,6 @@
             </template>
             <el-menu-item index="/explore/douban" @click="navigateSideMenu('/explore/douban')">豆瓣榜单</el-menu-item>
             <el-menu-item index="/explore/tmdb" @click="navigateSideMenu('/explore/tmdb')">TMDB榜单</el-menu-item>
-            <el-menu-item index="/recommend" @click="navigateSideMenu('/recommend')">猜你想看</el-menu-item>
           </el-sub-menu>
           <el-menu-item index="/subscriptions" @click="navigateSideMenu('/subscriptions')">
             <el-icon><Star /></el-icon>
@@ -222,14 +221,6 @@
                 <el-icon><Search /></el-icon>
                 <span>TMDB 榜单</span>
               </button>
-              <button
-                class="more-item"
-                :class="{ 'more-item-active': lastExplorePage === '/recommend' }"
-                @click="handleExploreNav('/recommend')"
-              >
-                <el-icon><Search /></el-icon>
-                <span>猜你想看</span>
-              </button>
             </div>
             <button class="more-cancel" @click="showExploreMenu = false">取消</button>
           </div>
@@ -358,7 +349,7 @@ function navigateSideMenu(path) {
 const dockTabs = computed(() => {
   const path = route.path
   return [
-    { key: 'explore', label: '发现', icon: Search, route: lastExplorePage.value, active: path === '/' || path === '/search' || path.startsWith('/explore') || path.startsWith('/recommend') || path.startsWith('/movie/') || path.startsWith('/tv/') || path.startsWith('/douban/') || path.startsWith('/person/') || showExploreMenu.value },
+    { key: 'explore', label: '发现', icon: Search, route: lastExplorePage.value, active: path === '/' || path === '/search' || path.startsWith('/explore') || path.startsWith('/movie/') || path.startsWith('/tv/') || path.startsWith('/douban/') || path.startsWith('/person/') || showExploreMenu.value },
     { key: 'subscriptions', label: '订阅', icon: Star, route: '/subscriptions', active: path.startsWith('/subscriptions') },
     { key: 'downloads', label: '下载', icon: Download, route: '/downloads', active: path.startsWith('/downloads') },
     { key: 'archive', label: '归档', icon: FolderOpened, route: '/archive', active: path.startsWith('/archive') },
