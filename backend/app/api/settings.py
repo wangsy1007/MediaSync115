@@ -60,7 +60,6 @@ class RuntimeSettingsRequest(BaseModel):
     socks_proxy: Optional[str] = None
     hdhive_cookie: Optional[str] = None
     hdhive_base_url: Optional[str] = None
-    hdhive_login_username: Optional[str] = None
     hdhive_auto_checkin_enabled: Optional[bool] = None
     hdhive_auto_checkin_mode: Optional[str] = None
     hdhive_auto_checkin_method: Optional[str] = None
@@ -250,12 +249,6 @@ class HDHiveCheckinRequest(BaseModel):
     mode: Optional[str] = None
     method: Optional[str] = None
     cookie: Optional[str] = None
-    base_url: Optional[str] = None
-
-
-class HDHiveLoginRequest(BaseModel):
-    username: str
-    password: str
     base_url: Optional[str] = None
 
 
@@ -803,7 +796,6 @@ async def update_runtime_settings(
 
     _secret_keys = {
         "hdhive_cookie",
-        "hdhive_password_enc",
         "tg_session",
         "tg_api_hash",
         "tmdb_api_key",
@@ -863,55 +855,6 @@ async def check_updates():
 @router.get("/hdhive/check")
 async def check_hdhive_credentials():
     return await _perform_hdhive_check_cached()
-
-
-@router.post("/hdhive/login")
-async def login_hdhive(payload: HDHiveLoginRequest):
-    """登录 HDHive 并保存 Cookie 与加密密码。"""
-    base_url = (
-        str(payload.base_url or "").strip()
-        or runtime_settings_service.get_hdhive_base_url()
-    )
-    username = str(payload.username or "").strip()
-    password = str(payload.password or "").strip()
-    if not username or not password:
-        raise HTTPException(status_code=400, detail="请输入 HDHive 用户名和密码")
-
-    from app.services.hdhive_service import HDHiveService
-    from app.utils.credential_crypto import encrypt_credential
-
-    service = HDHiveService(
-        base_url=base_url,
-        cookie=runtime_settings_service.get_hdhive_cookie(),
-    )
-    result = await service.login(username=username, password=password)
-    if not result.get("success"):
-        raise HTTPException(
-            status_code=401,
-            detail=str(result.get("message") or "HDHive 登录失败"),
-        )
-
-    cookie = str(result.get("cookie") or service.cookie or "").strip()
-    updates: dict[str, str] = {
-        "hdhive_login_username": username,
-        "hdhive_password_enc": encrypt_credential(
-            password,
-            runtime_settings_service.get_auth_secret(),
-        ),
-    }
-    if cookie:
-        updates["hdhive_cookie"] = cookie
-    if base_url:
-        updates["hdhive_base_url"] = base_url
-
-    runtime_settings_service.update_bulk(updates)
-    user = result.get("user") if isinstance(result.get("user"), dict) else {}
-    return {
-        "success": True,
-        "message": str(result.get("message") or "登录成功"),
-        "user": user,
-        "username": username,
-    }
 
 
 @router.post("/hdhive/checkin")

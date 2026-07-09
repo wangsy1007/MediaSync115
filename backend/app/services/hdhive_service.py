@@ -92,42 +92,9 @@ class HDHiveService:
         return self._web._map_resource_row(row, index)
 
     async def ensure_authenticated(self, *, persist_cookie: bool = True) -> None:
-        """确保 Cookie 有效，必要时使用加密密码自动登录。"""
-        async with self._auth_lock:
-            if self._cookie:
-                try:
-                    result = await self._web.check_connection()
-                    if result.get("valid"):
-                        return
-                except Exception:
-                    pass
-
-            from app.services.runtime_settings_service import runtime_settings_service
-
-            username = runtime_settings_service.get_hdhive_login_username()
-            password = runtime_settings_service.get_hdhive_password()
-            if not username or not password:
-                raise ValueError("HDHive 未登录，请配置 Cookie 或账号密码")
-
-            result = await self._web.login(username, password)
-            if not result.get("success"):
-                raise ValueError(str(result.get("message") or "HDHive 自动登录失败"))
-
-            cookie = str(result.get("cookie") or self._web._cookie or "").strip()
-            if not cookie:
-                raise ValueError("HDHive 登录成功但未获取到 Cookie")
-
-            self.set_cookie(cookie)
-            if persist_cookie:
-                runtime_settings_service.update_bulk({"hdhive_cookie": cookie})
-                runtime_settings_service.apply_runtime_overrides()
-
-    async def login(self, username: str, password: str) -> dict[str, Any]:
-        result = await self._web.login(username, password)
-        cookie = str(result.get("cookie") or "").strip()
-        if result.get("success") and cookie:
-            self.set_cookie(cookie)
-        return result
+        """确保 Cookie 有效。不支持账密登录——请在设置中配置有效 Cookie。"""
+        if not self._cookie:
+            raise ValueError("HDHive 未登录，请在设置中配置有效的 Cookie，或从浏览器手动获取后填入")
 
     async def check_connection(self) -> dict[str, Any]:
         if not self._cookie:

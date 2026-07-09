@@ -364,33 +364,15 @@
           </template>
 
           <el-form :model="hdhiveForm" label-width="120px">
-            <el-form-item label="登录账号">
-              <el-input
-                :model-value="hdhiveForm.loginUsername || '未登录'"
-                readonly
-                placeholder="点击右侧按钮登录 HDHive"
-              />
-              <el-button
-                type="success"
-                :loading="loggingInHdhive"
-                style="margin-left: 8px"
-                @click="hdhiveLoginDialogVisible = true"
-              >
-                账号登录
-              </el-button>
-              <el-text size="small" type="info" style="display: block; margin-top: 4px">
-                推荐使用账号密码自动登录，系统会加密保存密码并自动续期 Cookie
-              </el-text>
-            </el-form-item>
-            <el-form-item label="Cookie（兜底）">
+            <el-form-item label="Cookie">
               <el-input
                 v-model="hdhiveForm.cookie"
                 type="textarea"
                 :rows="3"
-                placeholder="可选：手动粘贴浏览器 Cookie 作为兜底"
+                placeholder="从浏览器开发者工具手动复制 Cookie 粘贴到此处"
               />
               <el-text size="small" type="info" style="margin-top: 4px">
-                自动登录失败时，可从浏览器开发者工具复制 Cookie 粘贴到此处
+                HDHive 不再支持账密登录，请从浏览器手动获取 Cookie 填入
               </el-text>
             </el-form-item>
             <el-form-item>
@@ -1975,42 +1957,6 @@
       </template>
     </el-dialog>
 
-    <el-dialog
-      v-model="hdhiveLoginDialogVisible"
-      title="HDHive 登录"
-      width="400px"
-      destroy-on-close
-      @open="hdhiveLoginFeedback = null"
-    >
-      <el-alert
-        v-if="hdhiveLoginFeedback"
-        :title="hdhiveLoginFeedback.message"
-        :type="hdhiveLoginFeedback.type"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 12px"
-      />
-      <el-form :model="hdhiveLoginForm" label-width="80px" @submit.prevent="handleHdhiveLogin">
-        <el-form-item label="用户名">
-          <el-input v-model="hdhiveLoginForm.username" placeholder="请输入 HDHive 用户名" />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input
-            v-model="hdhiveLoginForm.password"
-            type="password"
-            show-password
-            placeholder="请输入 HDHive 密码"
-            @keyup.enter="handleHdhiveLogin"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="hdhiveLoginDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="loggingInHdhive" @click="handleHdhiveLogin">
-          登录
-        </el-button>
-      </template>
-    </el-dialog>
 
     <el-dialog
       v-model="feiniuLoginDialogVisible"
@@ -2088,18 +2034,12 @@ const accountForm = ref({
 
 const hdhiveForm = ref({
   cookie: '',
-  loginUsername: '',
   autoCheckinEnabled: false,
   autoCheckinMode: 'normal',
   autoCheckinMethod: 'web',
   autoCheckinRunTime: '09:00'
 })
-const hdhiveLoginForm = ref({
-  username: '',
-  password: ''
-})
-const hdhiveLoginDialogVisible = ref(false)
-const hdhiveLoginFeedback = ref(null)
+
 const embyForm = ref({
   url: '',
   apiKey: '',
@@ -2374,7 +2314,6 @@ const savingPansou = ref(false)
 const testingPansou = ref(false)
 const savingHdhive = ref(false)
 const testingHdhive = ref(false)
-const loggingInHdhive = ref(false)
 const runningHdhiveCheckin = ref(false)
 const savingEmby = ref(false)
 const testingEmby = ref(false)
@@ -3460,7 +3399,7 @@ const handleTestHdhive = async () => {
 
 const handleRunHdhiveCheckin = async () => {
   const method = hdhiveForm.value.autoCheckinMethod || 'web'
-  const hasCredential = String(hdhiveForm.value.cookie || '').trim() || String(hdhiveForm.value.loginUsername || '').trim()
+  const hasCredential = String(hdhiveForm.value.cookie || '').trim()
   if (!hasCredential) {
     ElMessage.warning('请先登录 HDHive 或填写 Cookie')
     return
@@ -3591,53 +3530,6 @@ const handleTestFeiniu = async () => {
     await checkFeiniu(true)
   } finally {
     testingFeiniu.value = false
-  }
-}
-
-const handleHdhiveLogin = async () => {
-  if (!String(hdhiveLoginForm.value.username || '').trim()) {
-    hdhiveLoginFeedback.value = { type: 'warning', message: '请输入 HDHive 用户名' }
-    ElMessage.warning('请输入 HDHive 用户名')
-    return
-  }
-  if (!String(hdhiveLoginForm.value.password || '').trim()) {
-    hdhiveLoginFeedback.value = { type: 'warning', message: '请输入 HDHive 密码' }
-    ElMessage.warning('请输入 HDHive 密码')
-    return
-  }
-  loggingInHdhive.value = true
-  hdhiveLoginFeedback.value = null
-  try {
-    const { data } = await settingsApi.hdhiveLogin(
-      hdhiveLoginForm.value.username,
-      hdhiveLoginForm.value.password
-    )
-    const result = data || {}
-    if (result.success) {
-      const message = result.message || 'HDHive 登录成功'
-      hdhiveLoginFeedback.value = { type: 'success', message }
-      ElMessage.success(message)
-      hdhiveLoginDialogVisible.value = false
-      hdhiveLoginForm.value.username = ''
-      hdhiveLoginForm.value.password = ''
-      await fetchRuntimeSettings()
-      await checkHdhive(false)
-      await refreshSourceConnectionStatus()
-    } else {
-      const message = result.message || 'HDHive 登录失败'
-      hdhiveLoginFeedback.value = { type: 'error', message }
-      ElMessage.error(message)
-    }
-  } catch (error) {
-    const detail = error.response?.data?.detail
-    const message = String(detail || error.message || 'HDHive 登录失败').trim()
-    const finalMessage = (error.code === 'ECONNABORTED' || String(error.message || '').includes('timeout'))
-      ? 'HDHive 登录超时，请确认网络可达后重试'
-      : message
-    hdhiveLoginFeedback.value = { type: 'error', message: finalMessage }
-    ElMessage.error(finalMessage)
-  } finally {
-    loggingInHdhive.value = false
   }
 }
 
@@ -4776,7 +4668,6 @@ const fetchRuntimeSettings = async () => {
       accountForm.value.newUsername = data.auth_username || 'admin'
     }
     hdhiveForm.value.cookie = data.hdhive_cookie || ''
-    hdhiveForm.value.loginUsername = data.hdhive_login_username || ''
     hdhiveForm.value.autoCheckinEnabled = !!data.hdhive_auto_checkin_enabled
     hdhiveForm.value.autoCheckinMode = data.hdhive_auto_checkin_mode || 'normal'
     hdhiveForm.value.autoCheckinMethod = data.hdhive_auto_checkin_method === 'api' ? 'web' : (data.hdhive_auto_checkin_method || 'web')
@@ -5338,7 +5229,7 @@ const ensureSettingsTabLoaded = (tab) => {
       refreshQuarkInfo()
       break
     case 'hdhive':
-      if (String(hdhiveForm.value.cookie || '').trim() || String(hdhiveForm.value.loginUsername || '').trim()) {
+      if (String(hdhiveForm.value.cookie || '').trim()) {
         checkHdhive(false)
       }
       break

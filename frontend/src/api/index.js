@@ -302,11 +302,6 @@ export const settingsApi = {
   updateRuntime: (payload, config = {}) => api.put('/settings/runtime', payload, config),
   checkUpdates: () => api.get('/settings/update-check'),
   checkHdhive: () => api.get('/settings/hdhive/check'),
-  hdhiveLogin: (username, password) =>
-    api.post('/settings/hdhive/login', { username, password }, {
-      timeout: 45000,
-      silentError: true,
-    }),
   runHdhiveCheckin: (payload) => api.post('/settings/hdhive/checkin', payload),
   checkTg: () => api.get('/settings/tg/check'),
   checkTmdb: () => api.get('/settings/tmdb/check'),

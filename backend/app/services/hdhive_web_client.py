@@ -31,13 +31,11 @@ class HDHiveWebClient:
         )
         self._unlock_action_id = ""
         self._checkin_action_id = ""
-        self._login_action_id = ""
         self._unlock_locks: dict[str, asyncio.Lock] = {}
         self._unlock_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._unlock_cache_ttl_seconds = 120.0
         self._unlock_action_id_cached_at = 0.0
         self._checkin_action_id_cached_at = 0.0
-        self._login_action_id_cached_at = 0.0
         self._unlock_action_id_ttl_seconds = 1800.0
 
     def set_base_url(self, base_url: str | None) -> None:
@@ -412,31 +410,6 @@ class HDHiveWebClient:
 
         return self._checkin_action_id
 
-    async def _resolve_login_action_id(self, page_html: str) -> str:
-        now = monotonic()
-        if (
-            self._login_action_id
-            and self._login_action_id_cached_at > 0
-            and now - self._login_action_id_cached_at < self._unlock_action_id_ttl_seconds
-        ):
-            return self._login_action_id
-
-        chunk_paths = self._extract_next_static_chunk_paths(page_html)
-        for path in chunk_paths:
-            try:
-                chunk_text = await self._fetch_text(path, accept="application/javascript,text/javascript,*/*;q=0.8")
-            except Exception:
-                continue
-
-            action_id = self._extract_server_action_id_from_chunk(chunk_text, "login")
-            if not action_id:
-                continue
-            self._login_action_id = action_id
-            self._login_action_id_cached_at = monotonic()
-            return action_id
-
-        return self._login_action_id
-
     @staticmethod
     def _serialize_response_cookies(response: httpx.Response) -> str:
         pairs: list[str] = []
@@ -521,94 +494,6 @@ class HDHiveWebClient:
         cookie_header = self._serialize_client_cookies(client)
         if cookie_header:
             self._merge_cookie_header(cookie_header)
-
-    async def login(self, username: str, password: str) -> dict[str, Any]:
-        """通过 Next.js Server Action 登录并更新 Cookie。"""
-        login_username = str(username or "").strip()
-        login_password = str(password or "").strip()
-        if not login_username or not login_password:
-            return {"success": False, "message": "用户名或密码为空"}
-
-        page_path = "/login"
-        get_headers = {
-            "user-agent": self._user_agent,
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        }
-        if self._cookie:
-            get_headers["cookie"] = self._cookie
-
-        client = self._create_client()
-        try:
-            page_response = await client.get(f"{self._base_url}{page_path}", headers=get_headers)
-            page_response.raise_for_status()
-            page_html = page_response.text
-            self._apply_client_cookies(client)
-
-            action_id = await self._resolve_login_action_id(page_html)
-            if not action_id:
-                return {"success": False, "message": "未找到 HDHive 登录 Server Action"}
-
-            post_headers = {
-                "user-agent": self._user_agent,
-                "accept": "text/x-component",
-                "origin": self._base_url,
-                "referer": f"{self._base_url}{page_path}",
-                "next-action": action_id,
-                "content-type": "text/plain;charset=UTF-8",
-            }
-            body = json.dumps(
-                [{"username": login_username, "password": login_password}],
-                ensure_ascii=False,
-            )
-            response = await client.post(
-                f"{self._base_url}{page_path}",
-                headers=post_headers,
-                content=body,
-            )
-            if response.status_code == 404 and "Server action not found" in response.text:
-                self._login_action_id_cached_at = 0.0
-                refreshed_action_id = await self._resolve_login_action_id(page_html)
-                if refreshed_action_id and refreshed_action_id != action_id:
-                    post_headers["next-action"] = refreshed_action_id
-                    response = await client.post(
-                        f"{self._base_url}{page_path}",
-                        headers=post_headers,
-                        content=body,
-                    )
-            if response.status_code == 404:
-                message = response.text.strip() or "登录 Server Action 不可用"
-                return {"success": False, "message": message, "cookie": self._cookie}
-            if response.status_code >= 400:
-                return {
-                    "success": False,
-                    "message": f"登录请求失败(HTTP {response.status_code})",
-                    "cookie": self._cookie,
-                }
-            self._apply_client_cookies(client)
-
-            user_info = self._extract_current_user(response.text)
-            parsed = self._parse_next_action_response(response.text)
-            if not user_info and parsed.get("success") is False:
-                return {
-                    "success": False,
-                    "message": str(parsed.get("message") or "登录失败").strip(),
-                    "cookie": self._cookie,
-                }
-            if not user_info:
-                return {
-                    "success": False,
-                    "message": "登录失败，未获取到用户信息",
-                    "cookie": self._cookie,
-                }
-
-            return {
-                "success": True,
-                "message": "登录成功",
-                "cookie": self._cookie,
-                "user": user_info,
-            }
-        finally:
-            await client.aclose()
 
     async def check_connection(self) -> dict[str, Any]:
         if not self._cookie:

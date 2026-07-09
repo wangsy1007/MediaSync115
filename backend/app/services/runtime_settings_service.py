@@ -84,8 +84,6 @@ class RuntimeSettingsService:
             "quark_default_folder_name": "根目录",
             "hdhive_cookie": settings.HDHIVE_COOKIE or "",
             "hdhive_base_url": settings.HDHIVE_BASE_URL,
-            "hdhive_login_username": "",
-            "hdhive_password_enc": "",
             "hdhive_auto_checkin_enabled": False,
             "hdhive_auto_checkin_mode": "normal",
             "hdhive_auto_checkin_method": "cookie",
@@ -415,48 +413,13 @@ class RuntimeSettingsService:
     def get_hdhive_base_url(self) -> str:
         return self._data["hdhive_base_url"]
 
-    def get_hdhive_login_username(self) -> str:
-        return str(self._data.get("hdhive_login_username") or "")
-
-    def get_hdhive_password_enc(self) -> str:
-        return str(self._data.get("hdhive_password_enc") or "")
-
-    def get_hdhive_password(self) -> str:
-        """解密读取 HDHive 登录密码。"""
-        from app.utils.credential_crypto import decrypt_credential
-
-        encrypted = self.get_hdhive_password_enc()
-        if not encrypted:
-            return ""
-        return decrypt_credential(encrypted, self.get_auth_secret())
-
-    def set_hdhive_password(self, password: str) -> None:
-        """加密保存 HDHive 登录密码。"""
-        from app.utils.credential_crypto import encrypt_credential
-
-        plain = str(password or "").strip()
-        if not plain:
-            self._data["hdhive_password_enc"] = ""
-            return
-        self._data["hdhive_password_enc"] = encrypt_credential(
-            plain,
-            self.get_auth_secret(),
-        )
-
     def has_hdhive_credentials(self, merged_settings: dict | None = None) -> bool:
-        """判断是否具备 HDHive 自动登录凭据或有效 Cookie。"""
+        """判断是否具备有效 HDHive Cookie。"""
         if merged_settings is None:
             cookie = self.get_hdhive_cookie()
-            username = self.get_hdhive_login_username()
-            password_enc = self.get_hdhive_password_enc()
         else:
             cookie = str(merged_settings.get("hdhive_cookie") or "").strip()
-            username = str(merged_settings.get("hdhive_login_username") or "").strip()
-            password_enc = str(merged_settings.get("hdhive_password_enc") or "").strip()
-
-        if cookie:
-            return True
-        return bool(username and password_enc)
+        return bool(cookie)
 
     def get_hdhive_auto_checkin_enabled(self) -> bool:
         return bool(self._data.get("hdhive_auto_checkin_enabled", False))
@@ -1395,7 +1358,6 @@ class RuntimeSettingsService:
             ],
             "hdhive_cookie": self.get_hdhive_cookie(),
             "hdhive_base_url": self.get_hdhive_base_url(),
-            "hdhive_login_username": self.get_hdhive_login_username(),
             "hdhive_auto_checkin_enabled": self.get_hdhive_auto_checkin_enabled(),
             "hdhive_auto_checkin_mode": self.get_hdhive_auto_checkin_mode(),
             "hdhive_auto_checkin_method": self.get_hdhive_auto_checkin_method(),
