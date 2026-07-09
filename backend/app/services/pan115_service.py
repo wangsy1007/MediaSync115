@@ -642,7 +642,7 @@ class Pan115Service:
         payload = {"url": url}
         if wp_path_id:
             payload["wp_path_id"] = wp_path_id
-        result = await self._async_call("offline_add_url", payload)
+        result = await self._async_call("clouddownload_task_add_url", payload)
         return check_response(result)
 
     async def offline_task_list(self, page: int = 1) -> Dict[str, Any]:
@@ -658,7 +658,7 @@ class Pan115Service:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                result = await self._async_call("offline_list", {"page": page})
+                result = await self._async_call("clouddownload_task_list", {"page": page})
                 data = check_response(result)
                 break
             except Exception as exc:
@@ -722,7 +722,7 @@ class Pan115Service:
         """
         if isinstance(hash_list, str):
             hash_list = [hash_list]
-        result = await self._async_call("offline_remove", {"hash": ",".join(hash_list)})
+        result = await self._async_call("clouddownload_task_del", {"hash": ",".join(hash_list)})
         return check_response(result)
 
     async def offline_task_restart(self, info_hash: str) -> Dict[str, Any]:
@@ -735,7 +735,7 @@ class Pan115Service:
         Returns:
             重试结果
         """
-        result = await self._async_call("offline_restart", info_hash)
+        result = await self._async_call("clouddownload_task_restart", {"info_hash": info_hash})
         return check_response(result)
 
     async def offline_task_clear(self, flag: int = 0) -> Dict[str, Any]:
@@ -745,7 +745,7 @@ class Pan115Service:
         Returns:
             清空结果
         """
-        result = await self._async_call("offline_clear", {"flag": int(flag)})
+        result = await self._async_call("clouddownload_task_clear", {"flag": int(flag)})
         return check_response(result)
 
     # ==================== 分享链接操作 ====================
