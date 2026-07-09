@@ -3,8 +3,8 @@ services:
     build:
       context: .
       args:
-        APP_BUILD_VERSION: "1.2.6"
-        APP_BUILD_TAG: "1.2.6"
+        APP_BUILD_VERSION: "1.2.7"
+        APP_BUILD_TAG: "1.2.7"
         APP_BUILD_GIT_SHA: "local"
         APP_BUILD_TIME: ""
     image: mediasync115:latest
