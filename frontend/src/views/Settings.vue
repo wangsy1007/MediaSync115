@@ -387,19 +387,6 @@
             <el-form-item label="启用自动签到">
               <el-switch v-model="hdhiveForm.autoCheckinEnabled" />
             </el-form-item>
-            <el-form-item label="签到方式">
-              <el-select
-                v-model="hdhiveForm.autoCheckinMethod"
-                style="width: 220px"
-                :disabled="!hdhiveForm.autoCheckinEnabled"
-              >
-                <el-option label="网页签到（推荐）" value="web" />
-                <el-option label="Cookie 接口签到" value="cookie" />
-              </el-select>
-              <el-text size="small" type="info" style="margin-left: 8px">
-                {{ hdhiveForm.autoCheckinMethod === 'cookie' ? '调用 /api/checkin 接口签到' : '通过网页 Server Action 签到' }}
-              </el-text>
-            </el-form-item>
             <el-form-item label="签到模式">
               <el-select
                 v-model="hdhiveForm.autoCheckinMode"
@@ -2036,7 +2023,7 @@ const hdhiveForm = ref({
   cookie: '',
   autoCheckinEnabled: false,
   autoCheckinMode: 'normal',
-  autoCheckinMethod: 'web',
+  autoCheckinMethod: 'cookie',
   autoCheckinRunTime: '09:00'
 })
 
