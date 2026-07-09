@@ -372,9 +372,9 @@ class Pan115Service:
             配额信息，包含总配额、已用配额、剩余配额
         """
         attempts = (
-            ("offline_quota_package_info", {}),
-            ("offline_quota_info", {}),
-            ("offline_quota_info_open", {}),
+            ("clouddownload_quota_package_info", {}),
+            ("clouddownload_quota_info", {}),
+            ("clouddownload_quota_info_open", {}),
         )
 
         last_error: Exception | None = None
