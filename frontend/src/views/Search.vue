@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="explore-page">
     <div class="search-header">
       <el-input
@@ -1274,7 +1274,7 @@ const normalizeSearchResultItem = (item, index = 0, fallbackService = '') => {
 const fetchExploreSections = async () => {
   const requestId = ++exploreSectionsRequestId
   const source = exploreSource.value
-  exploreLoading.value = true
+  exploreLoading.value = exploreSections.value.length === 0
   exploreUseLazySections.value = false
   try {
     // 一次性把 9 个分区 + emby/feiniu 角标全部拉回，避免 row 各自请求带来的 9 次 RTT 与重复角标查询
@@ -1949,7 +1949,7 @@ watch(
 watch(exploreSource, async (newSource, oldSource) => {
   if (!isSearchRouteActive()) return
   if (newSource === oldSource) return
-  resetExploreState()
+  exploreUseLazySections.value = false
   await initializeExploreHome()
 })
 
