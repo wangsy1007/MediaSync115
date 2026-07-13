@@ -1214,7 +1214,7 @@ class ArchiveService:
         output_cid = str(config.get("archive_output_cid") or "").strip()
         pan115 = self._get_pan115()
         parsed = self.parse_media_filename(filename)
-        return await self._process_one(
+        result = await self._process_one(
             pan115,
             {
                 "fid": fid,
@@ -1227,6 +1227,18 @@ class ArchiveService:
             trigger="retry",
             folder_cache={},
         )
+        if str(result.get("status") or "") == ArchiveStatus.SUCCESS.value:
+            await self._trigger_strm_after_archive(
+                {
+                    "success": 1,
+                    "failed": 0,
+                    "skipped": 0,
+                    "total": 1,
+                    "items": [result],
+                },
+                "retry",
+            )
+        return result
 
     async def clear_tasks(self, include_failed: bool = False) -> int:
         statuses = [ArchiveStatus.SUCCESS, ArchiveStatus.SKIPPED]

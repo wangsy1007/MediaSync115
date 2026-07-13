@@ -38,10 +38,16 @@ class TestMediaPostprocessService:
         """测试归档完成后自动触发 STRM 生成"""
         monkeypatch.setattr(runtime_settings_service, "get_strm_enabled", lambda: True)
 
-        called: dict[str, str] = {}
+        called: dict = {}
 
-        async def fake_start_generate_library(trigger: str = "manual") -> dict:
+        async def fake_start_generate_library(
+            trigger: str = "manual",
+            mode: str = "full",
+            scopes: list[dict] | None = None,
+        ) -> dict:
             called["trigger"] = trigger
+            called["mode"] = mode
+            called["scopes"] = scopes
             return {"success": True, "started": True}
 
         monkeypatch.setattr(
@@ -55,6 +61,62 @@ class TestMediaPostprocessService:
 
         assert result["triggered"] is True
         assert called["trigger"] == "archive_subscription_transfer"
+        assert called["mode"] == "incremental"
+        assert called["scopes"] is None
+
+    @pytest.mark.asyncio
+    async def test_trigger_strm_forwards_deduplicated_archive_scopes(
+        self, monkeypatch
+    ) -> None:
+        """测试归档成果转换为去重后的 STRM 增量范围"""
+        monkeypatch.setattr(runtime_settings_service, "get_strm_enabled", lambda: True)
+
+        called: dict = {}
+
+        async def fake_start_generate_library(**kwargs) -> dict:
+            called.update(kwargs)
+            return {"success": True, "started": True}
+
+        monkeypatch.setattr(
+            strm_service, "start_generate_library", fake_start_generate_library
+        )
+        successful_item = {
+            "status": "success",
+            "source_fid": "fid-1",
+            "target_cid": "cid-1",
+            "target_desc": "电影/华语电影/测试电影 (2026)",
+        }
+
+        result = await media_postprocess_service.trigger_strm_after_archive(
+            {
+                "success": 1,
+                "skipped": 1,
+                "items": [
+                    successful_item,
+                    {**successful_item, "status": "skipped"},
+                    {
+                        "status": "failed",
+                        "source_fid": "fid-2",
+                        "target_cid": "cid-2",
+                        "target_desc": "电影/外语电影/失败电影 (2026)",
+                    },
+                ],
+            },
+            trigger="archive_manual",
+        )
+
+        assert result["triggered"] is True
+        assert called == {
+            "trigger": "archive_manual",
+            "mode": "incremental",
+            "scopes": [
+                {
+                    "source_fid": "fid-1",
+                    "target_cid": "cid-1",
+                    "relative_prefix": "电影/华语电影/测试电影 (2026)",
+                }
+            ],
+        }
 
     @pytest.mark.asyncio
     async def test_skip_strm_when_no_processed_items(self, monkeypatch) -> None:

@@ -1,3 +1,8 @@
+from types import SimpleNamespace
+
+import pytest
+
+import app.services.archive_service as archive_service_module
 from app.services.archive_service import archive_service
 
 
@@ -86,3 +91,58 @@ class TestArchiveService:
             naming,
         )
         assert filename == "黑客帝国.1999.4K HDR10 HEVC.mkv"
+
+    @pytest.mark.asyncio
+    async def test_retry_success_triggers_scoped_strm(self, monkeypatch) -> None:
+        """测试重试成功后携带归档成果触发 STRM"""
+
+        class FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def get(self, model, task_id):
+                return SimpleNamespace(
+                    source_path="source-fid",
+                    source_filename="测试电影.2026.mkv",
+                )
+
+        result = {
+            "task_id": 7,
+            "status": "success",
+            "source_fid": "source-fid",
+            "source_filename": "测试电影.2026.mkv",
+            "target_cid": "target-cid",
+            "target_desc": "电影/华语电影/测试电影 (2026)",
+        }
+        triggered: dict = {}
+
+        async def fake_process_one(*args, **kwargs):
+            return result
+
+        async def fake_trigger(summary, trigger):
+            triggered["summary"] = summary
+            triggered["trigger"] = trigger
+
+        monkeypatch.setattr(
+            archive_service_module, "async_session_maker", lambda: FakeSession()
+        )
+        monkeypatch.setattr(archive_service, "_get_pan115", lambda: object())
+        monkeypatch.setattr(archive_service, "_process_one", fake_process_one)
+        monkeypatch.setattr(
+            archive_service, "_trigger_strm_after_archive", fake_trigger
+        )
+
+        response = await archive_service.retry_task(7)
+
+        assert response is result
+        assert triggered["trigger"] == "retry"
+        assert triggered["summary"] == {
+            "success": 1,
+            "failed": 0,
+            "skipped": 0,
+            "total": 1,
+            "items": [result],
+        }

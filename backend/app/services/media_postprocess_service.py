@@ -9,6 +9,41 @@ logger = logging.getLogger(__name__)
 class MediaPostprocessService:
     """媒体转存后的统一后处理服务"""
 
+    @staticmethod
+    def _build_archive_scopes(
+        summary: dict[str, Any],
+    ) -> list[dict[str, str]] | None:
+        items = summary.get("items")
+        if not isinstance(items, list):
+            return None
+
+        scopes: list[dict[str, str]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("status") or "") not in {"success", "skipped"}:
+                continue
+
+            source_fid = str(item.get("source_fid") or "").strip()
+            target_cid = str(item.get("target_cid") or "").strip()
+            relative_prefix = str(item.get("target_desc") or "").strip()
+            if not source_fid or not target_cid or not relative_prefix:
+                continue
+
+            scope_key = (source_fid, target_cid, relative_prefix)
+            if scope_key in seen:
+                continue
+            seen.add(scope_key)
+            scopes.append(
+                {
+                    "source_fid": source_fid,
+                    "target_cid": target_cid,
+                    "relative_prefix": relative_prefix,
+                }
+            )
+        return scopes or None
+
     async def trigger_archive_after_transfer(
         self, trigger: str = "transfer"
     ) -> dict[str, Any]:
@@ -47,7 +82,12 @@ class MediaPostprocessService:
         try:
             from app.services.strm_service import strm_service
 
-            result = await strm_service.start_generate_library(trigger=trigger)
+            scopes = self._build_archive_scopes(payload)
+            result = await strm_service.start_generate_library(
+                trigger=trigger,
+                mode="incremental",
+                scopes=scopes,
+            )
             return {"triggered": True, "result": result}
         except Exception as exc:
             logger.warning("Failed to trigger STRM generation after archive: %s", exc)
