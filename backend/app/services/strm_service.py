@@ -14,8 +14,11 @@ from typing import Any
 
 import httpx
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
+from sqlalchemy import delete, func, select
 from starlette.background import BackgroundTask
 
+from app.core.database import async_session_maker, ensure_tables_exist
+from app.models.strm_index import StrmFileIndex, StrmFolderIndex, StrmSyncState
 from app.services.emby_service import emby_service
 from app.services.feiniu_service import feiniu_service
 from app.services.operation_log_service import operation_log_service
@@ -52,6 +55,14 @@ class StrmService:
         self._last_generate_error: str = ""
         self._last_generate_summary: dict[str, Any] | None = None
         self._last_generate_trigger: str = ""
+        self._pending_mode: str | None = None
+        self._pending_scopes: list[dict[str, str]] = []
+        self._pending_unscoped = False
+        self._index_stats: dict[str, Any] = {
+            "file_count": 0,
+            "folder_count": 0,
+            "output_cid": "",
+        }
 
     def get_runtime_status(self) -> dict[str, Any]:
         generate_running = bool(self._generate_task and not self._generate_task.done())
@@ -62,6 +73,10 @@ class StrmService:
             "last_generate_error": self._last_generate_error,
             "last_generate_summary": self._last_generate_summary,
             "last_generate_trigger": self._last_generate_trigger,
+            "queued": bool(self._pending_mode),
+            "queued_mode": self._pending_mode or "",
+            "queued_scope_count": len(self._pending_scopes),
+            "index_stats": dict(self._index_stats),
         }
 
     @staticmethod
@@ -122,9 +137,26 @@ class StrmService:
         token = self._encode_token({"pc": str(pick_code or "").strip()})
         return f"{base_url}/api/strm/play/{token}"
 
-    async def start_generate_library(self, trigger: str = "manual") -> dict[str, Any]:
+    async def start_generate_library(
+        self,
+        trigger: str = "manual",
+        mode: str = "incremental",
+        scopes: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        mode = self._validate_mode(mode)
+        normalized_scopes = self._normalize_scopes(scopes)
         if self._is_generate_running():
-            raise ValueError("STRM 生成任务正在执行中，请稍后再试")
+            if mode == "full":
+                raise ValueError("STRM 生成任务正在执行中，完整扫描不能排队")
+            self._merge_pending_scopes(normalized_scopes, unscoped=scopes is None)
+            return {
+                "success": True,
+                "started": False,
+                "queued": True,
+                "mode": "incremental",
+                "queued_scope_count": len(self._pending_scopes),
+                "trigger": str(trigger or "manual"),
+            }
 
         output_cid, output_dir = self._prepare_generate()
         task = asyncio.create_task(
@@ -132,6 +164,8 @@ class StrmService:
                 trigger=str(trigger or "manual"),
                 output_cid=output_cid,
                 output_dir=output_dir,
+                mode=mode,
+                scopes=normalized_scopes,
             )
         )
         self._generate_task = task
@@ -139,12 +173,21 @@ class StrmService:
         return {
             "success": True,
             "started": True,
+            "queued": False,
             "trigger": str(trigger or "manual"),
+            "mode": mode,
+            "scope_count": len(normalized_scopes),
             "output_cid": output_cid,
             "output_dir": str(output_dir),
         }
 
-    async def generate_library(self, trigger: str = "manual") -> dict[str, Any]:
+    async def generate_library(
+        self,
+        trigger: str = "manual",
+        mode: str = "incremental",
+        scopes: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        mode = self._validate_mode(mode)
         if self._is_generate_running() and not self._lock.locked():
             raise ValueError("STRM 生成任务正在执行中，请稍后再试")
 
@@ -154,10 +197,17 @@ class StrmService:
             trigger=str(trigger or "manual"),
             output_cid=output_cid,
             output_dir=output_dir,
+            mode=mode,
+            scopes=self._normalize_scopes(scopes),
         )
 
     async def _run_generate_task(
-        self, trigger: str, output_cid: str, output_dir: Path
+        self,
+        trigger: str,
+        output_cid: str,
+        output_dir: Path,
+        mode: str,
+        scopes: list[dict[str, str]],
     ) -> dict[str, Any]:
         if self._lock.locked() and asyncio.current_task() is not self._generate_task:
             raise ValueError("STRM 生成任务正在执行中，请稍后再试")
@@ -184,8 +234,28 @@ class StrmService:
 
             try:
                 summary = await self._generate(
-                    output_cid=output_cid, output_dir=output_dir
+                    output_cid=output_cid,
+                    output_dir=output_dir,
+                    mode=mode,
+                    scopes=scopes,
                 )
+                while self._pending_mode:
+                    queued_mode, queued_scopes = self._take_pending()
+                    queued_summary = await self._generate(
+                        output_cid=output_cid,
+                        output_dir=output_dir,
+                        mode=queued_mode,
+                        scopes=queued_scopes,
+                    )
+                    summary["queued_runs"] = summary.get("queued_runs", 0) + 1
+                    for key in ("scanned_video_count", "written_count", "removed_count"):
+                        summary[key] = summary.get(key, 0) + queued_summary.get(key, 0)
+                    summary["generated_file_count"] = queued_summary.get(
+                        "generated_file_count", summary.get("generated_file_count", 0)
+                    )
+                    summary["refresh_results"] = queued_summary.get(
+                        "refresh_results", {}
+                    )
                 self._last_generate_summary = summary
                 self._last_generate_finished_at = self._now_iso()
                 await operation_log_service.log_background_event(
@@ -228,6 +298,62 @@ class StrmService:
             raise ValueError("请先配置 STRM 播放根地址")
         return output_cid, output_dir
 
+    @staticmethod
+    def _validate_mode(mode: str) -> str:
+        normalized = str(mode or "incremental").strip().lower()
+        if normalized not in {"incremental", "full"}:
+            raise ValueError("STRM 生成模式必须是 incremental 或 full")
+        return normalized
+
+    @classmethod
+    def _normalize_scopes(
+        cls, scopes: list[dict[str, Any]] | None
+    ) -> list[dict[str, str]]:
+        normalized: dict[tuple[str, str, str], dict[str, str]] = {}
+        for raw in scopes or []:
+            if not isinstance(raw, dict):
+                continue
+            scope = {
+                "fid": str(raw.get("fid") or "").strip(),
+                "target_cid": str(raw.get("target_cid") or "").strip(),
+                "relative_prefix": cls._normalize_prefix(
+                    str(raw.get("relative_prefix") or "")
+                ),
+            }
+            if not scope["fid"] and not scope["target_cid"]:
+                continue
+            key = (scope["fid"], scope["target_cid"], scope["relative_prefix"])
+            normalized[key] = scope
+        return list(normalized.values())
+
+    @staticmethod
+    def _normalize_prefix(value: str) -> str:
+        parts = [
+            part.replace("\\", "_").replace("/", "_").strip() or "_"
+            for part in PurePosixPath(str(value or "").strip().strip("/")).parts
+            if part not in {"", ".", ".."}
+        ]
+        return PurePosixPath(*parts).as_posix() if parts else ""
+
+    def _merge_pending_scopes(
+        self, scopes: list[dict[str, str]], *, unscoped: bool = False
+    ) -> None:
+        self._pending_mode = "incremental"
+        self._pending_unscoped = self._pending_unscoped or unscoped
+        merged = {
+            (item["fid"], item["target_cid"], item["relative_prefix"]): item
+            for item in (*self._pending_scopes, *scopes)
+        }
+        self._pending_scopes = list(merged.values())
+
+    def _take_pending(self) -> tuple[str, list[dict[str, str]]]:
+        mode = self._pending_mode or "incremental"
+        scopes = [] if self._pending_unscoped else self._pending_scopes
+        self._pending_mode = None
+        self._pending_scopes = []
+        self._pending_unscoped = False
+        return mode, scopes
+
     def _is_generate_running(self) -> bool:
         return bool(self._generate_task and not self._generate_task.done())
 
@@ -238,6 +364,23 @@ class StrmService:
             task.result()
         except Exception:
             logger.exception("STRM 后台生成任务执行失败")
+        if self._pending_mode and self._generate_task is None:
+            try:
+                mode, scopes = self._take_pending()
+                output_cid, output_dir = self._prepare_generate()
+                next_task = asyncio.create_task(
+                    self._run_generate_task(
+                        trigger="queued",
+                        output_cid=output_cid,
+                        output_dir=output_dir,
+                        mode=mode,
+                        scopes=scopes,
+                    )
+                )
+                self._generate_task = next_task
+                next_task.add_done_callback(self._clear_generate_task)
+            except Exception:
+                logger.exception("启动排队的 STRM 生成任务失败")
 
     async def diagnose_sample(
         self, request_headers: dict[str, str] | None = None
@@ -355,61 +498,185 @@ class StrmService:
             request_headers=request_headers or {},
         )
 
-    async def _generate(self, output_cid: str, output_dir: Path) -> dict[str, Any]:
-        scanned_files = await self._scan_video_files(
-            pan115=pan115_service, cid=output_cid
+    async def _generate(
+        self,
+        output_cid: str,
+        output_dir: Path,
+        mode: str = "incremental",
+        scopes: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        await ensure_tables_exist(
+            "strm_file_index", "strm_folder_index", "strm_sync_state"
+        )
+        existing_files, existing_folders, state = await self._load_index(output_cid)
+        config_fingerprint = self._config_fingerprint()
+        requested_mode = mode
+        if not existing_files:
+            mode = "full"
+
+        config_only = (
+            mode == "incremental"
+            and not scopes
+            and state is not None
+            and state.config_fingerprint != config_fingerprint
+            and bool(existing_files)
+        )
+        scan: dict[str, Any]
+        if config_only:
+            scan = {
+                "files": [self._file_model_to_record(item) for item in existing_files],
+                "folders": [],
+                "complete_prefixes": [],
+                "exact_fids": set(),
+                "parent_cids": set(),
+                "root_snapshot_hash": state.root_snapshot_hash,
+                "source": "index_config_rewrite",
+            }
+        elif mode == "full":
+            files, folders = await self._scan_tree(
+                pan115_service, output_cid, "", parent_cid=""
+            )
+            root = next((item for item in folders if item["fid"] == output_cid), None)
+            scan = {
+                "files": files,
+                "folders": folders,
+                "complete_prefixes": [""],
+                "exact_fids": set(),
+                "parent_cids": set(),
+                "root_snapshot_hash": root["snapshot_hash"] if root else "",
+                "source": "full",
+            }
+        elif scopes:
+            scan = await self._scan_scopes(pan115_service, scopes)
+        else:
+            scan = await self._scan_root_incremental(
+                pan115_service,
+                output_cid,
+                existing_files,
+                existing_folders,
+                state,
+            )
+            if scan.get("fallback_full"):
+                files, folders = await self._scan_tree(
+                    pan115_service, output_cid, "", parent_cid=""
+                )
+                root = next(
+                    (item for item in folders if item["fid"] == output_cid), None
+                )
+                mode = "full"
+                scan = {
+                    "files": files,
+                    "folders": folders,
+                    "complete_prefixes": [""],
+                    "exact_fids": set(),
+                    "parent_cids": set(),
+                    "root_snapshot_hash": root["snapshot_hash"] if root else "",
+                    "source": "full_fallback",
+                }
+
+        scanned_files = scan["files"]
+        scanned_by_fid = {item["fid"]: item for item in scanned_files}
+        existing_by_fid = {item.fid: item for item in existing_files}
+        stale_fids = self._select_stale_fids(
+            existing_files=existing_files,
+            scanned_fids=set(scanned_by_fid),
+            complete_prefixes=scan["complete_prefixes"],
+            exact_fids=scan["exact_fids"],
+            parent_cids=scan["parent_cids"],
         )
 
         await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
         manifest_path = output_dir / MANIFEST_FILENAME
-        previous_files = await self._load_manifest_files_async(manifest_path)
-
-        generated_files: set[str] = set()
+        previous_manifest_files = await self._load_manifest_files_async(manifest_path)
         written_count = 0
         unchanged_count = 0
+        removed_count = 0
+
+        paths_to_remove: set[str] = set()
+        for fid in stale_fids:
+            old = existing_by_fid.get(fid)
+            if old:
+                paths_to_remove.add(self._strm_relative_path(old.relative_path))
+        for item in scanned_files:
+            old = existing_by_fid.get(item["fid"])
+            if old and old.relative_path != item["relative_path"]:
+                paths_to_remove.add(self._strm_relative_path(old.relative_path))
+
+        for relative in sorted(paths_to_remove):
+            if await self._remove_generated_file(output_dir, relative):
+                removed_count += 1
 
         for item in scanned_files:
-            relative_video_path = PurePosixPath(item["relative_path"])
-            safe_relative_path = self._safe_relative_path(relative_video_path)
-            strm_relative_path = safe_relative_path.with_suffix(".strm")
-            generated_files.add(strm_relative_path.as_posix())
-
-            target_path = output_dir.joinpath(*strm_relative_path.parts)
+            item["content_hash"] = self._record_content_hash(item)
+            strm_relative = self._strm_relative_path(item["relative_path"])
+            target_path = output_dir.joinpath(*PurePosixPath(strm_relative).parts)
+            content = self.build_play_url(item["pick_code"]) + "\n"
+            old = existing_by_fid.get(item["fid"])
+            needs_write = (
+                old is None
+                or old.relative_path != item["relative_path"]
+                or old.content_hash != item["content_hash"]
+                or old.config_fingerprint != config_fingerprint
+                or not await asyncio.to_thread(target_path.is_file)
+            )
+            if not needs_write:
+                unchanged_count += 1
+                continue
             await asyncio.to_thread(target_path.parent.mkdir, parents=True, exist_ok=True)
-            content = self.build_play_url(item["pc"]) + "\n"
-
-            if await asyncio.to_thread(target_path.exists):
+            if await asyncio.to_thread(target_path.is_file):
                 try:
-                    existing_content = await asyncio.to_thread(
-                        target_path.read_text, encoding="utf-8"
-                    )
-                    if existing_content == content:
+                    if (
+                        await asyncio.to_thread(
+                            target_path.read_text, encoding="utf-8"
+                        )
+                        == content
+                    ):
                         unchanged_count += 1
                         continue
                 except Exception:
                     pass
-
-            await asyncio.to_thread(
-                target_path.write_text, content, encoding="utf-8"
-            )
+            await asyncio.to_thread(target_path.write_text, content, encoding="utf-8")
             written_count += 1
 
-        removed_count = 0
-        stale_files = previous_files - generated_files
-        for relative in stale_files:
-            stale_path = output_dir.joinpath(*PurePosixPath(relative).parts)
-            if await asyncio.to_thread(stale_path.exists) and await asyncio.to_thread(
-                stale_path.is_file
-            ):
-                await asyncio.to_thread(stale_path.unlink)
-                removed_count += 1
-
+        final_records = {
+            item.fid: self._file_model_to_record(item)
+            for item in existing_files
+            if item.fid not in stale_fids
+        }
+        final_records.update(scanned_by_fid)
+        generated_files = {
+            self._strm_relative_path(item["relative_path"])
+            for item in final_records.values()
+        }
+        if mode == "full":
+            for relative in sorted(previous_manifest_files - generated_files):
+                if await self._remove_generated_file(output_dir, relative):
+                    removed_count += 1
+        await self._persist_index(
+            output_cid=output_cid,
+            scanned_files=scanned_files,
+            scanned_folders=scan["folders"],
+            stale_fids=stale_fids,
+            complete_prefixes=scan["complete_prefixes"],
+            config_fingerprint=config_fingerprint,
+            root_snapshot_hash=scan.get("root_snapshot_hash")
+            or (state.root_snapshot_hash if state else ""),
+            mode=mode,
+            file_count=len(final_records),
+        )
         await asyncio.to_thread(self._cleanup_empty_dirs, output_dir)
         await self._save_manifest_async(manifest_path, generated_files, output_cid)
 
-        refresh_results = await self._refresh_media_servers()
+        refresh_results = (
+            await self._refresh_media_servers()
+            if written_count + removed_count > 0
+            else {}
+        )
         return {
             "trigger": self._last_generate_trigger,
+            "requested_mode": requested_mode,
+            "mode": mode,
+            "scan_source": scan["source"],
             "output_cid": output_cid,
             "output_dir": str(output_dir),
             "scanned_video_count": len(scanned_files),
@@ -420,48 +687,548 @@ class StrmService:
             "refresh_results": refresh_results,
         }
 
+    async def _scan_tree(
+        self,
+        pan115: Pan115Service,
+        cid: str,
+        relative_prefix: str,
+        parent_cid: str,
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        files: list[dict[str, str]] = []
+        folders: list[dict[str, str]] = []
+
+        async def _walk(
+            folder_cid: str, prefix: str, folder_parent_cid: str
+        ) -> None:
+            items = await self._list_folder_items(pan115, folder_cid)
+            folders.append(
+                {
+                    "fid": folder_cid,
+                    "relative_path": prefix,
+                    "parent_cid": folder_parent_cid,
+                    "snapshot_hash": self._snapshot_hash(items, pan115),
+                }
+            )
+            for item in items:
+                name = self._extract_file_name(item)
+                if not name:
+                    continue
+                relative_path = (
+                    PurePosixPath(prefix, name).as_posix() if prefix else name
+                )
+                if pan115._is_folder_item(item):
+                    child_cid = str(pan115._extract_folder_id(item) or "").strip()
+                    if child_cid:
+                        await _walk(child_cid, relative_path, folder_cid)
+                    continue
+                record = self._file_item_to_record(item, relative_path, folder_cid)
+                if record:
+                    files.append(record)
+
+        await _walk(str(cid), self._normalize_prefix(relative_prefix), parent_cid)
+        return files, folders
+
     async def _scan_video_files(
         self, pan115: Pan115Service, cid: str
     ) -> list[dict[str, str]]:
-        results: list[dict[str, str]] = []
+        """兼容旧调用方；新索引扫描使用扩展字段。"""
+        files, _ = await self._scan_tree(pan115, cid, "", "")
+        return files
 
-        async def _walk(folder_cid: str, parent_parts: tuple[str, ...]) -> None:
-            offset = 0
-            limit = 200
-            while True:
-                response = await pan115.get_file_list(
-                    cid=folder_cid, offset=offset, limit=limit
+    async def _scan_scopes(
+        self, pan115: Pan115Service, scopes: list[dict[str, str]]
+    ) -> dict[str, Any]:
+        files: list[dict[str, str]] = []
+        folders: list[dict[str, str]] = []
+        complete_prefixes: set[str] = set()
+        exact_fids: set[str] = set()
+        parent_cids: set[str] = set()
+
+        for scope in scopes:
+            fid = scope["fid"]
+            target_cid = scope["target_cid"]
+            prefix = scope["relative_prefix"]
+            handled = False
+            if fid:
+                try:
+                    payload = await pan115.get_file_info(fid)
+                    item = self._find_file_info_item(payload, fid)
+                    if item:
+                        handled = True
+                        exact_fids.add(fid)
+                        if pan115._is_folder_item(item):
+                            tree_files, tree_folders = await self._scan_tree(
+                                pan115, fid, prefix, target_cid
+                            )
+                            files.extend(tree_files)
+                            folders.extend(tree_folders)
+                            complete_prefixes.add(prefix)
+                        else:
+                            name = self._extract_file_name(item)
+                            relative_path = (
+                                PurePosixPath(prefix, name).as_posix()
+                                if prefix and name
+                                else (prefix or name)
+                            )
+                            record = self._file_item_to_record(
+                                item, relative_path, target_cid
+                            )
+                            if record:
+                                files.append(record)
+                except Exception:
+                    logger.warning(
+                        "无法按 fid=%s 获取 STRM 增量范围，尝试目标目录", fid,
+                        exc_info=True,
+                    )
+            if not handled and target_cid:
+                tree_files, tree_folders = await self._scan_tree(
+                    pan115, target_cid, prefix, ""
                 )
-                items = response.get("data") or []
-                if not isinstance(items, list) or not items:
-                    break
+                files.extend(tree_files)
+                folders.extend(tree_folders)
+                complete_prefixes.add(prefix)
 
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    name = self._extract_file_name(item)
-                    if not name:
-                        continue
-                    if pan115._is_folder_item(item):
-                        child_cid = str(pan115._extract_folder_id(item) or "").strip()
-                        if child_cid:
-                            await _walk(child_cid, (*parent_parts, name))
-                        continue
+        return {
+            "files": self._dedupe_records(files),
+            "folders": self._dedupe_records(folders),
+            "complete_prefixes": sorted(complete_prefixes),
+            "exact_fids": exact_fids,
+            "parent_cids": parent_cids,
+            "root_snapshot_hash": "",
+            "source": "scopes",
+        }
 
-                    if not self._is_video_file(name):
-                        continue
-                    pick_code = self._extract_pick_code(item)
-                    if not pick_code:
-                        continue
-                    relative_path = PurePosixPath(*parent_parts, name).as_posix()
-                    results.append({"pc": pick_code, "relative_path": relative_path})
+    async def _scan_root_incremental(
+        self,
+        pan115: Pan115Service,
+        output_cid: str,
+        existing_files: list[StrmFileIndex],
+        existing_folders: list[StrmFolderIndex],
+        state: StrmSyncState | None,
+    ) -> dict[str, Any]:
+        try:
+            root_items = await self._list_folder_items(pan115, output_cid)
+            root_hash = self._snapshot_hash(root_items, pan115)
+            if state and state.root_snapshot_hash == root_hash:
+                return {
+                    "files": [],
+                    "folders": [],
+                    "complete_prefixes": [],
+                    "exact_fids": set(),
+                    "parent_cids": set(),
+                    "root_snapshot_hash": root_hash,
+                    "source": "root_snapshot_unchanged",
+                }
 
-                if len(items) < limit:
-                    break
-                offset += len(items)
+            indexed_folders = {item.fid: item for item in existing_folders}
+            old_top = {
+                item.fid: item
+                for item in existing_folders
+                if item.parent_cid == output_cid
+            }
+            current_top: dict[str, tuple[dict[str, Any], str]] = {}
+            direct_files: list[dict[str, str]] = []
+            for item in root_items:
+                name = self._extract_file_name(item)
+                if not name:
+                    continue
+                if pan115._is_folder_item(item):
+                    child_cid = str(pan115._extract_folder_id(item) or "").strip()
+                    if child_cid:
+                        current_top[child_cid] = (item, name)
+                else:
+                    record = self._file_item_to_record(item, name, output_cid)
+                    if record:
+                        direct_files.append(record)
 
-        await _walk(str(cid or "0"), tuple())
+            files = list(direct_files)
+            folders: list[dict[str, str]] = [
+                {
+                    "fid": output_cid,
+                    "relative_path": "",
+                    "parent_cid": "",
+                    "snapshot_hash": root_hash,
+                }
+            ]
+            complete_prefixes: set[str] = set()
+            list_cache: dict[str, list[dict[str, Any]]] = {}
+            for child_cid, (_, name) in current_top.items():
+                old = old_top.get(child_cid)
+                changed = old is None or old.relative_path != name
+                if not changed:
+                    changed = await self._folder_tree_changed(
+                        pan115, child_cid, indexed_folders, list_cache
+                    )
+                if changed:
+                    tree_files, tree_folders = await self._scan_tree(
+                        pan115, child_cid, name, output_cid
+                    )
+                    files.extend(tree_files)
+                    folders.extend(tree_folders)
+                    complete_prefixes.add(name)
+                    if old and old.relative_path != name:
+                        complete_prefixes.add(old.relative_path)
+
+            for child_cid, old in old_top.items():
+                if child_cid not in current_top:
+                    complete_prefixes.add(old.relative_path)
+
+            return {
+                "files": self._dedupe_records(files),
+                "folders": self._dedupe_records(folders),
+                "complete_prefixes": sorted(complete_prefixes),
+                "exact_fids": set(),
+                "parent_cids": {output_cid},
+                "root_snapshot_hash": root_hash,
+                "source": "root_snapshot",
+            }
+        except Exception:
+            logger.warning("根目录增量快照不完整，将回退完整扫描", exc_info=True)
+            return {"fallback_full": True}
+
+    async def _folder_tree_changed(
+        self,
+        pan115: Pan115Service,
+        folder_cid: str,
+        indexed_folders: dict[str, StrmFolderIndex],
+        list_cache: dict[str, list[dict[str, Any]]],
+    ) -> bool:
+        items = list_cache.get(folder_cid)
+        if items is None:
+            items = await self._list_folder_items(pan115, folder_cid)
+            list_cache[folder_cid] = items
+        indexed = indexed_folders.get(folder_cid)
+        if indexed is None or indexed.snapshot_hash != self._snapshot_hash(items, pan115):
+            return True
+        for item in items:
+            if not pan115._is_folder_item(item):
+                continue
+            child_cid = str(pan115._extract_folder_id(item) or "").strip()
+            if child_cid and await self._folder_tree_changed(
+                pan115, child_cid, indexed_folders, list_cache
+            ):
+                return True
+        return False
+
+    @staticmethod
+    async def _list_folder_items(
+        pan115: Pan115Service, cid: str
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        offset = 0
+        limit = 200
+        while True:
+            response = await pan115.get_file_list(
+                cid=str(cid), offset=offset, limit=limit
+            )
+            items = response.get("data") if isinstance(response, dict) else None
+            if isinstance(items, dict):
+                items = items.get("data") or items.get("list")
+            if not isinstance(items, list):
+                raise ValueError(f"115 目录 {cid} 返回了不完整的列表")
+            valid_items = [item for item in items if isinstance(item, dict)]
+            results.extend(valid_items)
+            if len(items) < limit:
+                break
+            offset += len(items)
         return results
+
+    @classmethod
+    def _snapshot_hash(
+        cls, items: list[dict[str, Any]], pan115: Pan115Service
+    ) -> str:
+        snapshot: list[dict[str, str]] = []
+        for item in items:
+            is_folder = pan115._is_folder_item(item)
+            snapshot.append(
+                {
+                    "fid": (
+                        str(pan115._extract_folder_id(item) or "").strip()
+                        if is_folder
+                        else cls._extract_file_id(item)
+                    ),
+                    "name": cls._extract_file_name(item),
+                    "type": "folder" if is_folder else "file",
+                    "pick_code": "" if is_folder else cls._extract_pick_code(item),
+                    "sha1": "" if is_folder else cls._extract_optional(item, "sha1", "sha"),
+                    "size": "" if is_folder else cls._extract_optional(item, "fs", "size"),
+                }
+            )
+        body = json.dumps(
+            sorted(snapshot, key=lambda value: (value["type"], value["fid"], value["name"])),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _file_item_to_record(
+        cls, item: dict[str, Any], relative_path: str, parent_cid: str
+    ) -> dict[str, str] | None:
+        name = cls._extract_file_name(item)
+        fid = cls._extract_file_id(item)
+        pick_code = cls._extract_pick_code(item)
+        if not name or not fid or not pick_code or not cls._is_video_file(name):
+            return None
+        safe_path = cls._safe_relative_path(PurePosixPath(relative_path)).as_posix()
+        return {
+            "fid": fid,
+            "pick_code": pick_code,
+            "pc": pick_code,
+            "relative_path": safe_path,
+            "parent_cid": str(parent_cid or ""),
+            "sha1": cls._extract_optional(item, "sha1", "sha"),
+            "utime": cls._extract_optional(
+                item, "utime", "user_utime", "upt", "te"
+            ),
+        }
+
+    @staticmethod
+    def _extract_optional(item: dict[str, Any], *keys: str) -> str:
+        for key in keys:
+            value = item.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+
+    @classmethod
+    def _find_file_info_item(
+        cls, payload: Any, fid: str
+    ) -> dict[str, Any] | None:
+        if isinstance(payload, dict):
+            if cls._extract_file_id(payload) == fid:
+                return payload
+            for value in payload.values():
+                found = cls._find_file_info_item(value, fid)
+                if found:
+                    return found
+        elif isinstance(payload, list):
+            for value in payload:
+                found = cls._find_file_info_item(value, fid)
+                if found:
+                    return found
+        return None
+
+    @staticmethod
+    def _dedupe_records(
+        records: list[dict[str, str]]
+    ) -> list[dict[str, str]]:
+        return list({item["fid"]: item for item in records if item.get("fid")}.values())
+
+    @staticmethod
+    def _record_content_hash(item: dict[str, str]) -> str:
+        body = json.dumps(
+            {
+                "pick_code": item.get("pick_code", ""),
+                "relative_path": item.get("relative_path", ""),
+                "sha1": item.get("sha1", ""),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+    def _config_fingerprint(self) -> str:
+        payload = {
+            "base_url": runtime_settings_service.get_strm_base_url(),
+            "proxy_enabled": runtime_settings_service.get_strm_proxy_enabled(),
+            "proxy_port": runtime_settings_service.get_strm_proxy_port(),
+            "token_secret": self._get_token_secret(),
+        }
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _select_stale_fids(
+        cls,
+        existing_files: list[StrmFileIndex],
+        scanned_fids: set[str],
+        complete_prefixes: list[str],
+        exact_fids: set[str],
+        parent_cids: set[str],
+    ) -> set[str]:
+        stale: set[str] = set()
+        for item in existing_files:
+            covered = (
+                item.fid in exact_fids
+                or item.parent_cid in parent_cids
+                or any(
+                    cls._path_in_prefix(item.relative_path, prefix)
+                    for prefix in complete_prefixes
+                )
+            )
+            if covered and item.fid not in scanned_fids:
+                stale.add(item.fid)
+        return stale
+
+    @staticmethod
+    def _path_in_prefix(path: str, prefix: str) -> bool:
+        normalized_path = str(path or "").strip("/")
+        normalized_prefix = str(prefix or "").strip("/")
+        return not normalized_prefix or normalized_path == normalized_prefix or (
+            normalized_path.startswith(normalized_prefix + "/")
+        )
+
+    @classmethod
+    def _strm_relative_path(cls, relative_path: str) -> str:
+        return cls._safe_relative_path(PurePosixPath(relative_path)).with_suffix(
+            ".strm"
+        ).as_posix()
+
+    @staticmethod
+    async def _remove_generated_file(output_dir: Path, relative: str) -> bool:
+        target = output_dir.joinpath(*PurePosixPath(relative).parts)
+        if await asyncio.to_thread(target.is_file):
+            await asyncio.to_thread(target.unlink)
+            return True
+        return False
+
+    async def _load_index(
+        self, output_cid: str
+    ) -> tuple[list[StrmFileIndex], list[StrmFolderIndex], StrmSyncState | None]:
+        async with async_session_maker() as session:
+            files = list(
+                (
+                    await session.scalars(
+                        select(StrmFileIndex).where(
+                            StrmFileIndex.output_cid == output_cid
+                        )
+                    )
+                ).all()
+            )
+            folders = list(
+                (
+                    await session.scalars(
+                        select(StrmFolderIndex).where(
+                            StrmFolderIndex.output_cid == output_cid
+                        )
+                    )
+                ).all()
+            )
+            state = await session.get(StrmSyncState, output_cid)
+            return files, folders, state
+
+    @staticmethod
+    def _file_model_to_record(item: StrmFileIndex) -> dict[str, str]:
+        return {
+            "fid": item.fid,
+            "pick_code": item.pick_code,
+            "pc": item.pick_code,
+            "relative_path": item.relative_path,
+            "parent_cid": item.parent_cid,
+            "sha1": item.sha1 or "",
+            "utime": item.utime or "",
+            "content_hash": item.content_hash,
+        }
+
+    async def _persist_index(
+        self,
+        *,
+        output_cid: str,
+        scanned_files: list[dict[str, str]],
+        scanned_folders: list[dict[str, str]],
+        stale_fids: set[str],
+        complete_prefixes: list[str],
+        config_fingerprint: str,
+        root_snapshot_hash: str,
+        mode: str,
+        file_count: int,
+    ) -> None:
+        async with async_session_maker() as session:
+            if stale_fids:
+                await session.execute(
+                    delete(StrmFileIndex).where(
+                        StrmFileIndex.output_cid == output_cid,
+                        StrmFileIndex.fid.in_(stale_fids),
+                    )
+                )
+            for item in scanned_files:
+                model = await session.scalar(
+                    select(StrmFileIndex).where(
+                        StrmFileIndex.output_cid == output_cid,
+                        StrmFileIndex.fid == item["fid"],
+                    )
+                )
+                if model is None:
+                    model = StrmFileIndex(output_cid=output_cid, fid=item["fid"])
+                    session.add(model)
+                model.pick_code = item["pick_code"]
+                model.relative_path = item["relative_path"]
+                model.parent_cid = item["parent_cid"]
+                model.sha1 = item.get("sha1") or None
+                model.utime = item.get("utime") or None
+                model.content_hash = item["content_hash"]
+                model.config_fingerprint = config_fingerprint
+
+            if complete_prefixes:
+                indexed_folders = list(
+                    (
+                        await session.scalars(
+                            select(StrmFolderIndex).where(
+                                StrmFolderIndex.output_cid == output_cid
+                            )
+                        )
+                    ).all()
+                )
+                stale_folder_ids = [
+                    item.id
+                    for item in indexed_folders
+                    if any(
+                        self._path_in_prefix(item.relative_path, prefix)
+                        for prefix in complete_prefixes
+                    )
+                ]
+                if stale_folder_ids:
+                    await session.execute(
+                        delete(StrmFolderIndex).where(
+                            StrmFolderIndex.id.in_(stale_folder_ids)
+                        )
+                    )
+                    await session.flush()
+            for item in scanned_folders:
+                model = await session.scalar(
+                    select(StrmFolderIndex).where(
+                        StrmFolderIndex.output_cid == output_cid,
+                        StrmFolderIndex.fid == item["fid"],
+                    )
+                )
+                if model is None:
+                    model = StrmFolderIndex(output_cid=output_cid, fid=item["fid"])
+                    session.add(model)
+                model.relative_path = item["relative_path"]
+                model.parent_cid = item["parent_cid"]
+                model.snapshot_hash = item["snapshot_hash"]
+
+            await session.flush()
+            folder_count = int(
+                await session.scalar(
+                    select(func.count(StrmFolderIndex.id)).where(
+                        StrmFolderIndex.output_cid == output_cid
+                    )
+                )
+                or 0
+            )
+            state = await session.get(StrmSyncState, output_cid)
+            if state is None:
+                state = StrmSyncState(output_cid=output_cid)
+                session.add(state)
+            state.config_fingerprint = config_fingerprint
+            state.root_snapshot_hash = root_snapshot_hash
+            state.last_mode = mode
+            state.last_status = "success"
+            state.last_error = None
+            state.file_count = file_count
+            state.folder_count = folder_count
+            state.last_finished_at = beijing_now()
+            await session.commit()
+        self._index_stats = {
+            "output_cid": output_cid,
+            "file_count": file_count,
+            "folder_count": folder_count,
+            "last_mode": mode,
+            "last_status": "success",
+        }
 
     async def _refresh_media_servers(self) -> dict[str, Any]:
         results: dict[str, Any] = {}
