@@ -8,7 +8,12 @@ from sqlalchemy import delete, func, select
 
 from app.core.database import async_session_maker
 from app.models.archive import ArchiveStatus, ArchiveTask
-from app.models.models import DownloadRecord, Subscription
+from app.models.models import DownloadRecord, MediaType, Subscription
+from app.services.transfer_intent_service import (
+    extract_chinese_title_from_text,
+    pick_preferred_chinese_title,
+    transfer_intent_service,
+)
 from app.services.media_postprocess_service import media_postprocess_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pan115_service import Pan115Service
@@ -731,17 +736,27 @@ class ArchiveService:
         fid = item["fid"]
         filename = item["name"]
 
+        transfer_context = await self._lookup_transfer_context(
+            str(item.get("cid") or ""),
+            fid,
+            str(item.get("relative_path") or ""),
+            media_type=str(parsed.get("media_type") or "movie"),
+        )
+        intent = transfer_context.get("intent") or {}
+        if intent.get("tmdb_id"):
+            intent_matched = await self._identify_by_tmdb_id(
+                int(intent["tmdb_id"]),
+                str(intent.get("media_type") or parsed.get("media_type") or "movie"),
+            )
+            if intent_matched:
+                matched = intent_matched
+
         db_task = await self._upsert_task(
             task_id=None, source_fid=fid, source_filename=filename
         )
 
         try:
             region_name = str(matched.get("region_name") or MOVIE_REGION_DEFAULT)
-            transfer_context = await self._lookup_transfer_context(
-                str(item.get("cid") or ""),
-                fid,
-                str(item.get("relative_path") or ""),
-            )
             display_title = self._resolve_archive_display_title(
                 parsed,
                 matched,
@@ -901,16 +916,25 @@ class ArchiveService:
         )
 
         try:
-            matched = await self.identify_media(parsed)
-            if not matched:
-                raise ValueError("TMDB 未匹配到可用结果")
-
-            region_name = str(matched.get("region_name") or MOVIE_REGION_DEFAULT)
             transfer_context = await self._lookup_transfer_context(
                 str(item.get("cid") or source_cid or ""),
                 fid,
                 str(item.get("relative_path") or ""),
+                media_type=str(parsed.get("media_type") or "movie"),
             )
+            intent = transfer_context.get("intent") or {}
+            matched: dict[str, Any] | None = None
+            if intent.get("tmdb_id"):
+                matched = await self._identify_by_tmdb_id(
+                    int(intent["tmdb_id"]),
+                    str(intent.get("media_type") or parsed.get("media_type") or "movie"),
+                )
+            if not matched:
+                matched = await self.identify_media(parsed)
+            if not matched:
+                raise ValueError("TMDB 未匹配到可用结果")
+
+            region_name = str(matched.get("region_name") or MOVIE_REGION_DEFAULT)
             display_title = self._resolve_archive_display_title(
                 parsed,
                 matched,
@@ -1078,9 +1102,13 @@ class ArchiveService:
         parent_cid: str,
         fid: str,
         relative_path: str,
-    ) -> dict[str, str]:
+        *,
+        tmdb_id: int | None = None,
+        media_type: str = "",
+    ) -> dict[str, Any]:
         resource_name = ""
         subscription_title = ""
+        subscription_title_by_tmdb = ""
         lookup_ids = [value for value in (parent_cid, fid) if str(value or "").strip()]
         if lookup_ids:
             async with async_session_maker() as db:
@@ -1103,13 +1131,41 @@ class ArchiveService:
                     resource_name = str(row.resource_name or "").strip()
                     subscription_title = str(row.title or "").strip()
 
+        intent = await transfer_intent_service.find_best_match(
+            parent_cid=parent_cid,
+            file_fid=fid,
+            media_type=media_type,
+        )
+
+        lookup_tmdb_id = int(intent["tmdb_id"]) if intent and intent.get("tmdb_id") else None
+        if not lookup_tmdb_id and tmdb_id and int(tmdb_id) > 0:
+            lookup_tmdb_id = int(tmdb_id)
+
+        if lookup_tmdb_id:
+            async with async_session_maker() as db:
+                sub_result = await db.execute(
+                    select(Subscription.title)
+                    .where(
+                        Subscription.tmdb_id == lookup_tmdb_id,
+                        Subscription.media_type == (
+                            MediaType.TV if str(media_type) == "tv" else MediaType.MOVIE
+                        ),
+                    )
+                    .order_by(Subscription.updated_at.desc())
+                    .limit(1)
+                )
+                subscription_title_by_tmdb = str(sub_result.scalar_one_or_none() or "").strip()
+
         folder_name = self._extract_transfer_folder_name(relative_path)
         if not resource_name and folder_name:
             resource_name = folder_name
 
         return {
             "resource_name": resource_name,
-            "subscription_title": subscription_title,
+            "subscription_title": subscription_title or subscription_title_by_tmdb,
+            "subscription_title_by_tmdb": subscription_title_by_tmdb,
+            "folder_name": folder_name,
+            "intent": intent or {},
         }
 
     def _resolve_archive_display_title(
@@ -1117,28 +1173,44 @@ class ArchiveService:
         parsed: dict[str, Any],
         matched: dict[str, Any],
         *,
-        transfer_context: dict[str, str] | None = None,
+        transfer_context: dict[str, Any] | None = None,
     ) -> str:
         context = transfer_context or {}
         media_type = str(parsed.get("media_type") or "movie")
-        tmdb_title = str(matched.get("title") or "").strip()
-        parsed_title = str(parsed.get("query_title") or "").strip()
+        intent = context.get("intent") or {}
+        intent_title = str(intent.get("display_title") or "").strip()
 
-        transfer_title = self._title_from_transfer_resource_name(
+        folder_title = extract_chinese_title_from_text(str(context.get("folder_name") or ""))
+        resource_title = extract_chinese_title_from_text(
             str(context.get("resource_name") or "")
         )
         subscription_title = str(context.get("subscription_title") or "").strip()
+        subscription_title_by_tmdb = str(
+            context.get("subscription_title_by_tmdb") or ""
+        ).strip()
+        tmdb_title = str(matched.get("title") or "").strip()
+        parsed_title = str(parsed.get("query_title") or "").strip()
 
         if media_type == "movie":
-            for candidate in (transfer_title, subscription_title, tmdb_title, parsed_title):
-                if len(candidate) >= 2:
-                    return candidate
-            return tmdb_title or parsed_title
+            return pick_preferred_chinese_title(
+                intent_title,
+                subscription_title,
+                subscription_title_by_tmdb,
+                folder_title,
+                resource_title,
+                tmdb_title,
+                parsed_title,
+            )
 
-        for candidate in (tmdb_title, transfer_title, subscription_title, parsed_title):
-            if len(candidate) >= 2:
-                return candidate
-        return tmdb_title or parsed_title
+        return pick_preferred_chinese_title(
+            intent_title,
+            subscription_title,
+            subscription_title_by_tmdb,
+            tmdb_title,
+            folder_title,
+            resource_title,
+            parsed_title,
+        )
 
     async def _rename_archived_file(
         self,
@@ -1496,13 +1568,15 @@ class ArchiveService:
             if media_type == "movie"
             else await tmdb_service.get_tv_detail(tmdb_id)
         )
-        title = str(
-            detail.get("title")
-            or detail.get("name")
-            or first.get("title")
-            or first.get("name")
-            or used_query
-        ).strip()
+        title = pick_preferred_chinese_title(
+            str(
+                detail.get("title")
+                or detail.get("name")
+                or first.get("title")
+                or first.get("name")
+                or used_query
+            ).strip()
+        )
         release_date = str(
             detail.get("release_date") or detail.get("first_air_date") or ""
         ).strip()
@@ -1521,6 +1595,48 @@ class ArchiveService:
 
         return {
             "tmdb_id": tmdb_id,
+            "title": title,
+            "year": year_text,
+            "genre_name": genre_name,
+            "region_name": region_name,
+        }
+
+    async def _identify_by_tmdb_id(
+        self, tmdb_id: int, media_type: str
+    ) -> dict[str, Any] | None:
+        if not tmdb_id or int(tmdb_id) <= 0:
+            return None
+        normalized_type = "tv" if str(media_type or "") == "tv" else "movie"
+        try:
+            detail = (
+                await tmdb_service.get_movie_detail(int(tmdb_id))
+                if normalized_type == "movie"
+                else await tmdb_service.get_tv_detail(int(tmdb_id))
+            )
+        except Exception:
+            return None
+        if not isinstance(detail, dict) or not detail:
+            return None
+
+        title = pick_preferred_chinese_title(
+            str(detail.get("title") or "").strip(),
+            str(detail.get("name") or "").strip(),
+            str(detail.get("original_title") or "").strip(),
+            str(detail.get("original_name") or "").strip(),
+        )
+        release_date = str(
+            detail.get("release_date") or detail.get("first_air_date") or ""
+        ).strip()
+        year_text = release_date[:4] if len(release_date) >= 4 else ""
+        genre_name = self._extract_genre_name(detail, normalized_type)
+        subdirs = self._get_archive_subdirs()
+        region_name = (
+            self._extract_movie_region(detail, subdirs=subdirs)
+            if normalized_type == "movie"
+            else self._extract_tv_category(detail, subdirs=subdirs)
+        )
+        return {
+            "tmdb_id": int(tmdb_id),
             "title": title,
             "year": year_text,
             "genre_name": genre_name,

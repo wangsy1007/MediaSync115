@@ -26,6 +26,7 @@ from app.models.douban_tmdb_mapping import (
 from app.models.watchlist import Watchlist, WatchlistItem
 from app.models.person_follow import PersonFollow, PersonFollowCredit
 from app.models.strm_index import StrmFileIndex, StrmFolderIndex, StrmSyncState
+from app.models.transfer_intent import TransferIntent
 
 __all__ = [
     "Subscription",
@@ -57,4 +58,5 @@ __all__ = [
     "StrmFileIndex",
     "StrmFolderIndex",
     "StrmSyncState",
+    "TransferIntent",
 ]

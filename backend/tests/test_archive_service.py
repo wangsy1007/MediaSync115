@@ -207,6 +207,22 @@ class TestArchiveService:
         )
         assert title == "流浪地球2"
 
+    def test_resolve_archive_display_title_prefers_intent_title(self) -> None:
+        parsed = {
+            "media_type": "movie",
+            "query_title": "Wrong English Title",
+        }
+        matched = {"title": "错误匹配", "year": "2025"}
+        title = archive_service._resolve_archive_display_title(
+            parsed,
+            matched,
+            transfer_context={
+                "intent": {"display_title": "浪浪山小妖怪"},
+                "resource_name": "Some.English.Release.2025.mkv",
+            },
+        )
+        assert title == "浪浪山小妖怪"
+
     def test_title_from_transfer_resource_name(self) -> None:
         title = archive_service._title_from_transfer_resource_name(
             "The.Batman.2022.2160p.UHD.BluRay.x265.HDR.mkv"

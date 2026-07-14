@@ -37,6 +37,7 @@ MODEL_MODULES = (
     "app.models.watchlist",
     "app.models.person_follow",
     "app.models.strm_index",
+    "app.models.transfer_intent",
 )
 
 

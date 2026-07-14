@@ -22,8 +22,36 @@ from app.services.transfer_guard_service import (
     TransferInProgressError,
     transfer_guard_service,
 )
+from app.services.transfer_intent_service import transfer_intent_service
 
 logger = logging.getLogger(__name__)
+
+
+async def _register_transfer_intent_after_save(
+    *,
+    folder_name: str,
+    result: dict | None,
+    transfer_parent_id: str,
+    tmdb_id: int | None = None,
+    media_type: str = "movie",
+    target_folder_id: str | None = None,
+    source: str = "pan115_api",
+) -> None:
+    """转存成功后登记意图，供归档命名与转存影视关联。"""
+    if not isinstance(result, dict):
+        return
+    if result.get("success") is False:
+        return
+    folder_id = str(target_folder_id or result.get("folder_id") or "").strip() or None
+    parent_id = str(transfer_parent_id or "").strip() or None
+    await transfer_intent_service.register_intent(
+        display_title=folder_name,
+        tmdb_id=tmdb_id,
+        media_type=media_type,
+        target_folder_id=folder_id,
+        target_parent_id=parent_id,
+        source=source,
+    )
 
 
 def _sanitize_receive_code(value: str) -> str:
@@ -1039,6 +1067,15 @@ async def save_share_to_folder(request: SaveShareToFolderRequest):
                             target_folder_id=target_folder_id,
                             receive_code=request.receive_code,
                         )
+                        await _register_transfer_intent_after_save(
+                            folder_name=request.folder_name,
+                            result=result,
+                            transfer_parent_id=transfer_parent_id,
+                            tmdb_id=request.tmdb_id,
+                            media_type="tv",
+                            target_folder_id=target_folder_id,
+                            source="detail_page_tv",
+                        )
                         asyncio.create_task(_trigger_archive_if_enabled("transfer"))
                         return result
 
@@ -1052,6 +1089,14 @@ async def save_share_to_folder(request: SaveShareToFolderRequest):
                         transfer_parent_id,
                         request.receive_code,
                         quality_filter,
+                    )
+                    await _register_transfer_intent_after_save(
+                        folder_name=request.folder_name,
+                        result=result,
+                        transfer_parent_id=transfer_parent_id,
+                        tmdb_id=request.tmdb_id,
+                        media_type="movie",
+                        source="detail_page",
                     )
                     asyncio.create_task(_trigger_archive_if_enabled("transfer"))
                     return result
@@ -1223,6 +1268,12 @@ async def save_share_files_to_folder(request: SaveShareFilesToFolderRequest):
                         request.folder_name,
                         transfer_parent_id,
                         request.receive_code,
+                    )
+                    await _register_transfer_intent_after_save(
+                        folder_name=request.folder_name,
+                        result=result,
+                        transfer_parent_id=transfer_parent_id,
+                        source="detail_page_files",
                     )
                     asyncio.create_task(_trigger_archive_if_enabled("transfer"))
                     return result

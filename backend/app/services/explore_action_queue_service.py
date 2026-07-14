@@ -17,6 +17,7 @@ from app.services.media_postprocess_service import media_postprocess_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pan115_service import pan115_service
 from app.services.runtime_settings_service import runtime_settings_service
+from app.services.transfer_intent_service import transfer_intent_service
 from app.core.timezone_utils import beijing_now
 
 logger = logging.getLogger(__name__)
@@ -987,6 +988,21 @@ class ExploreActionQueueService:
                         continue
 
                     await self._mark_save_archive_needed()
+                    resource_label = str(
+                        resource.get("name")
+                        or resource.get("title")
+                        or resource.get("resource_name")
+                        or ""
+                    ).strip()
+                    await transfer_intent_service.register_intent(
+                        display_title=title,
+                        tmdb_id=tmdb_id,
+                        douban_id=douban_id or None,
+                        media_type=media_type,
+                        target_parent_id=folder_id,
+                        resource_name=resource_label or None,
+                        source="explore_save",
+                    )
                     file_count = (
                         result.get("file_count") if isinstance(result, dict) else None
                     )
@@ -1025,6 +1041,15 @@ class ExploreActionQueueService:
                             wp_path_id=offline_folder_id,
                         )
                         await self._mark_save_archive_needed()
+                        await transfer_intent_service.register_intent(
+                            display_title=title,
+                            tmdb_id=tmdb_id,
+                            douban_id=douban_id or None,
+                            media_type=media_type,
+                            target_parent_id=offline_folder_id,
+                            resource_name=str(offline_url or "").strip() or None,
+                            source="explore_save_offline",
+                        )
                         return {
                             "tmdb_id": tmdb_id,
                             "media_type": media_type,

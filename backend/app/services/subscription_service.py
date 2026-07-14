@@ -3172,6 +3172,11 @@ class SubscriptionService:
                     record.error_message = None
                     record.file_id = offline_folder_id
                     saved += 1
+                    await self._register_transfer_intent_for_sub(
+                        sub,
+                        target_folder_id=offline_folder_id,
+                        resource_name=record.resource_name,
+                    )
                     await operation_log_service.log_background_event(
                         source_type="background_task",
                         module="subscriptions",
@@ -3363,6 +3368,11 @@ class SubscriptionService:
                     record.error_message = None
                     record.file_id = parent_folder_id
                     saved += 1
+                    await self._register_transfer_intent_for_sub(
+                        sub,
+                        target_parent_id=parent_folder_id,
+                        resource_name=record.resource_name,
+                    )
                     await self._notify_transfer_success(
                         sub.title,
                         record.resource_name,
@@ -3471,6 +3481,11 @@ class SubscriptionService:
                     record.error_message = None
                     record.file_id = parent_folder_id
                     saved += 1
+                    await self._register_transfer_intent_for_sub(
+                        sub,
+                        target_parent_id=parent_folder_id,
+                        resource_name=record.resource_name,
+                    )
                     await self._notify_transfer_success(
                         sub.title,
                         record.resource_name,
@@ -3551,6 +3566,11 @@ class SubscriptionService:
                         record.completed_at = beijing_now()
                     record.error_message = None
                     saved += 1
+                    await self._register_transfer_intent_for_sub(
+                        sub,
+                        target_parent_id=parent_folder_id,
+                        resource_name=record.resource_name,
+                    )
                     await self._notify_transfer_success(
                         sub.title,
                         record.resource_name,
@@ -4201,6 +4221,28 @@ class SubscriptionService:
         if sub.year:
             base_name = f"{base_name} ({sub.year})"
         return re.sub(r'[\\/:*?"<>|]+', "_", base_name)
+
+    @staticmethod
+    async def _register_transfer_intent_for_sub(
+        sub: Subscription | "SubscriptionSnapshot",
+        *,
+        target_folder_id: str | None = None,
+        target_parent_id: str | None = None,
+        resource_name: str | None = None,
+    ) -> None:
+        from app.services.transfer_intent_service import transfer_intent_service
+
+        media_type = "tv" if sub.media_type == MediaType.TV else "movie"
+        await transfer_intent_service.register_intent(
+            display_title=str(sub.title or "").strip(),
+            tmdb_id=getattr(sub, "tmdb_id", None),
+            douban_id=str(getattr(sub, "douban_id", "") or "").strip() or None,
+            media_type=media_type,
+            target_folder_id=str(target_folder_id or "").strip() or None,
+            target_parent_id=str(target_parent_id or "").strip() or None,
+            resource_name=str(resource_name or "").strip() or None,
+            source="subscription",
+        )
 
     @staticmethod
     async def _notify_transfer_success(
