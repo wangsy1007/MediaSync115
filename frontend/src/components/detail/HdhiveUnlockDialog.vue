@@ -201,11 +201,10 @@ const handleClosed = () => {
 </style>
 
 <style lang="scss">
-.hdhive-unlock-dialog-wrap {
-  .el-dialog {
-    width: min(92vw, 400px) !important;
-    margin: 0 auto;
-  }
+.el-dialog.hdhive-unlock-dialog-wrap {
+  width: min(92vw, 400px) !important;
+  max-width: 92vw;
+  margin: auto !important;
 
   .el-dialog__body {
     padding-top: 8px;

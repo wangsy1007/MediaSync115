@@ -24,6 +24,7 @@ from app.api import (
     search,
     settings as runtime_settings_api,
     strm as strm_api,
+    emby_proxy as emby_proxy_api,
     subscriptions,
     watchlists,
     person_follows,
@@ -43,6 +44,7 @@ from app.services.hdhive_checkin_scheduler_service import (
 from app.services.subscription_scheduler_service import subscription_scheduler_service
 from app.services.tg_bot import tg_bot_service
 from app.services.archive_scheduler_service import archive_scheduler_service
+from app.services.strm_scheduler_service import strm_scheduler_service
 from app.analytics import kafka_producer
 
 logger = logging.getLogger(__name__)
@@ -236,6 +238,7 @@ async def lifespan(app: FastAPI):
     await emby_sync_scheduler_service.ensure_sync_task()
     await feiniu_sync_scheduler_service.ensure_sync_task()
     await archive_scheduler_service.ensure_scan_task()
+    await strm_scheduler_service.ensure_tasks()
     await tg_bot_service.start()
     yield
     await tg_bot_service.stop()
@@ -253,6 +256,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -264,12 +268,19 @@ UNAUTHENTICATED_API_PATHS = {
     "/api/auth/logout",
     "/api/auth/session",
 }
-UNAUTHENTICATED_API_PREFIXES = ("/api/strm/play/",)
+UNAUTHENTICATED_API_PREFIXES = (
+    "/api/strm/play/",
+    "/api/emby/stream-redirect/",
+    "/api/emby/playbackinfo/",
+)
 
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path or ""
+    # CORS 预检必须放行，否则局域网 Origin 登录会卡在 OPTIONS
+    if request.method == "OPTIONS":
+        return await call_next(request)
     if (
         not path.startswith("/api")
         or path in UNAUTHENTICATED_API_PATHS
@@ -434,6 +445,7 @@ app.include_router(quark.router, prefix="/api")
 app.include_router(pansou.router, prefix="/api")
 app.include_router(runtime_settings_api.router, prefix="/api")
 app.include_router(strm_api.router, prefix="/api")
+app.include_router(emby_proxy_api.router, prefix="/api")
 app.include_router(scheduler.router, prefix="/api")
 app.include_router(workflow.router, prefix="/api")
 app.include_router(logs_api.router, prefix="/api")

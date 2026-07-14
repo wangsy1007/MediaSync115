@@ -51,6 +51,48 @@ class TestSettings:
         assert "valid" in data
         assert "message" in data
 
+    def test_check_tmdb_credentials_with_form_key(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """测试使用表单 API Key 检测 TMDB 连接"""
+        import app.api.settings as settings_api
+
+        async def fake_check(
+            *,
+            api_key: str,
+            base_url: str | None = None,
+            language: str | None = None,
+            region: str | None = None,
+        ) -> dict:
+            assert api_key == "test-key"
+            assert language == "zh-CN"
+            assert region == "CN"
+            return {
+                "images_configured": True,
+                "change_keys_count": 3,
+                "configuration": {"images": {"base_url": "https://image.tmdb.org/t/p/"}},
+            }
+
+        monkeypatch.setattr(
+            settings_api.tmdb_service,
+            "check_connection_with_config",
+            fake_check,
+        )
+        response = client.get(
+            "/api/settings/tmdb/check",
+            params={
+                "tmdb_api_key": "test-key",
+                "tmdb_language": "zh-CN",
+                "tmdb_region": "CN",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["valid"] is True
+        assert "可用" in data["message"]
+        assert data["images_configured"] is True
+        assert data["change_keys_count"] == 3
+
     def test_proxy_config(self, client: TestClient) -> None:
         """测试代理配置"""
         response = client.get("/api/settings/proxy")

@@ -312,6 +312,11 @@ class FeiniuSyncIndexService:
                         )
                         await asyncio.sleep(delay)
                 await self._clear_runtime_caches()
+                from app.services.tv_missing_service import tv_missing_service
+
+                asyncio.create_task(
+                    tv_missing_service.precompute_all_active_tv_missing_cache()
+                )
                 # 同步完成后清理已在影视库中的订阅
                 # 给 SQLite WAL checkpoint 一点时间释放写锁，避免 cleanup commit 时 "database is locked"
                 await asyncio.sleep(2.0)
@@ -675,8 +680,10 @@ class FeiniuSyncIndexService:
 
     async def _clear_runtime_caches(self) -> None:
         from app.api import search as search_api
+        from app.services.tv_missing_service import tv_missing_service
 
         search_api._feiniu_badge_cache.clear()
+        tv_missing_service.clear_cache()
 
 
 feiniu_sync_index_service = FeiniuSyncIndexService()

@@ -18,7 +18,7 @@
         </template>
         <template v-else>
           <el-switch v-model="missingOnly" active-text="仅看缺集" @change="() => fetchTvMissingStatus(false)" />
-          <el-button type="primary" :loading="missingLoading" @click="() => fetchTvMissingStatus(true)">
+          <el-button type="primary" :loading="missingLoading" @click="refreshMissingStatus">
             刷新缺集状态
           </el-button>
         </template>
@@ -188,7 +188,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { settingsApi, subscriptionApi } from '@/api'
@@ -209,6 +209,7 @@ const activeTab = ref('subscriptions')
 const missingRows = ref([])
 const missingLoading = ref(false)
 const missingOnly = ref(true)
+const missingTabLoaded = ref(false)
 const router = useRouter()
 const tvOptionsVisible = ref(false)
 const tvOptionsSaving = ref(false)
@@ -478,6 +479,11 @@ const fetchTvMissingStatus = async (refresh = false) => {
   }
 }
 
+const refreshMissingStatus = () => {
+  missingTabLoaded.value = true
+  fetchTvMissingStatus(true)
+}
+
 const refreshMissingRow = async (row) => {
   const subscriptionId = Number(row?.subscription_id)
   if (!Number.isFinite(subscriptionId) || subscriptionId <= 0) return
@@ -521,7 +527,12 @@ const refreshMissingRow = async (row) => {
 
 onMounted(async () => {
   await fetchSubscriptions()
-  fetchTvMissingStatus()
+})
+
+watch(activeTab, (tab) => {
+  if (tab !== 'missing' || missingTabLoaded.value) return
+  missingTabLoaded.value = true
+  fetchTvMissingStatus(false)
 })
 </script>
 

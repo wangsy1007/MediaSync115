@@ -130,6 +130,11 @@ class RuntimeSettingsService:
             "subscription_enabled": False,
             "subscription_interval_hours": 24,
             "subscription_resource_priority": ["hdhive", "pansou", "tg"],
+            "subscription_resource_enabled": {
+                "hdhive": True,
+                "pansou": True,
+                "tg": True,
+            },
             "subscription_hdhive_auto_unlock_enabled": False,
             "subscription_hdhive_unlock_max_points_per_item": 10,
             "subscription_hdhive_unlock_budget_points_per_run": 30,
@@ -187,11 +192,17 @@ class RuntimeSettingsService:
             "strm_output_dir": "",
             "strm_base_url": "",
             "strm_redirect_mode": "auto",
+            "strm_auto_after_archive": True,
             "strm_refresh_emby_after_generate": False,
             "strm_refresh_feiniu_after_generate": False,
             "strm_token_secret": "",
             "strm_proxy_enabled": False,
             "strm_proxy_port": 8099,
+            "strm_schedule_enabled": False,
+            "strm_incremental_interval_minutes": 360,
+            "strm_full_schedule_enabled": False,
+            "strm_full_schedule_day": "sun",
+            "strm_full_schedule_time": "03:00",
             # —— LLM 配置 ——
             "llm_base_url": "https://api.deepseek.com/v1",
             "llm_api_key_enc": "",
@@ -825,6 +836,37 @@ class RuntimeSettingsService:
             return normalized
         return list(self._defaults["subscription_resource_priority"])
 
+    @staticmethod
+    def _subscription_resource_source_set() -> set[str]:
+        return {"hdhive", "pansou", "tg"}
+
+    def get_subscription_resource_enabled(self) -> dict[str, bool]:
+        allowed = self._subscription_resource_source_set()
+        defaults = {
+            source: True
+            for source in self._defaults.get("subscription_resource_enabled") or allowed
+        }
+        if not defaults:
+            defaults = {source: True for source in allowed}
+
+        value = self._data.get("subscription_resource_enabled")
+        if not isinstance(value, dict):
+            return dict(defaults)
+
+        normalized = dict(defaults)
+        for source in allowed:
+            if source in value:
+                normalized[source] = bool(value[source])
+        return normalized
+
+    def get_active_subscription_resource_priority(self) -> list[str]:
+        enabled = self.get_subscription_resource_enabled()
+        priority = self.get_subscription_resource_priority()
+        active = [source for source in priority if enabled.get(source, True)]
+        if active:
+            return active
+        return list(priority)
+
     def get_subscription_hdhive_auto_unlock_enabled(self) -> bool:
         return bool(self._data.get("subscription_hdhive_auto_unlock_enabled", False))
 
@@ -965,6 +1007,7 @@ class RuntimeSettingsService:
             "archive_auto_on_transfer": self.get_archive_auto_on_transfer(),
             "archive_auto_on_offline": self.get_archive_auto_on_offline(),
             "offline_monitor_interval_minutes": self.get_offline_monitor_interval_minutes(),
+            "strm_auto_after_archive": self.get_strm_auto_after_archive(),
             "archive_subdirs": self.get_archive_subdirs(),
             "archive_naming": self.get_archive_naming(),
         }
@@ -984,6 +1027,12 @@ class RuntimeSettingsService:
             return value
         return "auto"
 
+    def get_strm_auto_after_archive(self) -> bool:
+        """归档成功后是否自动增量生成 STRM；缺省开启。"""
+        if "strm_auto_after_archive" not in self._data:
+            return True
+        return bool(self._data.get("strm_auto_after_archive"))
+
     def get_strm_refresh_emby_after_generate(self) -> bool:
         return bool(self._data.get("strm_refresh_emby_after_generate", False))
 
@@ -999,16 +1048,48 @@ class RuntimeSettingsService:
     def get_strm_proxy_port(self) -> int:
         return int(self._data.get("strm_proxy_port") or 8099)
 
+    def get_strm_schedule_enabled(self) -> bool:
+        return bool(self._data.get("strm_schedule_enabled", False))
+
+    def get_strm_incremental_interval_minutes(self) -> int:
+        try:
+            return max(30, int(self._data.get("strm_incremental_interval_minutes", 360)))
+        except (TypeError, ValueError):
+            return 360
+
+    def get_strm_full_schedule_enabled(self) -> bool:
+        return bool(self._data.get("strm_full_schedule_enabled", False))
+
+    def get_strm_full_schedule_day(self) -> str:
+        value = str(self._data.get("strm_full_schedule_day") or "sun").lower()
+        return value if value in {"mon", "tue", "wed", "thu", "fri", "sat", "sun"} else "sun"
+
+    def get_strm_full_schedule_time(self) -> str:
+        value = str(self._data.get("strm_full_schedule_time") or "03:00").strip()
+        try:
+            hour, minute = (int(part) for part in value.split(":", 1))
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return f"{hour:02d}:{minute:02d}"
+        except (TypeError, ValueError):
+            pass
+        return "03:00"
+
     def get_strm_config(self) -> dict[str, Any]:
         return {
             "strm_enabled": self.get_strm_enabled(),
             "strm_output_dir": self.get_strm_output_dir(),
             "strm_base_url": self.get_strm_base_url(),
             "strm_redirect_mode": self.get_strm_redirect_mode(),
+            "strm_auto_after_archive": self.get_strm_auto_after_archive(),
             "strm_refresh_emby_after_generate": self.get_strm_refresh_emby_after_generate(),
             "strm_refresh_feiniu_after_generate": self.get_strm_refresh_feiniu_after_generate(),
             "strm_proxy_enabled": self.get_strm_proxy_enabled(),
             "strm_proxy_port": self.get_strm_proxy_port(),
+            "strm_schedule_enabled": self.get_strm_schedule_enabled(),
+            "strm_incremental_interval_minutes": self.get_strm_incremental_interval_minutes(),
+            "strm_full_schedule_enabled": self.get_strm_full_schedule_enabled(),
+            "strm_full_schedule_day": self.get_strm_full_schedule_day(),
+            "strm_full_schedule_time": self.get_strm_full_schedule_time(),
         }
 
     def update_strm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1034,6 +1115,13 @@ class RuntimeSettingsService:
                 mode if mode in {"auto", "redirect", "proxy"} else "auto"
             )
         if (
+            "strm_auto_after_archive" in payload
+            and payload["strm_auto_after_archive"] is not None
+        ):
+            self._data["strm_auto_after_archive"] = bool(
+                payload["strm_auto_after_archive"]
+            )
+        if (
             "strm_refresh_emby_after_generate" in payload
             and payload["strm_refresh_emby_after_generate"] is not None
         ):
@@ -1055,6 +1143,37 @@ class RuntimeSettingsService:
             self._data["strm_proxy_enabled"] = bool(payload["strm_proxy_enabled"])
         if "strm_proxy_port" in payload and payload["strm_proxy_port"] is not None:
             self._data["strm_proxy_port"] = int(payload["strm_proxy_port"] or 8099)
+        if "strm_schedule_enabled" in payload and payload["strm_schedule_enabled"] is not None:
+            self._data["strm_schedule_enabled"] = bool(payload["strm_schedule_enabled"])
+        if (
+            "strm_incremental_interval_minutes" in payload
+            and payload["strm_incremental_interval_minutes"] is not None
+        ):
+            interval = int(payload["strm_incremental_interval_minutes"])
+            if interval < 30:
+                raise ValueError("STRM 增量生成间隔不能少于 30 分钟")
+            self._data["strm_incremental_interval_minutes"] = interval
+        if (
+            "strm_full_schedule_enabled" in payload
+            and payload["strm_full_schedule_enabled"] is not None
+        ):
+            self._data["strm_full_schedule_enabled"] = bool(
+                payload["strm_full_schedule_enabled"]
+            )
+        if "strm_full_schedule_day" in payload and payload["strm_full_schedule_day"] is not None:
+            day = str(payload["strm_full_schedule_day"]).strip().lower()
+            if day not in {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}:
+                raise ValueError("STRM 全量校准星期设置无效")
+            self._data["strm_full_schedule_day"] = day
+        if "strm_full_schedule_time" in payload and payload["strm_full_schedule_time"] is not None:
+            value = str(payload["strm_full_schedule_time"]).strip()
+            try:
+                hour, minute = (int(part) for part in value.split(":", 1))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("STRM 全量校准时间格式应为 HH:MM") from exc
+            if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                raise ValueError("STRM 全量校准时间格式应为 HH:MM")
+            self._data["strm_full_schedule_time"] = f"{hour:02d}:{minute:02d}"
 
         self._save()
         return self.get_strm_config()
@@ -1110,6 +1229,13 @@ class RuntimeSettingsService:
         ):
             self._data["archive_auto_on_offline"] = bool(
                 payload["archive_auto_on_offline"]
+            )
+        if (
+            "strm_auto_after_archive" in payload
+            and payload["strm_auto_after_archive"] is not None
+        ):
+            self._data["strm_auto_after_archive"] = bool(
+                payload["strm_auto_after_archive"]
             )
         if (
             "offline_monitor_interval_minutes" in payload
@@ -1217,6 +1343,19 @@ class RuntimeSettingsService:
 
                 if key == "subscription_resource_priority":
                     allowed = {"hdhive", "pansou", "tg"}
+                elif key == "subscription_resource_enabled":
+                    allowed = self._subscription_resource_source_set()
+                    defaults = {
+                        source: True for source in allowed
+                    }
+                    normalized_map = dict(defaults)
+                    if isinstance(value, dict):
+                        for raw_source, raw_enabled in value.items():
+                            source = str(raw_source or "").strip().lower()
+                            if source in allowed:
+                                normalized_map[source] = bool(raw_enabled)
+                    normalized[key] = normalized_map
+                    continue
                 else:
                     normalized[key] = tg_service._parse_channels(source_items)
                     continue
@@ -1370,6 +1509,7 @@ class RuntimeSettingsService:
                 self._data.get("subscription_interval_hours", 24) or 24
             ),
             "subscription_resource_priority": self.get_subscription_resource_priority(),
+            "subscription_resource_enabled": self.get_subscription_resource_enabled(),
             "subscription_hdhive_auto_unlock_enabled": self.get_subscription_hdhive_auto_unlock_enabled(),
             "subscription_hdhive_unlock_max_points_per_item": self.get_subscription_hdhive_unlock_max_points_per_item(),
             "subscription_hdhive_unlock_budget_points_per_run": self.get_subscription_hdhive_unlock_budget_points_per_run(),
@@ -1420,10 +1560,16 @@ class RuntimeSettingsService:
             "strm_output_dir": self.get_strm_output_dir(),
             "strm_base_url": self.get_strm_base_url(),
             "strm_redirect_mode": self.get_strm_redirect_mode(),
+            "strm_auto_after_archive": self.get_strm_auto_after_archive(),
             "strm_refresh_emby_after_generate": self.get_strm_refresh_emby_after_generate(),
             "strm_refresh_feiniu_after_generate": self.get_strm_refresh_feiniu_after_generate(),
             "strm_proxy_enabled": self.get_strm_proxy_enabled(),
             "strm_proxy_port": self.get_strm_proxy_port(),
+            "strm_schedule_enabled": self.get_strm_schedule_enabled(),
+            "strm_incremental_interval_minutes": self.get_strm_incremental_interval_minutes(),
+            "strm_full_schedule_enabled": self.get_strm_full_schedule_enabled(),
+            "strm_full_schedule_day": self.get_strm_full_schedule_day(),
+            "strm_full_schedule_time": self.get_strm_full_schedule_time(),
             "llm_base_url": self.get_llm_base_url(),
             "llm_model": self.get_llm_model(),
             "llm_api_key_set": self.has_llm_api_key(),

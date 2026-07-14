@@ -37,7 +37,7 @@ class MediaPostprocessService:
             seen.add(scope_key)
             scopes.append(
                 {
-                    "source_fid": source_fid,
+                    "fid": source_fid,
                     "target_cid": target_cid,
                     "relative_prefix": relative_prefix,
                 }
@@ -71,6 +71,8 @@ class MediaPostprocessService:
     ) -> dict[str, Any]:
         if not runtime_settings_service.get_strm_enabled():
             return {"triggered": False, "reason": "strm_disabled"}
+        if not runtime_settings_service.get_strm_auto_after_archive():
+            return {"triggered": False, "reason": "strm_auto_after_archive_disabled"}
 
         payload = summary if isinstance(summary, dict) else {}
         processed_count = int(payload.get("success", 0) or 0) + int(
@@ -87,6 +89,13 @@ class MediaPostprocessService:
                 trigger=trigger,
                 mode="incremental",
                 scopes=scopes,
+            )
+            logger.info(
+                "Triggered STRM after archive: trigger=%s success=%s skipped=%s scopes=%s",
+                trigger,
+                payload.get("success"),
+                payload.get("skipped"),
+                len(scopes or []),
             )
             return {"triggered": True, "result": result}
         except Exception as exc:

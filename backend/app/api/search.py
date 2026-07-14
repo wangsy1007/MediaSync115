@@ -35,12 +35,18 @@ from app.services.seedhub_task_service import seedhub_task_service
 from app.services.tg_service import tg_service
 from app.services.tmdb_service import tmdb_service
 from app.services.tmdb_explore_service import TMDB_SECTION_SOURCES, fetch_tmdb_section
+from app.services.maoyan_explore_service import (
+    MAOYAN_SECTION_SOURCES,
+    fetch_maoyan_section,
+)
 from app.utils.proxy import proxy_manager
 
 router = APIRouter(prefix="/search", tags=["search"])
 logger = logging.getLogger(__name__)
+EXPLORE_SOURCE_PATTERN = "^(douban|tmdb|maoyan)$"
 EXPLORE_HOME_SECTION_LIMIT = 12
 DOUBAN_HOME_SYNC_PRIME_LIMIT = 6
+MAOYAN_HOME_SYNC_PRIME_LIMIT = 6
 
 POPULAR_MOVIES_URL = "https://popular-movies-data.stevenlu.com/movies.json"
 POPULAR_CACHE_TTL_SECONDS = 60 * 60 * 6
@@ -1266,6 +1272,8 @@ def _is_allowed_image_proxy_url(raw_url: str) -> bool:
         return True
     if host == "image.tmdb.org":
         return True
+    if host.endswith(".pipi.cn") or host.endswith(".meituan.net"):
+        return True
     return False
 
 
@@ -1410,6 +1418,50 @@ def _find_tmdb_source(section_key: str):
         (source for source in TMDB_SECTION_SOURCES if source["key"] == section_key),
         None,
     )
+
+
+def _find_maoyan_source(section_key: str):
+    return next(
+        (source for source in MAOYAN_SECTION_SOURCES if source["key"] == section_key),
+        None,
+    )
+
+
+def _normalize_explore_source(source: str) -> str:
+    normalized = str(source or "douban").strip().lower()
+    if normalized in {"douban", "tmdb", "maoyan"}:
+        return normalized
+    return "douban"
+
+
+def _append_explore_section_results(
+    source_rows: list[dict[str, Any]],
+    results: list[Any],
+    *,
+    limit: int,
+    invalid_error: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    sections: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for section, result in zip(source_rows, results):
+        if isinstance(result, Exception):
+            errors.append({"key": section["key"], "error": str(result)})
+            continue
+        if not isinstance(result, dict):
+            errors.append({"key": section["key"], "error": invalid_error})
+            continue
+        sections.append(
+            {
+                "key": result["key"],
+                "title": result["title"],
+                "tag": result["tag"],
+                "source_url": result["source_url"],
+                "fetched_at": result["fetched_at"],
+                "total": result["total"],
+                "items": result.get("items", [])[:limit],
+            }
+        )
+    return sections, errors
 
 
 # 「更多」页首屏与分页的 TMDB 同步解析上限
@@ -1656,12 +1708,46 @@ async def get_explore_douban_sections(
 @router.get("/explore/sections")
 async def get_explore_sections(
     source: str = Query(
-        "douban", pattern="^(douban|tmdb)$", description="Explore source"
+        "douban", pattern=EXPLORE_SOURCE_PATTERN, description="Explore source"
     ),
     limit: int = Query(24, ge=1, le=100, description="Number of items per section"),
     refresh: bool = Query(False, description="Force refresh cache"),
 ):
-    normalized_source = source if source in {"douban", "tmdb"} else "douban"
+    normalized_source = _normalize_explore_source(source)
+
+    if normalized_source == "maoyan":
+        async with proxy_manager.create_httpx_client(
+            timeout=30.0, http2=False
+        ) as client:
+            tasks = [
+                fetch_maoyan_section(section, limit, refresh, client=client)
+                for section in MAOYAN_SECTION_SOURCES
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        sections, errors = _append_explore_section_results(
+            MAOYAN_SECTION_SOURCES,
+            results,
+            limit=limit,
+            invalid_error="Invalid Maoyan section payload",
+        )
+        if not sections:
+            raise HTTPException(
+                status_code=502, detail="Failed to fetch Maoyan explore sections"
+            )
+
+        section_items = _collect_section_items(sections)
+        emby_status_map, feiniu_status_map = await _build_douban_library_status_maps(
+            section_items,
+        )
+        return {
+            "source": "maoyan",
+            "fetched_at": beijing_now().isoformat(),
+            "sections": sections,
+            "errors": errors,
+            "emby_status_map": emby_status_map,
+            "feiniu_status_map": feiniu_status_map,
+        }
 
     if normalized_source == "tmdb":
         async with proxy_manager.create_httpx_client(
@@ -1780,15 +1866,21 @@ async def get_explore_sections(
 @router.get("/explore/meta")
 async def get_explore_meta(
     source: str = Query(
-        "douban", pattern="^(douban|tmdb)$", description="Explore source"
+        "douban", pattern=EXPLORE_SOURCE_PATTERN, description="Explore source"
     ),
 ):
-    normalized_source = source if source in {"douban", "tmdb"} else "douban"
-    source_rows = (
-        TMDB_SECTION_SOURCES if normalized_source == "tmdb" else DOUBAN_SECTION_SOURCES
-    )
+    normalized_source = _normalize_explore_source(source)
+    if normalized_source == "tmdb":
+        source_rows = TMDB_SECTION_SOURCES
+        source_label = "tmdb"
+    elif normalized_source == "maoyan":
+        source_rows = MAOYAN_SECTION_SOURCES
+        source_label = "maoyan"
+    else:
+        source_rows = DOUBAN_SECTION_SOURCES
+        source_label = "douban-frodo"
     payload: dict[str, Any] = {
-        "source": "tmdb" if normalized_source == "tmdb" else "douban-frodo",
+        "source": source_label,
         "fetched_at": beijing_now().isoformat(),
         "sections": [
             {
@@ -1809,12 +1901,52 @@ async def get_explore_meta(
 @router.get("/explore/home")
 async def get_explore_home(
     source: str = Query(
-        "douban", pattern="^(douban|tmdb)$", description="Explore source"
+        "douban", pattern=EXPLORE_SOURCE_PATTERN, description="Explore source"
     ),
     refresh: bool = Query(False, description="Force refresh cache"),
 ):
-    normalized_source = source if source in {"douban", "tmdb"} else "douban"
+    normalized_source = _normalize_explore_source(source)
     limit = EXPLORE_HOME_SECTION_LIMIT
+
+    if normalized_source == "maoyan":
+        async with proxy_manager.create_httpx_client(
+            timeout=30.0, http2=False
+        ) as client:
+            tasks = [
+                fetch_maoyan_section(
+                    section,
+                    limit,
+                    refresh,
+                    client=client,
+                    sync_prime_limit=MAOYAN_HOME_SYNC_PRIME_LIMIT,
+                )
+                for section in MAOYAN_SECTION_SOURCES
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        sections, errors = _append_explore_section_results(
+            MAOYAN_SECTION_SOURCES,
+            results,
+            limit=limit,
+            invalid_error="Invalid Maoyan section payload",
+        )
+        if not sections:
+            raise HTTPException(
+                status_code=502, detail="Failed to fetch Maoyan explore home"
+            )
+
+        section_items = _collect_section_items(sections)
+        emby_status_map, feiniu_status_map = await _build_douban_library_status_maps(
+            section_items,
+        )
+        return {
+            "source": "maoyan",
+            "fetched_at": beijing_now().isoformat(),
+            "sections": sections,
+            "errors": errors,
+            "emby_status_map": emby_status_map,
+            "feiniu_status_map": feiniu_status_map,
+        }
 
     if normalized_source == "tmdb":
         async with proxy_manager.create_httpx_client(
@@ -1952,7 +2084,7 @@ async def get_feiniu_status_map(payload: FeiniuStatusMapRequest):
 async def get_explore_section(
     section_key: str,
     source: str = Query(
-        "douban", pattern="^(douban|tmdb)$", description="Explore source"
+        "douban", pattern=EXPLORE_SOURCE_PATTERN, description="Explore source"
     ),
     limit: int = Query(
         30, ge=1, le=50, description="Number of items to return per request"
@@ -1962,7 +2094,58 @@ async def get_explore_section(
     ),
     refresh: bool = Query(False, description="Force refresh cache"),
 ):
-    normalized_source = source if source in {"douban", "tmdb"} else "douban"
+    normalized_source = _normalize_explore_source(source)
+
+    if normalized_source == "maoyan":
+        section = _find_maoyan_source(section_key)
+        if not section:
+            raise HTTPException(
+                status_code=404, detail=f"Unknown section key: {section_key}"
+            )
+
+        library_prime_limit = _douban_explore_sync_prime_limit(limit, start)
+        try:
+            payload = await fetch_maoyan_section(
+                section,
+                limit,
+                refresh,
+                start=start,
+                sync_prime_limit=library_prime_limit,
+                async_backfill_limit=limit,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail=f"Failed to fetch section: {str(exc)}"
+            )
+
+        items = (
+            payload.get("items", []) if isinstance(payload.get("items"), list) else []
+        )
+        emby_status_map, feiniu_status_map = await _build_douban_library_status_maps(
+            items,
+            prime_limit=0,
+            max_candidates=_EXPLORE_SECTION_LIBRARY_BADGE_CAP,
+        )
+        return {
+            "source": "maoyan",
+            "fetched_at": beijing_now().isoformat(),
+            "section": {
+                "key": payload["key"],
+                "title": payload["title"],
+                "tag": payload["tag"],
+                "source_url": payload["source_url"],
+                "fetched_at": payload["fetched_at"],
+                "total": payload["total"],
+                "start": payload.get("start", start),
+                "count": payload.get("count", limit),
+                "items": items,
+            },
+            "emby_status_map": emby_status_map,
+            "feiniu_status_map": feiniu_status_map,
+            "cache_hit": False,
+            "cache_source": "section_runtime",
+            "cache_warmed_at": None,
+        }
 
     if normalized_source == "tmdb":
         section = _find_tmdb_source(section_key)
@@ -2170,6 +2353,20 @@ async def resolve_explore_item(payload: dict[str, Any] = Body(default={})):
     if year_value and not year_value.isdigit():
         year_value = ""
     year = year_value or None
+    if source == "maoyan":
+        maoyan_id = str(payload.get("maoyan_id") or payload.get("id") or "").strip()
+        result = await resolve_douban_explore_item(
+            douban_id="",
+            title=title,
+            media_type="movie",
+            year=year,
+            tmdb_id=tmdb_id,
+            alternative_titles=[original_title, *aliases],
+        )
+        result["source"] = "maoyan"
+        result["maoyan_id"] = maoyan_id
+        return result
+
     douban_id = str(payload.get("douban_id") or payload.get("id") or "").strip()
 
     result = await resolve_douban_explore_item(
@@ -2893,12 +3090,70 @@ async def get_movie_pan115_with_hdhive(
                 hdhive_payload.get("filtered_total") or len(hdhive_list)
             ),
             "pan_type_counts": dict(hdhive_payload.get("pan_type_counts") or {}),
+            "media_title": str(hdhive_payload.get("media_title") or ""),
         }
         attempts.append(
-            {"service": "hdhive", "status": "ok", "count": len(hdhive_list)}
+            {
+                "service": "hdhive",
+                "status": "ok",
+                "count": len(hdhive_list),
+                "mode": "tmdb",
+            }
         )
     except Exception as exc:
         attempts.append({"service": "hdhive", "status": "error", "error": str(exc)})
+
+    if not hdhive_list:
+        keyword_candidates: list[str] = []
+        try:
+            detail = await tmdb_service.get_movie_detail(tmdb_id)
+            title = str(detail.get("title") or "").strip()
+            original_title = str(detail.get("original_title") or "").strip()
+            year = str((detail.get("release_date") or "")[:4] or "").strip()
+            for value in (title, original_title, f"{title} {year}".strip(), f"{original_title} {year}".strip()):
+                text = str(value or "").strip()
+                if text and text not in keyword_candidates:
+                    keyword_candidates.append(text)
+                for sep in ("：", ":"):
+                    if sep not in text:
+                        continue
+                    main, _, rest = text.partition(sep)
+                    for part in (main.strip(), rest.strip()):
+                        if part and part not in keyword_candidates:
+                            keyword_candidates.append(part)
+        except Exception:
+            keyword_candidates = []
+
+        for keyword in keyword_candidates:
+            try:
+                fallback_rows = _mark_hdhive_pan115_source(
+                    await hdhive_service.get_pan115_by_keyword(keyword, media_type="movie")
+                )
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "service": "hdhive",
+                        "status": "error",
+                        "mode": "keyword",
+                        "keyword": keyword,
+                        "error": str(exc),
+                    }
+                )
+                continue
+            if not fallback_rows:
+                continue
+            hdhive_list = fallback_rows
+            hdhive_diagnostics["keyword_fallback"] = keyword
+            attempts.append(
+                {
+                    "service": "hdhive",
+                    "status": "ok",
+                    "count": len(hdhive_list),
+                    "mode": "keyword",
+                    "keyword": keyword,
+                }
+            )
+            break
 
     source_counts = {"hdhive": len(hdhive_list)} if hdhive_list else {}
     result = _build_pan115_response(

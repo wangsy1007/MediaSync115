@@ -48,6 +48,7 @@ class ArchiveConfigRequest(BaseModel):
     archive_interval_minutes: Optional[int] = None
     archive_auto_on_transfer: Optional[bool] = None
     archive_auto_on_offline: Optional[bool] = None
+    strm_auto_after_archive: Optional[bool] = None
     offline_monitor_interval_minutes: Optional[int] = None
     archive_subdirs: Optional[dict[str, Any]] = Field(
         default=None,

@@ -778,18 +778,22 @@ class ExploreActionQueueService:
         if not attempts:
             return "暂未找到可转存资源"
         parts: list[str] = []
+        transfer_failures: list[str] = []
         for row in attempts:
             source = str(row.get("source") or "unknown")
             status = str(row.get("status") or "unknown").strip().lower() or "unknown"
             if status in {"failed", "transfer_failed"}:
                 error = str(row.get("error") or "").strip()
-                parts.append(f"{source}: {error[:60] or 'failed'}")
+                transfer_failures.append(f"{source}: {error[:60] or 'failed'}")
             elif status == "empty":
                 parts.append(f"{source}: empty")
             elif status == "success":
-                parts.append(f"{source}: success")
+                count = int(row.get("count") or 0)
+                parts.append(f"{source}: success" + (f"({count})" if count else ""))
             if len(parts) >= 4:
                 break
+        if transfer_failures:
+            return f"转存失败（{'; '.join(transfer_failures[:4])}）"
         if not parts:
             return "暂未找到可转存资源"
         return f"暂未找到可转存资源（{'; '.join(parts)}）"
@@ -862,6 +866,7 @@ class ExploreActionQueueService:
                             folder_id,
                             receive_code,
                             quality_filter,
+                            media_type,
                         )
                     except Exception as exc:
                         transfer_attempts.append(

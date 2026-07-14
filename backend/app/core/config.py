@@ -49,7 +49,16 @@ class Settings(BaseSettings):
         None  # 例如: "localhost:9092" 或 "kafka1:9092,kafka2:9092"
     )
 
+    # 显式白名单（本地开发）；局域网 IP / 主机名由 CORS_ORIGIN_REGEX 覆盖
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    # 允许通过局域网 IP、主机名、自定义端口访问（Edge/新浏览器登录预检需要）
+    CORS_ORIGIN_REGEX: str = (
+        r"https?://("
+        r"localhost|127\.0\.0\.1|\[::1\]|"
+        r"(\d{1,3}\.){3}\d{1,3}|"
+        r"[a-zA-Z0-9.-]+"
+        r")(:\d+)?"
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

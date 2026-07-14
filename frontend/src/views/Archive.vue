@@ -29,6 +29,10 @@
             <el-switch v-model="config.archive_auto_on_offline" />
             <div class="form-hint">离线下载完成后自动触发归档扫描</div>
           </el-form-item>
+          <el-form-item label="归档后自动生成 STRM">
+            <el-switch v-model="config.strm_auto_after_archive" />
+            <div class="form-hint">归档成功后自动增量生成 STRM（需同时启用 STRM）；默认开启</div>
+          </el-form-item>
           <el-form-item label="离线监控间隔">
             <el-input-number v-model="config.offline_monitor_interval_minutes" :min="1" :max="60" />
             <span class="suffix-text">分钟</span>
@@ -364,6 +368,7 @@ const config = reactive({
   archive_interval_minutes: 10,
   archive_auto_on_transfer: true,
   archive_auto_on_offline: true,
+  strm_auto_after_archive: true,
   offline_monitor_interval_minutes: 3,
   archive_subdirs: applyArchiveSubdirs(),
   archive_naming: applyArchiveNaming()
@@ -499,6 +504,7 @@ const loadConfig = async () => {
   config.archive_interval_minutes = Number(data.archive_interval_minutes || 10)
   config.archive_auto_on_transfer = data.archive_auto_on_transfer !== false
   config.archive_auto_on_offline = data.archive_auto_on_offline !== false
+  config.strm_auto_after_archive = data.strm_auto_after_archive !== false
   config.offline_monitor_interval_minutes = Number(data.offline_monitor_interval_minutes || 3)
   Object.assign(config.archive_subdirs, applyArchiveSubdirs(data.archive_subdirs))
   Object.assign(config.archive_naming, applyArchiveNaming(data.archive_naming))
@@ -568,6 +574,7 @@ const saveConfig = async () => {
       archive_interval_minutes: config.archive_interval_minutes,
       archive_auto_on_transfer: config.archive_auto_on_transfer,
       archive_auto_on_offline: config.archive_auto_on_offline,
+      strm_auto_after_archive: config.strm_auto_after_archive,
       offline_monitor_interval_minutes: config.offline_monitor_interval_minutes,
       archive_subdirs: buildArchiveSubdirsPayload(config.archive_subdirs),
       archive_naming: buildArchiveNamingPayload(config.archive_naming)

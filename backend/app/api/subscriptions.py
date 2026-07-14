@@ -72,6 +72,23 @@ async def resolve_tmdb_poster_path(
     return sanitize_poster_path(payload.get("poster_path"))
 
 
+def _has_successful_transfer_exists():
+    """是否存在已成功转存的下载记录。"""
+    return (
+        select(DownloadRecord.id)
+        .where(
+            DownloadRecord.subscription_id == Subscription.id,
+            or_(
+                DownloadRecord.completed_at.is_not(None),
+                DownloadRecord.status.in_(
+                    (MediaStatus.COMPLETED, MediaStatus.OFFLINE_COMPLETED)
+                ),
+            ),
+        )
+        .exists()
+    )
+
+
 def _build_subscription_status_payload(
     subscriptions: list[Subscription],
 ) -> dict[str, Any]:
@@ -529,6 +546,8 @@ async def _cleanup_subscription_if_eligible(subscription_id: int) -> None:
 async def list_subscriptions(
     is_active: Optional[bool] = None,
     media_type: Optional[MediaType] = None,
+    exclude_transferred_success: bool = Query(False),
+    skip_poster_enrich: bool = Query(True),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(Subscription)
@@ -536,42 +555,42 @@ async def list_subscriptions(
         query = query.where(Subscription.is_active == is_active)
     if media_type:
         query = query.where(Subscription.media_type == media_type)
+    if exclude_transferred_success:
+        query = query.where(~_has_successful_transfer_exists())
     result = await db.execute(query.order_by(Subscription.created_at.desc()))
     subscriptions = result.scalars().all()
 
-    need_enrich: list[Subscription] = []
     dirty = False
     for sub in subscriptions:
         normalized_path = sanitize_poster_path(sub.poster_path)
-        if normalized_path:
-            if normalized_path != sub.poster_path:
-                sub.poster_path = normalized_path
-                dirty = True
-            continue
+        if normalized_path != sub.poster_path:
+            sub.poster_path = normalized_path
+            dirty = True
 
-        if sub.tmdb_id is None or sub.media_type not in {MediaType.MOVIE, MediaType.TV}:
-            if sub.poster_path is not None:
-                sub.poster_path = None
-                dirty = True
-            continue
+    if not skip_poster_enrich:
+        need_enrich: list[Subscription] = []
+        for sub in subscriptions:
+            if sub.poster_path:
+                continue
+            if sub.tmdb_id is None or sub.media_type not in {MediaType.MOVIE, MediaType.TV}:
+                continue
+            need_enrich.append(sub)
 
-        need_enrich.append(sub)
+        if need_enrich:
+            semaphore = asyncio.Semaphore(5)
 
-    if need_enrich:
-        semaphore = asyncio.Semaphore(5)
+            async def enrich_one(sub: Subscription) -> tuple[Subscription, str | None]:
+                async with semaphore:
+                    poster_path = await resolve_tmdb_poster_path(
+                        sub.tmdb_id, sub.media_type
+                    )
+                    return sub, poster_path
 
-        async def enrich_one(sub: Subscription) -> tuple[Subscription, str | None]:
-            async with semaphore:
-                poster_path = await resolve_tmdb_poster_path(
-                    sub.tmdb_id, sub.media_type
-                )
-                return sub, poster_path
-
-        enrich_results = await asyncio.gather(*(enrich_one(sub) for sub in need_enrich))
-        for sub, poster_path in enrich_results:
-            if poster_path != sub.poster_path:
-                sub.poster_path = poster_path
-                dirty = True
+            enrich_results = await asyncio.gather(*(enrich_one(sub) for sub in need_enrich))
+            for sub, poster_path in enrich_results:
+                if poster_path != sub.poster_path:
+                    sub.poster_path = poster_path
+                    dirty = True
 
     if dirty:
         await db.commit()
@@ -617,19 +636,7 @@ async def list_tv_missing_status(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        has_successful_transfer = (
-            select(DownloadRecord.id)
-            .where(
-                DownloadRecord.subscription_id == Subscription.id,
-                or_(
-                    DownloadRecord.completed_at.is_not(None),
-                    DownloadRecord.status.in_(
-                        (MediaStatus.COMPLETED, MediaStatus.OFFLINE_COMPLETED)
-                    ),
-                ),
-            )
-            .exists()
-        )
+        has_successful_transfer = _has_successful_transfer_exists()
         result = await db.execute(
             select(Subscription)
             .where(
@@ -654,11 +661,17 @@ async def list_tv_missing_status(
             for sub in rows
             if sub.tmdb_id is not None
         }
+        subscription_id_by_tmdb = {
+            int(sub.tmdb_id): int(sub.id)
+            for sub in rows
+            if sub.tmdb_id is not None
+        }
         status_by_tmdb = await tv_missing_service.get_tv_missing_statuses(
             tmdb_ids,
             include_specials=False,
             refresh=bool(refresh),
             options_by_tmdb=options_by_tmdb,
+            subscription_id_by_tmdb=subscription_id_by_tmdb,
         )
 
         def build_one(sub: Subscription) -> dict[str, Any]:

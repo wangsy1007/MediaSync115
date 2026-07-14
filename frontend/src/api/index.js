@@ -9,7 +9,8 @@ const TG_BOT_RESTART_TIMEOUT_MS = 45000
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 30000
+  timeout: 30000,
+  withCredentials: true
 })
 
 const BACKEND_UNAVAILABLE_CODE = 'backend_unavailable'
@@ -105,7 +106,7 @@ api.interceptors.response.use(
       return Promise.reject(error)
     }
 
-    if (isAuthSessionRequest) {
+    if (isAuthSessionRequest || isAuthLoginRequest || isAuthLogoutRequest) {
       return Promise.reject(error)
     }
 
@@ -114,7 +115,7 @@ api.interceptors.response.use(
       return Promise.reject(error)
     }
 
-    if (isUnauthorized && !isAuthLoginRequest && !isAuthLogoutRequest && !isResourceCredentialError) {
+    if (isUnauthorized && !isResourceCredentialError) {
       if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
         // 使用 SPA 路由导航，避免整页刷新导致白屏和状态丢失
         import('@/router').then(({ default: router, resetAuthSessionCache }) => {
@@ -304,7 +305,7 @@ export const settingsApi = {
   checkHdhive: () => api.get('/settings/hdhive/check'),
   runHdhiveCheckin: (payload) => api.post('/settings/hdhive/checkin', payload),
   checkTg: () => api.get('/settings/tg/check'),
-  checkTmdb: () => api.get('/settings/tmdb/check'),
+  checkTmdb: (params) => api.get('/settings/tmdb/check', { params }),
   checkPansou: () => api.get('/settings/pansou/check'),
   checkEmby: (params) => api.get('/settings/emby/check', { params }),
   checkFeiniu: (params) => api.get('/settings/feiniu/check', { params }),
@@ -368,7 +369,7 @@ export const archiveApi = {
 export const strmApi = {
   getConfig: () => api.get('/strm/config'),
   updateConfig: (payload) => api.put('/strm/config', payload),
-  generate: () => api.post('/strm/generate', null, { timeout: 300000 }),
+  generate: (mode = 'incremental') => api.post('/strm/generate', { mode }, { timeout: 300000 }),
   diagnose: () => api.get('/strm/diagnose', { timeout: 30000 })
 }
 

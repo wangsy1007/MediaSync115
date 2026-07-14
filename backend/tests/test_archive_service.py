@@ -40,6 +40,52 @@ class TestArchiveService:
 
         assert parsed["media_type"] == "movie"
         assert parsed["year"] == "1999"
+        assert parsed["query_title"] == "黑客帝国"
+
+    def test_parse_chinese_title_glued_to_quality_tags(self) -> None:
+        """中文片名与 4K/HDR 等标签粘连时应正确截取标题"""
+        parsed = archive_service.parse_media_filename(
+            "火遮眼4K.HDR&杜比视界内封精修简英双语&简中特效sup字幕2160p.iT.WEB-DL.DV.HDR.DDP5.1.Atmos.H.265-qun776760979.mkv"
+        )
+        assert parsed["media_type"] == "movie"
+        assert parsed["query_title"] == "火遮眼"
+        candidates = archive_service._build_title_query_candidates(parsed)
+        assert "火遮眼" in candidates
+
+    def test_parse_bracket_prefix_and_uhd(self) -> None:
+        """片头广告括号与 UHD/WEB-DL 标记应被剥离"""
+        parsed = archive_service.parse_media_filename(
+            "【高清剧集网】The.Batman.2022.2160p.UHD.BluRay.x265.HDR.mkv"
+        )
+        assert parsed["query_title"] == "The Batman"
+        assert parsed["year"] == "2022"
+
+    def test_parse_glued_115_prefix_and_year(self) -> None:
+        """115 前缀、粘连年份与发布组标签应能解析出片名"""
+        parsed = archive_service.parse_media_filename(
+            "115Zootopia.22025RepackUSAsGnbCHDBits.iso"
+        )
+        assert parsed["query_title"] == "Zootopia"
+        assert parsed["year"] == "2025"
+        candidates = archive_service._build_title_query_candidates(parsed)
+        assert "Zootopia" in candidates
+
+    def test_parse_chinese_tv_episode(self) -> None:
+        """中文集数格式"""
+        parsed = archive_service.parse_media_filename(
+            "庆余年.第01集.1080p.WEB-DL.mkv"
+        )
+        assert parsed["media_type"] == "tv"
+        assert parsed["episode"] == 1
+        assert parsed["query_title"] == "庆余年"
+
+        parsed2 = archive_service.parse_media_filename(
+            "三体.第2季.第03集.2160p.mkv"
+        )
+        assert parsed2["media_type"] == "tv"
+        assert parsed2["season"] == 2
+        assert parsed2["episode"] == 3
+        assert parsed2["query_title"] == "三体"
 
     def test_parse_tv_with_season_episode(self) -> None:
         """测试剧集文件名多种格式"""
@@ -47,11 +93,14 @@ class TestArchiveService:
         assert parsed["media_type"] == "tv"
         assert parsed["season"] == 3
         assert parsed["episode"] == 5
+        assert parsed["query_title"] == "Game of Thrones"
 
     def test_is_video(self) -> None:
         """测试视频文件识别"""
         assert archive_service._is_video("test.mkv") is True
         assert archive_service._is_video("test.mp4") is True
+        assert archive_service._is_video("test.iso") is True
+        assert archive_service._is_video("test.m2ts") is True
         assert archive_service._is_video("test.srt") is False
         assert archive_service._is_video("test.nfo") is False
         assert archive_service._is_video("test") is False
@@ -62,6 +111,54 @@ class TestArchiveService:
         assert (
             archive_service._normalize_title("The.Matrix.1080p.BluRay") == "The Matrix"
         )
+        assert archive_service._normalize_title("火遮眼4K") == "火遮眼"
+        assert archive_service._normalize_title("Spider-Man.No.Way.Home") == (
+            "Spider Man No Way Home"
+        )
+
+    @pytest.mark.asyncio
+    async def test_identify_media_tries_cjk_fallback(self, monkeypatch) -> None:
+        """脏文件名识别时应回退到中文短标题"""
+        calls: list[str] = []
+
+        async def fake_search(*, query, media_type, page=1, year=None):
+            calls.append(query)
+            if query == "火遮眼":
+                return {
+                    "results": [
+                        {"id": 1280738, "tmdb_id": 1280738, "title": "火遮眼"}
+                    ]
+                }
+            return {"results": []}
+
+        async def fake_detail(tmdb_id):
+            return {
+                "title": "火遮眼",
+                "release_date": "2025-01-01",
+                "genres": [{"id": 28, "name": "动作"}],
+                "origin_country": ["CN"],
+                "production_countries": [{"iso_3166_1": "CN"}],
+            }
+
+        monkeypatch.setattr(
+            archive_service_module.tmdb_service,
+            "search_by_media_type",
+            fake_search,
+        )
+        monkeypatch.setattr(
+            archive_service_module.tmdb_service,
+            "get_movie_detail",
+            fake_detail,
+        )
+
+        parsed = archive_service.parse_media_filename(
+            "火遮眼4K.HDR&杜比视界内封精修2160p.WEB-DL.mkv"
+        )
+        matched = await archive_service.identify_media(parsed)
+        assert matched is not None
+        assert matched["tmdb_id"] == 1280738
+        assert matched["title"] == "火遮眼"
+        assert "火遮眼" in calls
 
     def test_build_target_desc_with_custom_roots(self) -> None:
         """测试自定义一级目录的目标路径描述"""

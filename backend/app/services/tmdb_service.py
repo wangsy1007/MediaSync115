@@ -47,8 +47,7 @@ class TmdbService:
         if response.status_code == 403:
             raise ValueError("TMDB API Key 权限不足或已被禁用，请检查后重新配置")
 
-    async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
-        url = f"{settings.TMDB_BASE_URL}{path}"
+    async def _request_json(self, url: str, params: dict[str, Any]) -> dict[str, Any]:
         client = await _get_tmdb_http_client()
         try:
             response = await client.get(url, params=params)
@@ -64,7 +63,6 @@ class TmdbService:
             if not self._is_tls_hostname_error(exc):
                 raise
 
-        # Fallback without verification
         insecure_client = await _get_tmdb_http_client(verify=False)
         try:
             response = await insecure_client.get(url, params=params)
@@ -76,9 +74,12 @@ class TmdbService:
             if insecure_client is not _TMDB_HTTP_CLIENT:
                 await insecure_client.aclose()
 
-    async def check_connection(self) -> dict[str, Any]:
-        """Validate TMDB API connectivity with a lightweight real API request."""
-        payload = await self._get("/configuration", self._required_params())
+    async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        url = f"{settings.TMDB_BASE_URL}{path}"
+        return await self._request_json(url, params)
+
+    @staticmethod
+    def _format_configuration_result(payload: dict[str, Any]) -> dict[str, Any]:
         image_config = payload.get("images")
         change_keys = payload.get("change_keys")
         return {
@@ -88,6 +89,36 @@ class TmdbService:
             else 0,
             "configuration": payload,
         }
+
+    async def check_connection(self) -> dict[str, Any]:
+        """Validate TMDB API connectivity with a lightweight real API request."""
+        payload = await self._get("/configuration", self._required_params())
+        return self._format_configuration_result(payload)
+
+    async def check_connection_with_config(
+        self,
+        *,
+        api_key: str,
+        base_url: str | None = None,
+        language: str | None = None,
+        region: str | None = None,
+    ) -> dict[str, Any]:
+        """使用指定配置检测 TMDB API Key 是否可用（无需先保存）。"""
+        normalized_key = str(api_key or "").strip()
+        if not normalized_key:
+            raise ValueError("TMDB API Key 未配置")
+
+        resolved_base = str(
+            base_url or settings.TMDB_BASE_URL or "https://api.themoviedb.org/3"
+        ).strip().rstrip("/")
+        params: dict[str, Any] = {
+            "api_key": normalized_key,
+            "language": str(language or settings.TMDB_LANGUAGE or "zh-CN").strip(),
+            "region": str(region or settings.TMDB_REGION or "CN").strip(),
+        }
+        url = f"{resolved_base}/configuration"
+        payload = await self._request_json(url, params)
+        return self._format_configuration_result(payload)
 
     @staticmethod
     def _is_tls_hostname_error(exc: Exception) -> bool:
@@ -309,6 +340,12 @@ class TmdbService:
             "aggregate_credits,content_ratings,videos,external_ids"
         )
         cache_key = f"tv:{tmdb_id}"
+        return await self._get_cached(cache_key, f"/tv/{tmdb_id}", params)
+
+    async def get_tv_episode_counts(self, tmdb_id: int) -> dict[str, Any]:
+        """轻量获取剧集季/集数信息，不含 append_to_response。"""
+        params = self._required_params()
+        cache_key = f"tv_episodes:{tmdb_id}"
         return await self._get_cached(cache_key, f"/tv/{tmdb_id}", params)
 
     async def get_tv_season_detail(

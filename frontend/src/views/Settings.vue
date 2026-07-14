@@ -927,23 +927,32 @@
       <el-tab-pane label="TMDB" name="tmdb">
         <el-card class="settings-card">
           <template #header>
-            <span>TMDB 配置</span>
+            <div class="card-header">
+              <span>TMDB 配置</span>
+              <el-tag v-if="tmdbStatus.checked" :type="tmdbStatus.valid ? 'success' : 'danger'" size="small">
+                {{ tmdbStatus.valid ? 'Key 可用' : 'Key 不可用' }}
+              </el-tag>
+            </div>
           </template>
 
           <el-form :model="tmdbForm" label-width="120px">
             <el-form-item label="API Key">
               <el-input v-model="tmdbForm.apiKey" placeholder="TMDB API Key" type="password" show-password />
             </el-form-item>
-            <el-form-item label="语言">
-              <el-input v-model="tmdbForm.language" placeholder="例如: zh-CN" />
-            </el-form-item>
-            <el-form-item label="地区">
-              <el-input v-model="tmdbForm.region" placeholder="例如: CN" />
-            </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingTmdb" @click="handleSaveTmdb">保存</el-button>
+              <el-button :loading="testingTmdb" @click="handleTestTmdb">测试连接</el-button>
             </el-form-item>
           </el-form>
+
+          <div
+            v-if="tmdbStatus.checked"
+            class="connection-result"
+            :class="tmdbStatus.valid ? 'is-success' : 'is-failed'"
+          >
+            <div class="result-label">连接检测结果</div>
+            <div class="result-message">{{ tmdbStatus.message }}</div>
+          </div>
         </el-card>
       </el-tab-pane>
 
@@ -1107,10 +1116,17 @@
                   v-for="(source, index) in resourcePriority"
                   :key="source"
                   class="priority-item"
+                  :class="{ 'priority-item-disabled': !resourceEnabled[source] }"
                 >
                   <div class="priority-item-left">
                     <span class="priority-order">{{ index + 1 }}</span>
                     <span class="priority-name">{{ sourceLabelMap[source] || source }}</span>
+                    <el-switch
+                      v-model="resourceEnabled[source]"
+                      inline-prompt
+                      active-text="启用"
+                      inactive-text="停用"
+                    />
                     <el-tag
                       size="small"
                       :type="sourceConnectionStatus[source]?.checked ? (sourceConnectionStatus[source]?.ok ? 'success' : 'danger') : 'info'"
@@ -1141,12 +1157,12 @@
                   :loading="savingResourcePriority"
                   @click="handleSaveResourcePriority"
                 >
-                  保存优先级
+                  保存渠道设置
                 </el-button>
               </div>
               <div class="priority-tips">
                 <el-text size="small" type="info">
-                  保存后，订阅资源会按以上顺序依次查找；这里显示的是各渠道实时连接状态。
+                  启用开关控制订阅转存是否使用该渠道；顺序决定启用渠道的查找先后。停用渠道不会参与订阅扫描，但顺序仍会保留。
                 </el-text>
               </div>
             </el-form-item>
@@ -1924,13 +1940,17 @@ import { useRouter } from 'vue-router'
 import { formatBeijingDateTime, formatBeijingTableCell } from '@/utils/timezone'
 import { ALL_TABS, saveVisibleTabs } from '@/utils/detailTabs'
 import { ALL_RESOLUTIONS, ALL_FORMATS } from '@/utils/resourceTags'
+import {
+  TMDB_DEFAULT_BASE_URL,
+  TMDB_DEFAULT_IMAGE_BASE_URL,
+  TMDB_DEFAULT_LANGUAGE,
+  TMDB_DEFAULT_REGION
+} from '@/utils/tmdb'
 
 const router = useRouter()
 const activeSettingsTab = ref('pan115')
 const loadedSettingsTabs = ref(new Set())
 const officialUpdateRepository = 'wangsy1007/mediasync115'
-const TMDB_DEFAULT_BASE_URL = 'https://api.themoviedb.org/3'
-const TMDB_DEFAULT_IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/w500'
 const accountForm = ref({
   currentUsername: 'admin',
   newUsername: '',
@@ -1997,9 +2017,7 @@ const tgQrState = reactive({
 })
 
 const tmdbForm = ref({
-  apiKey: '',
-  language: 'zh-CN',
-  region: 'CN'
+  apiKey: ''
 })
 
 const schedulerForm = ref({
@@ -2032,6 +2050,11 @@ const sourceLabelMap = {
   tg: 'Telegram'
 }
 const resourcePriority = ref(['hdhive', 'pansou', 'tg'])
+const resourceEnabled = reactive({
+  hdhive: true,
+  pansou: true,
+  tg: true
+})
 
 const pansouForm = ref({
   baseUrl: ''
@@ -2234,6 +2257,7 @@ const stoppingTgBackfill = ref(false)
 const stoppingTgIncremental = ref(false)
 const stoppingTgRebuild = ref(false)
 const savingTmdb = ref(false)
+const testingTmdb = ref(false)
 const savingScheduler = ref(false)
 const savingResourcePriority = ref(false)
 const runningAllChannels = ref(false)
@@ -2604,6 +2628,11 @@ const embyStatus = reactive({
   valid: false,
   message: '',
   user: null
+})
+const tmdbStatus = reactive({
+  checked: false,
+  valid: false,
+  message: ''
 })
 const feiniuStatus = reactive({
   checked: false,
@@ -4027,34 +4056,74 @@ const handleStopTgRebuild = async () => {
   }
 }
 
-const handleSaveTmdb = () => {
+const handleSaveTmdb = async () => {
   if (!String(tmdbForm.value.apiKey || '').trim()) {
     ElMessage.warning('请输入 TMDB API Key')
     return
   }
-  if (!String(tmdbForm.value.language || '').trim()) {
-    ElMessage.warning('请输入 TMDB 语言')
-    return
+
+  savingTmdb.value = true
+  try {
+    await settingsApi.updateRuntime({
+      tmdb_api_key: tmdbForm.value.apiKey,
+      tmdb_language: TMDB_DEFAULT_LANGUAGE,
+      tmdb_region: TMDB_DEFAULT_REGION,
+      tmdb_base_url: TMDB_DEFAULT_BASE_URL,
+      tmdb_image_base_url: TMDB_DEFAULT_IMAGE_BASE_URL
+    })
+    ElMessage.success('TMDB 配置已保存')
+    await checkTmdb(false)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || 'TMDB 配置保存失败')
+  } finally {
+    savingTmdb.value = false
   }
-  if (!String(tmdbForm.value.region || '').trim()) {
-    ElMessage.warning('请输入 TMDB 地区')
+}
+
+const checkTmdb = async (notify = false) => {
+  const apiKey = String(tmdbForm.value.apiKey || '').trim()
+  if (!apiKey) {
+    if (notify) {
+      ElMessage.warning('请输入 TMDB API Key')
+    }
     return
   }
 
-  savingTmdb.value = true
-  settingsApi.updateRuntime({
-    tmdb_api_key: tmdbForm.value.apiKey,
-    tmdb_language: tmdbForm.value.language,
-    tmdb_region: tmdbForm.value.region,
-    tmdb_base_url: TMDB_DEFAULT_BASE_URL,
-    tmdb_image_base_url: TMDB_DEFAULT_IMAGE_BASE_URL
-  }).then(() => {
-    ElMessage.success('TMDB 配置已保存')
-  }).catch((error) => {
-    ElMessage.error(error.response?.data?.detail || 'TMDB 配置保存失败')
-  }).finally(() => {
-    savingTmdb.value = false
-  })
+  try {
+    const { data } = await settingsApi.checkTmdb({
+      tmdb_api_key: apiKey,
+      tmdb_base_url: TMDB_DEFAULT_BASE_URL,
+      tmdb_language: TMDB_DEFAULT_LANGUAGE,
+      tmdb_region: TMDB_DEFAULT_REGION
+    })
+    tmdbStatus.checked = true
+    tmdbStatus.valid = !!data.valid
+    tmdbStatus.message = data.valid
+      ? String(data.message || 'TMDB API Key 可用')
+      : String(data.message || 'TMDB API Key 不可用，请检查后重试')
+    if (notify) {
+      if (data.valid) ElMessage.success(tmdbStatus.message)
+      else ElMessage.error(tmdbStatus.message)
+    }
+  } catch (error) {
+    tmdbStatus.checked = true
+    tmdbStatus.valid = false
+    tmdbStatus.message = error.response?.data?.detail || error.message || 'TMDB 连接检测失败'
+    if (notify) ElMessage.error(tmdbStatus.message)
+  }
+}
+
+const handleTestTmdb = async () => {
+  if (!String(tmdbForm.value.apiKey || '').trim()) {
+    ElMessage.warning('请输入 TMDB API Key')
+    return
+  }
+  testingTmdb.value = true
+  try {
+    await checkTmdb(true)
+  } finally {
+    testingTmdb.value = false
+  }
 }
 
 const fetchAuthSession = async () => {
@@ -4499,8 +4568,6 @@ const fetchRuntimeSettings = async () => {
     tgIndexForm.value.incrementalIntervalMinutes = Number(data.tg_incremental_interval_minutes || 30)
 
     tmdbForm.value.apiKey = data.tmdb_api_key || ''
-    tmdbForm.value.language = data.tmdb_language || 'zh-CN'
-    tmdbForm.value.region = data.tmdb_region || 'CN'
     proxyForm.value.httpProxy = data.http_proxy || ''
     proxyForm.value.httpsProxy = data.https_proxy || ''
     proxyForm.value.allProxy = data.all_proxy || ''
@@ -4566,6 +4633,7 @@ const fetchRuntimeSettings = async () => {
       if (!deduped.includes(source)) deduped.push(source)
     }
     resourcePriority.value = deduped
+    applyResourceEnabled(data.subscription_resource_enabled)
     updateSourceForm.value.sourceType = data.update_source_type || 'official'
     updateSourceForm.value.repository = data.update_repository || officialUpdateRepository
 
@@ -4651,6 +4719,32 @@ const movePriority = (source, direction) => {
   resourcePriority.value = current
 }
 
+const normalizeResourceEnabled = (enabledMap) => {
+  const normalized = {
+    hdhive: true,
+    pansou: true,
+    tg: true
+  }
+  if (!enabledMap || typeof enabledMap !== 'object') {
+    return normalized
+  }
+  for (const source of Object.keys(normalized)) {
+    if (Object.prototype.hasOwnProperty.call(enabledMap, source)) {
+      normalized[source] = enabledMap[source] !== false
+    }
+  }
+  return normalized
+}
+
+const buildResourceEnabledPayload = () => normalizeResourceEnabled(resourceEnabled)
+
+const applyResourceEnabled = (enabledMap) => {
+  const normalized = normalizeResourceEnabled(enabledMap)
+  for (const source of Object.keys(normalized)) {
+    resourceEnabled[source] = normalized[source]
+  }
+}
+
 const normalizeResourcePriority = (priorityList) => {
   const fallbackOrder = ['hdhive', 'pansou', 'tg']
   const normalized = []
@@ -4669,11 +4763,14 @@ const handleSaveResourcePriority = async () => {
   savingResourcePriority.value = true
   try {
     const normalizedPriority = normalizeResourcePriority(resourcePriority.value)
+    const normalizedEnabled = buildResourceEnabledPayload()
     await settingsApi.updateRuntime({
-      subscription_resource_priority: normalizedPriority
+      subscription_resource_priority: normalizedPriority,
+      subscription_resource_enabled: normalizedEnabled
     })
     resourcePriority.value = normalizedPriority
-    ElMessage.success('资源查找优先级已保存，已应用到全局订阅转存')
+    applyResourceEnabled(normalizedEnabled)
+    ElMessage.success('订阅转存渠道设置已保存')
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '资源查找优先级保存失败')
   } finally {
@@ -4698,11 +4795,13 @@ const handleSaveScheduler = async () => {
   savingScheduler.value = true
   try {
     const normalizedPriority = normalizeResourcePriority(resourcePriority.value)
+    const normalizedEnabled = buildResourceEnabledPayload()
     await settingsApi.updateRuntime({
       subscription_offline_transfer_enabled: schedulerForm.value.offlineTransferEnabled,
       subscription_enabled: schedulerForm.value.enabled,
       subscription_interval_hours: Number(schedulerForm.value.intervalHours || 24),
       subscription_resource_priority: normalizedPriority,
+      subscription_resource_enabled: normalizedEnabled,
       subscription_hdhive_auto_unlock_enabled: schedulerForm.value.hdhiveUnlock.enabled,
       subscription_hdhive_unlock_max_points_per_item: Number(schedulerForm.value.hdhiveUnlock.maxPointsPerItem || 10),
       subscription_hdhive_unlock_budget_points_per_run: Number(schedulerForm.value.hdhiveUnlock.budgetPointsPerRun || 30),
@@ -4718,7 +4817,8 @@ const handleSaveScheduler = async () => {
       resource_max_size_gb: resourcePrefForm.maxSizeGb
     })
     resourcePriority.value = normalizedPriority
-    ElMessage.success('订阅任务、资源优先级与 HDHive 解锁策略已保存')
+    applyResourceEnabled(normalizedEnabled)
+    ElMessage.success('订阅任务、资源渠道与 HDHive 解锁策略已保存')
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '保存失败')
   } finally {
@@ -5054,6 +5154,11 @@ const ensureSettingsTabLoaded = (tab) => {
         checkTg(false)
       }
       fetchTgIndexStatus()
+      break
+    case 'tmdb':
+      if (String(tmdbForm.value.apiKey || '').trim()) {
+        checkTmdb(false)
+      }
       break
     case 'pansou':
       fetchPansouConfig()
@@ -5427,6 +5532,12 @@ onBeforeUnmount(() => {
       border-radius: 8px;
       padding: 8px 10px;
       background: rgba(61, 119, 188, 0.08);
+    }
+
+    .priority-item-disabled {
+      opacity: 0.72;
+      background: rgba(120, 120, 120, 0.08);
+      border-color: rgba(120, 120, 120, 0.18);
     }
 
     .priority-item-left {

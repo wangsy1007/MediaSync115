@@ -28,6 +28,8 @@ class JobRegistry:
             "system.noop": self._noop,
             "system.archive_scan": self._archive_scan,
             "system.offline_monitor": self._offline_monitor,
+            "system.generate_strm_incremental": self._generate_strm_incremental,
+            "system.generate_strm_full": self._generate_strm_full,
             "hdhive.checkin": self._hdhive_checkin,
             "subscription.check": self._check_subscription,
             "chart_subscription.sync": self._chart_subscription_sync,
@@ -83,6 +85,22 @@ class JobRegistry:
 
     async def _offline_monitor(self, **kwargs) -> dict[str, Any]:
         return await offline_monitor_service.check_and_trigger()
+
+    async def _generate_strm_incremental(self, **kwargs) -> dict[str, Any]:
+        from app.services.strm_service import strm_service
+
+        return await strm_service.generate_library(
+            trigger="scheduler",
+            mode="incremental",
+        )
+
+    async def _generate_strm_full(self, **kwargs) -> dict[str, Any]:
+        from app.services.strm_service import strm_service
+
+        return await strm_service.generate_library(
+            trigger="scheduler",
+            mode="full",
+        )
 
     async def _hdhive_checkin(self, **kwargs) -> dict[str, Any]:
         gamble = runtime_settings_service.get_hdhive_auto_checkin_mode() == "gamble"

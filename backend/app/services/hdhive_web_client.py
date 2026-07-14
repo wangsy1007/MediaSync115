@@ -3,6 +3,7 @@
 import asyncio
 import html
 import json
+import logging
 import re
 import unicodedata
 from time import monotonic
@@ -37,6 +38,7 @@ class HDHiveWebClient:
         self._unlock_action_id_cached_at = 0.0
         self._checkin_action_id_cached_at = 0.0
         self._unlock_action_id_ttl_seconds = 1800.0
+        self._unlock_action_chunk_batch_size = 4
 
     def set_base_url(self, base_url: str | None) -> None:
         value = str(base_url or "").strip()
@@ -56,23 +58,122 @@ class HDHiveWebClient:
         }
         return proxy_manager.create_httpx_client(**client_kwargs)
 
-    async def _fetch_text(self, path: str, accept: str | None = None) -> str:
+    def _build_fetch_headers(self, accept: str | None = None) -> dict[str, str]:
         headers = {
             "user-agent": self._user_agent,
             "accept": accept or "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
         if self._cookie:
             headers["cookie"] = self._cookie
+        return headers
 
+    async def _fetch_text_using_client(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        accept: str | None = None,
+    ) -> str:
+        headers = self._build_fetch_headers(accept)
         url = path if path.startswith("http") else f"{self._base_url}{path}"
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        self._apply_client_cookies(client)
+        return response.text
+
+    async def _fetch_text(self, path: str, accept: str | None = None) -> str:
         client = self._create_client()
         try:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            self._apply_client_cookies(client)
-            return response.text
+            return await self._fetch_text_using_client(client, path, accept=accept)
         finally:
             await client.aclose()
+
+    async def _fetch_text_with_retry_using_client(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        accept: str | None = None,
+        max_retries: int = 2,
+    ) -> str:
+        logger = logging.getLogger(__name__)
+        last_error: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                return await self._fetch_text_using_client(client, path, accept=accept)
+            except httpx.TimeoutException as exc:
+                last_error = exc
+                if attempt >= max_retries:
+                    break
+                delay = min(0.5 * (2 ** attempt), 4.0)
+                logger.warning(
+                    "HDHive 请求超时 (attempt %d/%d): %s, %.1fs 后重试",
+                    attempt + 1,
+                    max_retries + 1,
+                    path,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code < 500 and exc.response.status_code != 429:
+                    raise
+                last_error = exc
+                if attempt >= max_retries:
+                    break
+                delay = min(0.5 * (2 ** attempt), 4.0)
+                await asyncio.sleep(delay)
+            except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError) as exc:
+                last_error = exc
+                if attempt >= max_retries:
+                    break
+                delay = min(0.5 * (2 ** attempt), 4.0)
+                await asyncio.sleep(delay)
+        raise last_error  # type: ignore[misc]
+
+    async def _fetch_text_with_retry(
+        self,
+        path: str,
+        accept: str | None = None,
+        max_retries: int = 3,
+    ) -> str:
+        """带指数退避重试的 _fetch_text，应对网络抖动与临时错误。"""
+        logger = logging.getLogger(__name__)
+        last_error: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                return await self._fetch_text(path, accept=accept)
+            except httpx.TimeoutException as exc:
+                last_error = exc
+                if attempt >= max_retries:
+                    break
+                delay = min(1.0 * (2 ** attempt), 8.0)
+                logger.warning(
+                    "HDHive 请求超时 (attempt %d/%d): %s, %.1fs 后重试",
+                    attempt + 1, max_retries + 1, path, delay,
+                )
+                await asyncio.sleep(delay)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code < 500 and exc.response.status_code != 429:
+                    raise
+                last_error = exc
+                if attempt >= max_retries:
+                    break
+                delay = min(1.0 * (2 ** attempt), 8.0)
+                logger.warning(
+                    "HDHive 请求失败 HTTP %d (attempt %d/%d): %s, %.1fs 后重试",
+                    exc.response.status_code, attempt + 1, max_retries + 1,
+                    path, delay,
+                )
+                await asyncio.sleep(delay)
+            except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError) as exc:
+                last_error = exc
+                if attempt >= max_retries:
+                    break
+                delay = min(1.0 * (2 ** attempt), 8.0)
+                logger.warning(
+                    "HDHive 连接错误 (attempt %d/%d): %s, %.1fs 后重试",
+                    attempt + 1, max_retries + 1, path, delay,
+                )
+                await asyncio.sleep(delay)
+        raise last_error  # type: ignore[misc]
 
     @staticmethod
     def _extract_first_int(raw_value: Any) -> int | None:
@@ -180,14 +281,34 @@ class HDHiveWebClient:
             return ""
 
         depth = 0
-        for pos in range(start, len(raw)):
+        in_string = False
+        pos = start
+        while pos < len(raw):
             char = raw[pos]
-            if char == "[":
-                depth += 1
-            elif char == "]":
-                depth -= 1
-                if depth == 0:
-                    return raw[start:pos + 1]
+            if not in_string:
+                if char == "\\" and pos + 1 < len(raw) and raw[pos + 1] == '"':
+                    in_string = True
+                    pos += 2
+                    continue
+                if char == '"':
+                    in_string = True
+                elif char == "[":
+                    depth += 1
+                elif char == "]":
+                    depth -= 1
+                    if depth == 0:
+                        return raw[start : pos + 1]
+                pos += 1
+                continue
+
+            if char == "\\" and pos + 1 < len(raw) and raw[pos + 1] == '"':
+                in_string = False
+                pos += 2
+                continue
+            if char == "\\" and pos + 1 < len(raw):
+                pos += 2
+                continue
+            pos += 1
         return ""
 
     @staticmethod
@@ -358,7 +479,15 @@ class HDHiveWebClient:
 
         return merged
 
-    async def _resolve_unlock_action_id(self, resource_html: str) -> str:
+    def _invalidate_unlock_action_id_cache(self) -> None:
+        self._unlock_action_id = ""
+        self._unlock_action_id_cached_at = 0.0
+
+    async def _resolve_unlock_action_id(
+        self,
+        resource_html: str,
+        client: httpx.AsyncClient | None = None,
+    ) -> str:
         now = monotonic()
         if (
             self._unlock_action_id
@@ -370,18 +499,40 @@ class HDHiveWebClient:
         chunk_paths = self._extract_next_static_chunk_paths(resource_html)
         prioritized = [path for path in chunk_paths if "/7224-" in path or "/1088-" in path]
         search_paths = prioritized + [path for path in chunk_paths if path not in prioritized]
-        for path in search_paths:
-            try:
-                chunk_text = await self._fetch_text(path, accept="application/javascript,text/javascript,*/*;q=0.8")
-            except Exception:
-                continue
+        if not search_paths:
+            return self._unlock_action_id
 
-            action_id = self._extract_server_action_id_from_chunk(chunk_text, "unlockResource")
-            if not action_id:
-                continue
-            self._unlock_action_id = action_id
-            self._unlock_action_id_cached_at = monotonic()
-            return action_id
+        js_accept = "application/javascript,text/javascript,*/*;q=0.8"
+
+        async def _try_chunk(path: str) -> str:
+            try:
+                if client is not None:
+                    chunk_text = await self._fetch_text_with_retry_using_client(
+                        client,
+                        path,
+                        accept=js_accept,
+                        max_retries=1,
+                    )
+                else:
+                    chunk_text = await self._fetch_text_with_retry(
+                        path,
+                        accept=js_accept,
+                        max_retries=1,
+                    )
+            except Exception:
+                return ""
+            return self._extract_server_action_id_from_chunk(chunk_text, "unlockResource")
+
+        batch_size = max(int(self._unlock_action_chunk_batch_size or 1), 1)
+        for offset in range(0, len(search_paths), batch_size):
+            batch = search_paths[offset : offset + batch_size]
+            results = await asyncio.gather(*[_try_chunk(path) for path in batch])
+            for action_id in results:
+                if not action_id:
+                    continue
+                self._unlock_action_id = action_id
+                self._unlock_action_id_cached_at = monotonic()
+                return action_id
 
         return self._unlock_action_id
 
@@ -397,7 +548,7 @@ class HDHiveWebClient:
         chunk_paths = self._extract_next_static_chunk_paths(page_html)
         for path in chunk_paths:
             try:
-                chunk_text = await self._fetch_text(path, accept="application/javascript,text/javascript,*/*;q=0.8")
+                chunk_text = await self._fetch_text_with_retry(path, accept="application/javascript,text/javascript,*/*;q=0.8")
             except Exception:
                 continue
 
@@ -614,6 +765,24 @@ class HDHiveWebClient:
             "user": row.get("user") if isinstance(row.get("user"), dict) else None,
         }
 
+    @classmethod
+    def _extract_detail_media_title(cls, raw: str, tmdb_id: int) -> str:
+        escaped_id = str(int(tmdb_id))
+        patterns = (
+            rf'\\"title\\":\\"([^\\"]+)\\".{{0,400}}?\\"tmdb_id\\":\\"{escaped_id}\\"',
+            rf'"title":"([^"]+)".{{0,400}}?"tmdb_id":"{escaped_id}"',
+            rf'\\"tmdb_id\\":\\"{escaped_id}\\".{{0,400}}?\\"title\\":\\"([^\\"]+)\\"',
+            rf'"tmdb_id":"{escaped_id}".{{0,400}}?"title":"([^"]+)"',
+        )
+        for pattern in patterns:
+            matched = re.search(pattern, str(raw or ""), re.S)
+            if not matched:
+                continue
+            title = str(matched.group(1) or "").strip()
+            if title:
+                return title
+        return ""
+
     async def _collect_tmdb_resources(
         self,
         tmdb_id: int,
@@ -628,14 +797,17 @@ class HDHiveWebClient:
             if not slug.isdigit()
             else f"/{normalized_media_type}/{int(tmdb_id)}"
         )
-        detail_html = await self._fetch_text(detail_path)
+        detail_html = await self._fetch_text_with_retry(detail_path)
         field_name = "115" if target_pan_type == "115" else "quark"
         rows = self._extract_json_like_array(detail_html, field_name=field_name)
 
         if not rows and not slug.isdigit():
-            fallback_html = await self._fetch_text(f"/{normalized_media_type}/{int(tmdb_id)}")
+            fallback_html = await self._fetch_text_with_retry(f"/{normalized_media_type}/{int(tmdb_id)}")
             rows = self._extract_json_like_array(fallback_html, field_name=field_name)
+            if not detail_html:
+                detail_html = fallback_html
 
+        media_title = self._extract_detail_media_title(detail_html, tmdb_id)
         pan_type_counts: dict[str, int] = {}
         filtered_rows: list[dict[str, Any]] = []
         for idx, row in enumerate(rows):
@@ -645,13 +817,18 @@ class HDHiveWebClient:
             pan_type_counts[pan_type] = pan_type_counts.get(pan_type, 0) + 1
             if pan_type != target_pan_type:
                 continue
-            filtered_rows.append(self._map_resource_row(row, idx))
+            item = self._map_resource_row(row, idx)
+            if media_title:
+                item["matched_media_title"] = media_title
+            item["hdhive_source_tmdb_id"] = int(tmdb_id)
+            filtered_rows.append(item)
 
         return {
             "items": filtered_rows,
             "raw_total": len(rows),
             "filtered_total": len(filtered_rows),
             "pan_type_counts": pan_type_counts,
+            "media_title": media_title,
         }
 
     async def _list_resources_by_tmdb(self, tmdb_id: int, media_type: str) -> list[dict[str, Any]]:
@@ -876,7 +1053,7 @@ class HDHiveWebClient:
 
     async def _resolve_media_slug(self, tmdb_id: int, media_type: str) -> str:
         try:
-            tmdb_route_html = await self._fetch_text(f"/tmdb/{media_type}/{int(tmdb_id)}")
+            tmdb_route_html = await self._fetch_text_with_retry(f"/tmdb/{media_type}/{int(tmdb_id)}")
             redirect_match = re.search(
                 rf"NEXT_REDIRECT;replace;/{media_type}/([^;]+);307",
                 tmdb_route_html,
@@ -886,11 +1063,25 @@ class HDHiveWebClient:
         except Exception:
             pass
 
-        home_html = await self._fetch_text("/")
+        home_html = await self._fetch_text_with_retry("/")
         slug = self._extract_media_slug_from_home(home_html, tmdb_id, media_type)
         if slug:
             return slug
-        return str(int(tmdb_id))
+
+        # 降级为数字 ID 前先验证路由可达性，避免后续详情页 404
+        numeric_id = str(int(tmdb_id))
+        try:
+            verify_html = await self._fetch_text_with_retry(
+                f"/{media_type}/{numeric_id}", max_retries=1,
+            )
+            if verify_html:
+                return numeric_id
+        except Exception:
+            pass
+
+        raise ValueError(
+            f"HDHive 未收录 TMDB ID {tmdb_id} ({media_type})，无法解析媒体 slug"
+        )
 
     async def get_user_info(self) -> dict[str, Any]:
         candidate_paths = (
@@ -900,7 +1091,7 @@ class HDHiveWebClient:
         merged_user: dict[str, Any] = {}
 
         for path in candidate_paths:
-            html = await self._fetch_text(path)
+            html = await self._fetch_text_with_retry(path)
             user = self._extract_current_user(html)
             if not user:
                 continue
@@ -916,14 +1107,14 @@ class HDHiveWebClient:
         slug = str(slug or "").strip()
         if not slug:
             return ""
-        html = await self._fetch_text(f"/resource/115/{slug}")
+        html = await self._fetch_text_with_retry(f"/resource/115/{slug}")
         return self._extract_share_link(html)
 
     async def _fetch_resource_meta(self, slug: str) -> dict[str, Any]:
         slug = str(slug or "").strip()
         if not slug:
             return {}
-        html = await self._fetch_text(f"/resource/115/{slug}")
+        html = await self._fetch_text_with_retry(f"/resource/115/{slug}")
         meta = self._extract_resource_meta(html)
         share_link = self._extract_share_link(html)
         if share_link and not meta.get("full_url"):
@@ -990,55 +1181,90 @@ class HDHiveWebClient:
             return {"success": False, "message": f"请求失败(digest={payload['digest']})"}
         return {"success": False, "message": "请求未返回有效结果"}
 
-    async def _post_next_action(self, page_path: str, action_id: str, args: list[Any]) -> httpx.Response:
+    async def _post_next_action_with_client(
+        self,
+        client: httpx.AsyncClient,
+        page_path: str,
+        action_id: str,
+        args: list[Any],
+        *,
+        prefetch_token: bool = True,
+    ) -> httpx.Response:
         normalized_path = page_path if page_path.startswith("http") else f"{self._base_url}{page_path}"
         referer = page_path if page_path.startswith("http") else f"{self._base_url}{page_path}"
         base_cookie = self._cookie
 
+        if prefetch_token:
+            await self._prefetch_action_token(client)
+        cookie_header = self._build_cookie_header(client, base_cookie)
+        post_headers = {
+            "user-agent": self._user_agent,
+            "accept": "text/x-component",
+            "origin": self._base_url,
+            "referer": referer,
+            "next-action": action_id,
+            "content-type": "text/plain;charset=UTF-8",
+            "cookie": cookie_header,
+        }
+        body = json.dumps(args, ensure_ascii=False)
+        response = await client.post(normalized_path, headers=post_headers, content=body)
+
+        if response.status_code < 400:
+            parsed = self._parse_next_action_response(response.text)
+            if self._is_action_token_error(parsed):
+                await self._prefetch_action_token(client)
+                post_headers["cookie"] = self._build_cookie_header(client, base_cookie)
+                response = await client.post(normalized_path, headers=post_headers, content=body)
+        return response
+
+    async def _post_next_action(self, page_path: str, action_id: str, args: list[Any]) -> httpx.Response:
         client = self._create_client()
         try:
-            await self._prefetch_action_token(client)
-            cookie_header = self._build_cookie_header(client, base_cookie)
-            post_headers = {
-                "user-agent": self._user_agent,
-                "accept": "text/x-component",
-                "origin": self._base_url,
-                "referer": referer,
-                "next-action": action_id,
-                "content-type": "text/plain;charset=UTF-8",
-                "cookie": cookie_header,
-            }
-            body = json.dumps(args, ensure_ascii=False)
-            response = await client.post(normalized_path, headers=post_headers, content=body)
-
-            if response.status_code < 400:
-                parsed = self._parse_next_action_response(response.text)
-                if self._is_action_token_error(parsed):
-                    await self._prefetch_action_token(client)
-                    post_headers["cookie"] = self._build_cookie_header(client, base_cookie)
-                    response = await client.post(normalized_path, headers=post_headers, content=body)
-            return response
+            return await self._post_next_action_with_client(
+                client,
+                page_path,
+                action_id,
+                args,
+            )
         finally:
             await client.aclose()
 
-    async def _unlock_resource_via_next_action(self, slug: str, resource_html: str) -> dict[str, Any]:
+    async def _unlock_resource_via_next_action(
+        self,
+        slug: str,
+        resource_html: str,
+        client: httpx.AsyncClient,
+    ) -> dict[str, Any]:
         slug = str(slug or "").strip()
         if not slug:
             return {"success": False, "message": "资源 slug 为空"}
 
         page_path = f"/resource/115/{slug}"
-        self._unlock_action_id_cached_at = 0.0
-        self._unlock_action_id = ""
-        action_id = await self._resolve_unlock_action_id(resource_html)
+        action_id = await self._resolve_unlock_action_id(resource_html, client)
         if not action_id:
             return {"success": False, "message": "未找到 unlockResource Server Action"}
-        response = await self._post_next_action(page_path, action_id, [slug])
+        response = await self._post_next_action_with_client(
+            client,
+            page_path,
+            action_id,
+            [slug],
+            prefetch_token=False,
+        )
         if response.status_code == 404 and "Server action not found" in response.text:
-            self._unlock_action_id_cached_at = 0.0
-            self._unlock_action_id = ""
-            refreshed_action_id = await self._resolve_unlock_action_id(resource_html)
+            self._invalidate_unlock_action_id_cache()
+            try:
+                fresh_html = await self._fetch_text_with_retry_using_client(client, page_path)
+                refreshed_action_id = await self._resolve_unlock_action_id(fresh_html, client)
+            except Exception:
+                refreshed_action_id = ""
             if refreshed_action_id and refreshed_action_id != action_id:
-                response = await self._post_next_action(page_path, refreshed_action_id, [slug])
+                response = await self._post_next_action_with_client(
+                    client,
+                    page_path,
+                    refreshed_action_id,
+                    [slug],
+                    prefetch_token=False,
+                )
         if response.status_code >= 400:
             return {
                 "success": False,
@@ -1054,6 +1280,53 @@ class HDHiveWebClient:
         parsed["raw"] = response.text[:2000]
         return parsed
 
+    def _resolve_share_link_from_meta(
+        self,
+        meta: dict[str, Any],
+        *,
+        html: str = "",
+    ) -> tuple[str, str]:
+        access_code = str(meta.get("access_code") or "").strip()
+        share_link = self._sanitize_share_url(str(meta.get("full_url") or ""))
+        resource_url = self._sanitize_share_url(str(meta.get("resource_url") or ""))
+        if not share_link and html:
+            share_link = self._sanitize_share_url(self._extract_share_link(html))
+        if not share_link and resource_url and access_code:
+            joiner = "&" if "?" in resource_url else "?"
+            share_link = f"{resource_url}{joiner}{urlencode({'password': access_code})}"
+        return share_link, access_code
+
+    def _compose_unlock_result(
+        self,
+        *,
+        success: bool,
+        share_link: str,
+        access_code: str,
+        meta: dict[str, Any],
+        action_result: dict[str, Any] | None = None,
+        already_owned: bool = False,
+        method: str = "next_action",
+        timing_ms: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
+        action_result = action_result if isinstance(action_result, dict) else {}
+        action_message = str(action_result.get("message") or "").strip()
+        resource_url = self._sanitize_share_url(str(meta.get("resource_url") or ""))
+        return {
+            "success": success,
+            "method": method,
+            "message": action_message or ("资源解锁成功" if success else "资源解锁失败"),
+            "share_link": share_link,
+            "access_code": access_code,
+            "full_url": share_link,
+            "already_owned": already_owned,
+            "locked": bool(meta.get("locked")) and not success,
+            "lock_code": str(meta.get("lock_code") or ""),
+            "lock_message": str(meta.get("lock_message") or ""),
+            "unlock_points": int(meta.get("unlock_points") or 0),
+            "resource_url": resource_url,
+            "timing_ms": timing_ms or {},
+        }
+
     async def _load_checkin_page(self) -> tuple[str, str]:
         candidate_paths = (
             "/user/signin",
@@ -1061,7 +1334,7 @@ class HDHiveWebClient:
         )
         for path in candidate_paths:
             try:
-                html = await self._fetch_text(path)
+                html = await self._fetch_text_with_retry(path)
             except Exception:
                 continue
             if html:
@@ -1074,7 +1347,12 @@ class HDHiveWebClient:
         response = await self._post_next_action(page_path, action_id, [bool(gamble)])
         if response.status_code == 404 and "Server action not found" in response.text:
             self._checkin_action_id_cached_at = 0.0
-            refreshed_action_id = await self._resolve_checkin_action_id(page_html)
+            # 重新获取签到页面，拿到最新的 chunk 路径后再解析 action ID
+            try:
+                fresh_html = await self._fetch_text_with_retry(page_path)
+                refreshed_action_id = await self._resolve_checkin_action_id(fresh_html)
+            except Exception:
+                refreshed_action_id = ""
             if refreshed_action_id and refreshed_action_id != action_id:
                 response = await self._post_next_action(page_path, refreshed_action_id, [bool(gamble)])
         response.raise_for_status()
@@ -1188,56 +1466,116 @@ class HDHiveWebClient:
             if cached and cached[1].get("success") and (now - cached[0] < self._unlock_cache_ttl_seconds):
                 return cached[1]
 
-            resource_html = await self._fetch_text(f"/resource/115/{normalized_slug}")
-            action_result = await self._unlock_resource_via_next_action(normalized_slug, resource_html)
-            action_share_link, action_access_code, already_owned = (
-                self._extract_share_link_from_action_data(action_result)
-            )
-            meta = self._extract_resource_meta(resource_html)
-            if bool(meta.get("locked")):
-                meta = await self._fetch_resource_meta(normalized_slug)
-            access_code = action_access_code or str(meta.get("access_code") or "").strip()
-            share_link = action_share_link or self._sanitize_share_url(
-                str(meta.get("full_url") or "")
-            )
-            resource_url = self._sanitize_share_url(str(meta.get("resource_url") or ""))
-            if not share_link and resource_url and access_code:
-                joiner = "&" if "?" in resource_url else "?"
-                share_link = f"{resource_url}{joiner}{urlencode({'password': access_code})}"
-            if not share_link:
-                try:
-                    fetched_link = await self._fetch_resource_share_link(normalized_slug)
-                    if fetched_link:
-                        share_link = self._sanitize_share_url(fetched_link)
-                except Exception:
-                    pass
-            action_message = str(action_result.get("message") or "").strip()
-            success = bool(share_link or access_code) and (
-                bool(action_result.get("success"))
-                or already_owned
-                or "已解锁" in action_message
-            )
+            timing_ms: dict[str, float] = {}
+            total_started = monotonic()
+            page_path = f"/resource/115/{normalized_slug}"
 
-            result = {
-                "success": success,
-                "method": "next_action",
-                "message": (
-                    action_message
-                    or ("资源解锁成功" if success else "资源解锁失败")
-                ),
-                "share_link": share_link,
-                "access_code": access_code,
-                "full_url": share_link,
-                "already_owned": already_owned,
-                "locked": bool(meta.get("locked")) and not success,
-                "lock_code": str(meta.get("lock_code") or ""),
-                "lock_message": str(meta.get("lock_message") or ""),
-                "unlock_points": int(meta.get("unlock_points") or 0),
-                "resource_url": resource_url,
-            }
-            if success:
-                self._unlock_cache[normalized_slug] = (monotonic(), result)
-            return result
+            client = self._create_client()
+            try:
+                prefetch_started = monotonic()
+                html_started = monotonic()
+                prefetch_task = asyncio.create_task(self._prefetch_action_token(client))
+                html_task = asyncio.create_task(
+                    self._fetch_text_with_retry_using_client(client, page_path)
+                )
+                resource_html, _prefetch_result = await asyncio.gather(html_task, prefetch_task)
+                timing_ms["prefetch_token_ms"] = round((monotonic() - prefetch_started) * 1000, 1)
+                timing_ms["fetch_html_ms"] = round((monotonic() - html_started) * 1000, 1)
+
+                meta = self._extract_resource_meta(resource_html)
+                early_share_link, early_access_code = self._resolve_share_link_from_meta(
+                    meta,
+                    html=resource_html,
+                )
+                if early_share_link and not bool(meta.get("locked")):
+                    result = self._compose_unlock_result(
+                        success=True,
+                        share_link=early_share_link,
+                        access_code=early_access_code,
+                        meta=meta,
+                        already_owned=True,
+                        method="cached_page",
+                        timing_ms={
+                            **timing_ms,
+                            "total_ms": round((monotonic() - total_started) * 1000, 1),
+                        },
+                    )
+                    self._unlock_cache[normalized_slug] = (monotonic(), result)
+                    return result
+
+                unlock_started = monotonic()
+                action_id_cache_hit = bool(
+                    self._unlock_action_id
+                    and self._unlock_action_id_cached_at > 0
+                    and unlock_started - self._unlock_action_id_cached_at
+                    < self._unlock_action_id_ttl_seconds
+                )
+                action_result = await self._unlock_resource_via_next_action(
+                    normalized_slug,
+                    resource_html,
+                    client,
+                )
+                timing_ms["unlock_action_ms"] = round((monotonic() - unlock_started) * 1000, 1)
+                timing_ms["action_id_cache_hit"] = float(action_id_cache_hit)
+
+                action_share_link, action_access_code, already_owned = (
+                    self._extract_share_link_from_action_data(action_result)
+                )
+                access_code = action_access_code or str(meta.get("access_code") or "").strip()
+                share_link = action_share_link or self._sanitize_share_url(
+                    str(meta.get("full_url") or "")
+                )
+                if not share_link:
+                    share_link, fallback_access_code = self._resolve_share_link_from_meta(
+                        meta,
+                        html=resource_html,
+                    )
+                    if not access_code:
+                        access_code = fallback_access_code
+
+                if not share_link and bool(meta.get("locked")):
+                    refresh_started = monotonic()
+                    refreshed_html = await self._fetch_text_with_retry_using_client(
+                        client,
+                        page_path,
+                        max_retries=1,
+                    )
+                    timing_ms["refresh_html_ms"] = round((monotonic() - refresh_started) * 1000, 1)
+                    meta = self._extract_resource_meta(refreshed_html)
+                    share_link, fallback_access_code = self._resolve_share_link_from_meta(
+                        meta,
+                        html=refreshed_html,
+                    )
+                    if not access_code:
+                        access_code = fallback_access_code
+
+                action_message = str(action_result.get("message") or "").strip()
+                action_message_lower = action_message.lower()
+                success = bool(share_link) or (
+                    bool(access_code)
+                    and (
+                        bool(action_result.get("success"))
+                        or already_owned
+                        or "已解锁" in action_message
+                        or "unlocked" in action_message_lower
+                    )
+                )
+
+                timing_ms["total_ms"] = round((monotonic() - total_started) * 1000, 1)
+                result = self._compose_unlock_result(
+                    success=success,
+                    share_link=share_link,
+                    access_code=access_code,
+                    meta=meta,
+                    action_result=action_result,
+                    already_owned=already_owned,
+                    timing_ms=timing_ms,
+                )
+                if success:
+                    self._unlock_cache[normalized_slug] = (monotonic(), result)
+                return result
+            finally:
+                await client.aclose()
 
     async def get_pan115_by_keyword(self, keyword: str, media_type: str = "movie") -> list[dict[str, Any]]:
         normalized_keyword = str(keyword or "").strip()
@@ -1247,7 +1585,7 @@ class HDHiveWebClient:
         target_media_type = self._normalize_media_type(media_type)
         search_path = f"/{target_media_type}?keyword={quote_plus(normalized_keyword)}"
         try:
-            search_html = await self._fetch_text(search_path)
+            search_html = await self._fetch_text_with_retry(search_path)
             candidates = self._search_media_candidates(search_html, normalized_keyword, target_media_type)
         except Exception:
             candidates = []

@@ -1,20 +1,28 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime
+import json
+import logging
+from datetime import date, datetime, timedelta
 from typing import Any
+
+from sqlalchemy import select
 
 from app.services.emby_service import emby_service
 from app.services.tmdb_service import tmdb_service
 
 from app.core.timezone_utils import beijing_now
 
+logger = logging.getLogger(__name__)
+
 
 class TvMissingService:
     def __init__(self) -> None:
         self._cache_ttl_seconds = 300
+        self._db_cache_ttl_seconds = 24 * 3600
         self._status_cache: dict[str, dict[str, Any]] = {}
         self._cache_lock = asyncio.Lock()
+        self._latest_sync_at_cache: datetime | None = None
 
     async def get_tv_missing_status(
         self,
@@ -171,12 +179,18 @@ class TvMissingService:
         refresh: bool = False,
         concurrency: int = 12,
         options_by_tmdb: dict[int, dict[str, Any]] | None = None,
+        subscription_id_by_tmdb: dict[int, int] | None = None,
     ) -> dict[int, dict[str, Any]]:
         """批量计算剧集缺集状态，避免订阅列表逐条查询媒体库。"""
         normalized_ids = [int(item or 0) for item in tmdb_ids]
         unique_ids = list(dict.fromkeys(item for item in normalized_ids if item > 0))
         output: dict[int, dict[str, Any]] = {}
         pending_ids: list[int] = []
+        subscription_map = {
+            int(tmdb_id): int(subscription_id)
+            for tmdb_id, subscription_id in (subscription_id_by_tmdb or {}).items()
+            if int(tmdb_id or 0) > 0 and int(subscription_id or 0) > 0
+        }
 
         for tmdb_id in unique_ids:
             per_sub_opts = dict((options_by_tmdb or {}).get(tmdb_id) or {})
@@ -189,6 +203,13 @@ class TvMissingService:
                 if cached is not None:
                     output[tmdb_id] = cached
                     continue
+                subscription_id = subscription_map.get(tmdb_id)
+                if subscription_id is not None:
+                    db_cached = await self._get_db_cached_status(subscription_id)
+                    if db_cached is not None:
+                        output[tmdb_id] = db_cached
+                        await self._set_cached_status(cache_key, db_cached)
+                        continue
             pending_ids.append(tmdb_id)
 
         if not pending_ids:
@@ -209,6 +230,9 @@ class TvMissingService:
                     "counts": {"aired": 0, "existing": 0, "missing": 0},
                 }
                 output[tmdb_id] = result
+                subscription_id = subscription_map.get(tmdb_id)
+                if subscription_id is not None:
+                    await self._persist_db_cached_status(subscription_id, result)
             return output
 
         semaphore = asyncio.Semaphore(max(1, int(concurrency or 1)))
@@ -290,8 +314,80 @@ class TvMissingService:
                 per_sub_opts["include_specials"] = include_specials
             options = self._normalize_status_options(**per_sub_opts)
             await self._set_cached_status(self._build_cache_key(tmdb_id, **options), result)
+            subscription_id = subscription_map.get(tmdb_id)
+            if subscription_id is not None:
+                await self._persist_db_cached_status(subscription_id, result)
 
         return output
+
+    async def precompute_all_active_tv_missing_cache(self) -> None:
+        """媒体库同步完成后后台预计算所有活跃电视剧订阅的缺集缓存。"""
+        from sqlalchemy import or_
+
+        from app.core.database import async_session_maker
+        from app.models.models import DownloadRecord, MediaStatus, MediaType, Subscription
+
+        try:
+            async with async_session_maker() as db:
+                has_successful_transfer = (
+                    select(DownloadRecord.id)
+                    .where(
+                        DownloadRecord.subscription_id == Subscription.id,
+                        or_(
+                            DownloadRecord.completed_at.is_not(None),
+                            DownloadRecord.status.in_(
+                                (MediaStatus.COMPLETED, MediaStatus.OFFLINE_COMPLETED)
+                            ),
+                        ),
+                    )
+                    .exists()
+                )
+                result = await db.execute(
+                    select(Subscription).where(
+                        Subscription.media_type == MediaType.TV,
+                        Subscription.is_active == True,  # noqa: E712
+                        ~has_successful_transfer,
+                    )
+                )
+                rows = result.scalars().all()
+                if not rows:
+                    return
+
+                tmdb_ids = [int(sub.tmdb_id) for sub in rows if sub.tmdb_id is not None]
+                if not tmdb_ids:
+                    return
+
+                subscription_id_by_tmdb = {
+                    int(sub.tmdb_id): int(sub.id)
+                    for sub in rows
+                    if sub.tmdb_id is not None
+                }
+                options_by_tmdb = {
+                    int(sub.tmdb_id): {
+                        "include_specials": bool(sub.tv_include_specials),
+                        "season_number": sub.tv_season_number
+                        if sub.tv_scope in {"season", "episode_range"}
+                        else None,
+                        "episode_start": sub.tv_episode_start
+                        if sub.tv_scope == "episode_range"
+                        else None,
+                        "episode_end": sub.tv_episode_end
+                        if sub.tv_scope == "episode_range"
+                        else None,
+                        "aired_only": sub.tv_follow_mode == "new",
+                    }
+                    for sub in rows
+                    if sub.tmdb_id is not None
+                }
+                await self.get_tv_missing_statuses(
+                    tmdb_ids,
+                    include_specials=False,
+                    refresh=True,
+                    options_by_tmdb=options_by_tmdb,
+                    subscription_id_by_tmdb=subscription_id_by_tmdb,
+                )
+        except Exception:
+            logger.exception("后台预计算电视剧缺集缓存失败")
 
     async def _collect_indexed_existing_pairs(
         self, tmdb_ids: list[int]
@@ -350,6 +446,127 @@ class TvMissingService:
     def clear_cache(self) -> None:
         self._status_cache.clear()
 
+    async def _get_latest_media_sync_at(self) -> datetime | None:
+        from app.core.database import async_session_maker
+        from app.models.emby_sync_index import EmbySyncState
+        from app.models.feiniu_sync_index import FeiniuSyncState
+        from app.services.runtime_settings_service import runtime_settings_service
+
+        latest: datetime | None = None
+        async with async_session_maker() as db:
+            emby_state = (
+                await db.execute(select(EmbySyncState).where(EmbySyncState.id == 1))
+            ).scalar_one_or_none()
+            if emby_state and emby_state.last_successful_sync_at is not None:
+                latest = emby_state.last_successful_sync_at
+
+            if runtime_settings_service.get_feiniu_url().strip():
+                feiniu_state = (
+                    await db.execute(
+                        select(FeiniuSyncState).where(FeiniuSyncState.id == 1)
+                    )
+                ).scalar_one_or_none()
+                if feiniu_state and feiniu_state.last_successful_sync_at is not None:
+                    if latest is None or feiniu_state.last_successful_sync_at > latest:
+                        latest = feiniu_state.last_successful_sync_at
+        return latest
+
+    def _is_db_cache_valid(self, computed_at: datetime | None) -> bool:
+        if computed_at is None:
+            return False
+        now = beijing_now()
+        if now - computed_at <= timedelta(seconds=self._db_cache_ttl_seconds):
+            return True
+        latest_sync_at = getattr(self, "_latest_sync_at_cache", None)
+        if latest_sync_at is None:
+            return False
+        return computed_at >= latest_sync_at
+
+    async def _ensure_latest_sync_at_cache(self) -> None:
+        self._latest_sync_at_cache = await self._get_latest_media_sync_at()
+
+    @staticmethod
+    def _db_cache_row_to_status(row: Any) -> dict[str, Any]:
+        missing_by_season: dict[str, list[int]] = {}
+        raw_missing = row.missing_by_season
+        if raw_missing:
+            try:
+                parsed = json.loads(raw_missing)
+                if isinstance(parsed, dict):
+                    missing_by_season = parsed
+            except Exception:
+                missing_by_season = {}
+        total_count = int(row.total_count or 0)
+        existing_count = int(row.existing_count or 0)
+        missing_count = int(row.missing_count or 0)
+        return {
+            "status": str(row.status or "unknown"),
+            "message": str(row.message or ""),
+            "aired_episodes": [],
+            "existing_episodes": [],
+            "missing_episodes": [],
+            "missing_by_season": missing_by_season,
+            "counts": {
+                "total": total_count,
+                "aired": total_count,
+                "existing": existing_count,
+                "missing": missing_count,
+            },
+        }
+
+    async def _get_db_cached_status(self, subscription_id: int) -> dict[str, Any] | None:
+        from app.core.database import async_session_maker
+        from app.models.models import SubscriptionTvMissingCache
+
+        await self._ensure_latest_sync_at_cache()
+        async with async_session_maker() as db:
+            row = (
+                await db.execute(
+                    select(SubscriptionTvMissingCache).where(
+                        SubscriptionTvMissingCache.subscription_id == int(subscription_id)
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None or not self._is_db_cache_valid(row.computed_at):
+                return None
+            return self._db_cache_row_to_status(row)
+
+    async def _persist_db_cached_status(
+        self, subscription_id: int, payload: dict[str, Any]
+    ) -> None:
+        from app.core.database import async_session_maker
+        from app.models.models import SubscriptionTvMissingCache
+
+        counts = payload.get("counts") if isinstance(payload.get("counts"), dict) else {}
+        total_count = int(counts.get("total") or counts.get("aired") or 0)
+        existing_count = int(counts.get("existing") or 0)
+        missing_count = int(counts.get("missing") or 0)
+        missing_by_season = payload.get("missing_by_season") or {}
+        try:
+            missing_by_season_json = json.dumps(missing_by_season, ensure_ascii=False)
+        except Exception:
+            missing_by_season_json = "{}"
+
+        async with async_session_maker() as db:
+            row = (
+                await db.execute(
+                    select(SubscriptionTvMissingCache).where(
+                        SubscriptionTvMissingCache.subscription_id == int(subscription_id)
+                    )
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                row = SubscriptionTvMissingCache(subscription_id=int(subscription_id))
+                db.add(row)
+            row.status = str(payload.get("status") or "unknown")
+            row.total_count = total_count
+            row.existing_count = existing_count
+            row.missing_count = missing_count
+            row.missing_by_season = missing_by_season_json
+            row.message = str(payload.get("message") or "")
+            row.computed_at = beijing_now()
+            await db.commit()
+
     async def _collect_tmdb_episode_pairs(
         self,
         tmdb_id: int,
@@ -359,7 +576,7 @@ class TvMissingService:
         episode_end: int | None = None,
         aired_only: bool = False,
     ) -> set[tuple[int, int]]:
-        detail = await tmdb_service.get_tv_detail(tmdb_id)
+        detail = await tmdb_service.get_tv_episode_counts(tmdb_id)
         seasons = detail.get("seasons") if isinstance(detail, dict) else []
         if not isinstance(seasons, list):
             seasons = []

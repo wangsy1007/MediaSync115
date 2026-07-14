@@ -1738,6 +1738,15 @@ class SubscriptionService:
                     },
                 }
             )
+            if not primary_resources:
+                for attempt in source_attempts:
+                    if (
+                        attempt.get("status") == "success"
+                        and int(attempt.get("count") or 0) > 0
+                    ):
+                        attempt["status"] = "empty"
+                        attempt["count"] = 0
+                        attempt["error"] = "资源经画质/归属校验后均不可用"
 
         return (
             primary_resources,
@@ -1795,7 +1804,7 @@ class SubscriptionService:
 
     def _resolve_source_order(self, channel: str) -> list[str]:
         _ = channel
-        priority = runtime_settings_service.get_subscription_resource_priority()
+        priority = runtime_settings_service.get_active_subscription_resource_priority()
         source_order = [item for item in priority if item in {"hdhive", "pansou", "tg"}]
         tg_ready = bool(
             runtime_settings_service.get_tg_api_id().strip()
@@ -1934,7 +1943,8 @@ class SubscriptionService:
                 )
 
         keyword = self._build_hdhive_keyword(sub)
-        if not keyword:
+        keyword_candidates = self._build_hdhive_keyword_candidates(sub)
+        if not keyword_candidates:
             traces.append(
                 {
                     "step": "fetch_hdhive_keyword_skip",
@@ -1944,27 +1954,34 @@ class SubscriptionService:
             )
             return [], traces
 
-        traces.append(
-            {
-                "step": "fetch_hdhive_keyword_start",
-                "status": "info",
-                "message": "开始通过关键词调用 HDHive",
-                "payload": {"keyword": keyword},
-            }
-        )
         media_type = "tv" if sub.media_type == MediaType.TV else "movie"
-        keyword_resources = await hdhive_service.get_pan115_by_keyword(
-            keyword, media_type=media_type
-        )
-        keyword_resources = self._normalize_hdhive_subscription_items(keyword_resources)
-        if runtime_settings_service.get_subscription_hdhive_prefer_free():
-            keyword_resources = hdhive_service.sort_free_first(keyword_resources)
+        keyword_resources: list[dict[str, Any]] = []
+        for candidate in keyword_candidates:
+            traces.append(
+                {
+                    "step": "fetch_hdhive_keyword_start",
+                    "status": "info",
+                    "message": "开始通过关键词调用 HDHive",
+                    "payload": {"keyword": candidate},
+                }
+            )
+            rows = await hdhive_service.get_pan115_by_keyword(
+                candidate, media_type=media_type
+            )
+            rows = self._normalize_hdhive_subscription_items(rows)
+            if runtime_settings_service.get_subscription_hdhive_prefer_free():
+                rows = hdhive_service.sort_free_first(rows)
+            if rows:
+                keyword_resources = rows
+                keyword = candidate
+                break
+
         traces.append(
             {
                 "step": "fetch_hdhive_keyword_done",
                 "status": "success" if keyword_resources else "warning",
                 "message": f"HDHive(关键词) 返回 {len(keyword_resources)} 条候选资源",
-                "payload": {"count": len(keyword_resources)},
+                "payload": {"count": len(keyword_resources), "keyword": keyword},
             }
         )
         return keyword_resources, traces
@@ -3312,6 +3329,7 @@ class SubscriptionService:
                         parent_id=parent_folder_id,
                         receive_code=receive_code,
                         quality_filter=quality_filter,
+                        media_type="movie",
                     )
                     record.status = MediaStatus.COMPLETED
                     record.completed_at = beijing_now()
@@ -3845,6 +3863,25 @@ class SubscriptionService:
         except Exception:
             return True  # 异常时放行兜底
 
+    @staticmethod
+    def _is_obvious_collection_resource(label: str) -> bool:
+        text = str(label or "").strip()
+        if not text:
+            return False
+        lowered = text.casefold()
+        if re.search(r"\d{4}\s*[-~至到]\s*\d{4}", text):
+            return True
+        if any(token in lowered for token in ("合集", "全集", "系列", "boxset", "collection")):
+            return True
+        size_match = re.search(r"(\d+(?:\.\d+)?)\s*gb", lowered)
+        if size_match:
+            try:
+                if float(size_match.group(1)) >= 200:
+                    return True
+            except Exception:
+                pass
+        return False
+
     async def _is_resource_relevant_for_subscription(
         self,
         sub: "SubscriptionSnapshot",
@@ -3862,6 +3899,16 @@ class SubscriptionService:
                 or item.get("matched_media_title")
                 or ""
             ).strip()
+            source_tmdb_id = item.get("hdhive_source_tmdb_id")
+            if (
+                source_tmdb_id is not None
+                and sub.tmdb_id is not None
+                and int(source_tmdb_id) == int(sub.tmdb_id)
+            ):
+                if self._is_obvious_collection_resource(label):
+                    return False
+                if overview or not self._resource_has_identifiable_title(label):
+                    return True
 
         embedded_tmdb_id = self._extract_tmdb_id_from_resource_text(label)
         if embedded_tmdb_id is not None and sub.tmdb_id is not None:
@@ -3957,10 +4004,41 @@ class SubscriptionService:
         return kept
 
     @staticmethod
-    def _build_hdhive_keyword(sub: "SubscriptionSnapshot") -> str:
+    def _build_hdhive_keyword_candidates(sub: "SubscriptionSnapshot") -> list[str]:
+        title = str(sub.title or "").strip()
+        if not title:
+            return []
+
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def _add(value: str) -> None:
+            text = str(value or "").strip()
+            if not text:
+                return
+            key = text.casefold()
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append(text)
+
+        _add(title)
         if sub.year:
-            return f"{sub.title} {sub.year}".strip()
-        return str(sub.title or "").strip()
+            _add(f"{title} {sub.year}".strip())
+        for sep in ("：", ":"):
+            if sep not in title:
+                continue
+            main, _, rest = title.partition(sep)
+            _add(main.strip())
+            _add(rest.strip())
+            _add(main.strip().replace(sep, " "))
+            _add(rest.strip().replace(sep, " "))
+        return candidates
+
+    @staticmethod
+    def _build_hdhive_keyword(sub: "SubscriptionSnapshot") -> str:
+        candidates = SubscriptionService._build_hdhive_keyword_candidates(sub)
+        return candidates[0] if candidates else ""
 
     @staticmethod
     def _build_tg_keyword(sub: "SubscriptionSnapshot") -> str:

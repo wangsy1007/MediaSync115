@@ -37,6 +37,13 @@ VIDEO_EXTENSIONS = {
     ".webm",
     ".m4v",
     ".ts",
+    ".m2ts",
+    ".mpg",
+    ".mpeg",
+    ".vob",
+    ".iso",
+    ".rmvb",
+    ".rm",
 }
 
 SUBTITLE_EXTENSIONS = {
@@ -51,17 +58,58 @@ SUBTITLE_EXTENSIONS = {
 
 ARCHIVE_EXTENSIONS = VIDEO_EXTENSIONS | SUBTITLE_EXTENSIONS
 
-IGNORE_PATTERNS = (
-    r"\b(?:2160p|1080p|720p|480p|4k|8k)\b",
-    r"\b(?:bluray|bdrip|brrip|webrip|web-dl|webdl|hdtv|dvdrip|remux)\b",
-    r"\b(?:x264|x265|h264|h265|hevc|av1|aac|dts|atmos|ac3|ddp5?\.1?)\b",
-    r"\b(?:hdr|dv|dolby\s?vision|imax|repack|proper|extended|uncut)\b",
-    r"\b(?:yyets|rarbg|nhd|mteam|mteampt|btbtt|wiki)\b",
+# 分辨率 / 片源 / 编码等技术标记（用于切标题终点与清洗）
+_TECH_TOKEN = (
+    r"(?:"
+    r"2160p|1080p|720p|480p|576p|360p|"
+    r"4k(?:[\s._-]?uhd)?|8k|uhd|fhd|"
+    r"web[\s._-]?dl|webrip|webdl|"
+    r"blu[\s._-]?ray|bluray|bdremux|bdrip|brrip|hddvd|hdtv|hdrip|dvdrip|dvdscr|remux|pdtv|sdtv|hdcam|cam|ts|tc|"
+    r"x264|x265|h\.?264|h\.?265|hevc|avc|av1|xvid|divx|"
+    r"hdr10\+?|hdr|sdr|hlg|dolby[\s._-]?vision|\bdv\b|"
+    r"atmos|truehd|dts(?:[\s._-]?hd)?(?:[\s._-]?ma)?|dd[p+]?(?:[\s._-]?[57]\.1)?|ac3|eac3|aac|flac|lpcm|opus|"
+    r"10[\s._-]?bit|8[\s._-]?bit|12[\s._-]?bit|"
+    r"imax|repack|proper|extended|uncut|remaster(?:ed)?|criterion|"
+    r"directors?[\s._-]?cut|theatrical|hybrid|"
+    r"nf|amzn|dsnp|atvp|hmax|hulu|itunes|\bit\b|"
+    r"ma[\s._-]?10|main10"
+    r")"
 )
+
+# 中文资源站常见噪音词（粘在片名后）
+_ZH_NOISE_TOKEN = (
+    r"(?:"
+    r"杜比视界|杜比全景声|内封|外挂|特效|字幕|简中|简英|繁中|繁英|"
+    r"双语|国语|粤语|中字|英字|中英|精修|高码|原盘|特效字幕|"
+    r"中文字幕|英文字幕|简体|繁体"
+    r")"
+)
+
+# 匹配技术标记：英文词边界，或紧贴在中日韩文字后（如 火遮眼4K）
+TECH_CUT_RE = re.compile(
+    rf"(?i)(?:(?<=[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af])|(?<![A-Za-z0-9])){_TECH_TOKEN}"
+)
+ZH_NOISE_CUT_RE = re.compile(
+    rf"(?:(?<=[\u3400-\u9fff])|(?<=[^A-Za-z0-9\u3400-\u9fff])|^){_ZH_NOISE_TOKEN}"
+)
+
+IGNORE_PATTERNS = (
+    rf"(?i)(?<![A-Za-z0-9]){_TECH_TOKEN}(?![A-Za-z0-9])",
+    rf"(?i)(?<=[\u3400-\u9fff]){_TECH_TOKEN}",
+    rf"{_ZH_NOISE_TOKEN}",
+    r"(?i)\b(?:yyets|rarbg|nhd|mteam|mteampt|btbtt|wiki|chd|chdbits|frds|cmct|hds|wds|ade|dream|pter|hhweb|audiences|qun\d+|gnb|ourbits|usas|usa)\b",
+    r"(?i)\b(?:mp4|mkv|avi|ts|m2ts|iso)\b",
+    r"sup字幕|内封精修|特效sup",
+)
+
 EPISODE_PATTERNS = (
     re.compile(r"(?i)\bS(?P<season>\d{1,2})E(?P<episode>\d{1,3})\b"),
+    re.compile(r"(?i)\bSeason[\s._-]?(?P<season>\d{1,2})[\s._-]*E(?:p(?:isode)?)?[\s._-]?(?P<episode>\d{1,3})\b"),
     re.compile(r"(?i)\b(?P<season>\d{1,2})x(?P<episode>\d{1,3})\b"),
-    re.compile(r"(?i)\bEP?(?P<episode>\d{1,3})\b"),
+    re.compile(r"第(?P<season>\d{1,2})季[\s._-]*第(?P<episode>\d{1,3})[集话話]"),
+    re.compile(r"第(?P<episode>\d{1,3})[集话話]"),
+    re.compile(r"(?i)\bEP(?P<episode>\d{1,3})\b"),
+    re.compile(r"(?i)(?<![A-Z0-9])E(?P<episode>\d{2,3})(?![A-Z0-9])"),
 )
 MOVIE_REGION_MAP = {
     "CN": "华语电影",
@@ -1090,33 +1138,25 @@ class ArchiveService:
 
     async def identify_media(self, parsed: dict[str, Any]) -> dict[str, Any] | None:
         media_type = str(parsed.get("media_type") or "movie")
-        query_title = str(parsed.get("query_title") or "").strip()
-        if not query_title:
-            return None
         year_val = parsed.get("year")
         year = int(year_val) if str(year_val or "").isdigit() else None
-
-        result = await tmdb_service.search_by_media_type(
-            query=query_title,
-            media_type=media_type,
-            page=1,
-            year=year,
-        )
-        items = result.get("results") if isinstance(result.get("results"), list) else []
-        if not items and year is not None:
-            result = await tmdb_service.search_by_media_type(
-                query=query_title,
-                media_type=media_type,
-                page=1,
-                year=None,
-            )
-            items = (
-                result.get("results") if isinstance(result.get("results"), list) else []
-            )
-        if not items:
+        queries = self._build_title_query_candidates(parsed)
+        if not queries:
             return None
 
-        first = items[0]
+        first: dict[str, Any] | None = None
+        used_query = queries[0]
+        for query_title in queries:
+            items = await self._search_tmdb_items(
+                query=query_title, media_type=media_type, year=year
+            )
+            if items:
+                first = items[0] if isinstance(items[0], dict) else None
+                used_query = query_title
+                break
+        if not first:
+            return None
+
         tmdb_id = first.get("tmdb_id") or first.get("id")
         if not isinstance(tmdb_id, int):
             return None
@@ -1131,7 +1171,7 @@ class ArchiveService:
             or detail.get("name")
             or first.get("title")
             or first.get("name")
-            or query_title
+            or used_query
         ).strip()
         release_date = str(
             detail.get("release_date") or detail.get("first_air_date") or ""
@@ -1157,15 +1197,73 @@ class ArchiveService:
             "region_name": region_name,
         }
 
+    async def _search_tmdb_items(
+        self, *, query: str, media_type: str, year: int | None
+    ) -> list[Any]:
+        result = await tmdb_service.search_by_media_type(
+            query=query,
+            media_type=media_type,
+            page=1,
+            year=year,
+        )
+        items = result.get("results") if isinstance(result.get("results"), list) else []
+        if items:
+            return items
+        if year is None:
+            return []
+        result = await tmdb_service.search_by_media_type(
+            query=query,
+            media_type=media_type,
+            page=1,
+            year=None,
+        )
+        return result.get("results") if isinstance(result.get("results"), list) else []
+
     # ---------- 文件名解析 ----------
 
+    @classmethod
+    def _prepare_filename_stem(cls, name: str) -> str:
+        """规范化粘连文件名，便于提取片名/年份。"""
+        text = str(name or "").strip()
+        text = (
+            text.replace("&", ".")
+            .replace("·", ".")
+            .replace("—", "-")
+            .replace("–", "-")
+        )
+        # 115 网盘前缀与英文片名粘连：115Zootopia -> Zootopia
+        text = re.sub(r"^115(?=[A-Z])", "", text)
+        # 误写的粘连年份：.22025 / 22025 -> .2025
+        text = re.sub(r"([.\-_]|^)2(20\d{2})(?![0-9])", r"\1\2", text)
+        # 小写/数字与大写字母分界：22025Repack -> 22025.Repack
+        text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", ".", text)
+        # 字母与年份分界：Zootopia2025 -> Zootopia.2025
+        text = re.sub(r"(?<=[A-Za-z])(20\d{2})(?![0-9])", r".\1", text)
+        return text
+
+    @staticmethod
+    def _find_year_match(name: str) -> tuple[re.Match[str] | None, str | None]:
+        best: tuple[int, str, re.Match[str]] | None = None
+        for pattern in (
+            r"(?<![A-Za-z0-9])(19\d{2}|20\d{2})(?![A-Za-z0-9])",
+            r"[.\-_](20\d{2})(?![A-Za-z0-9])",
+            r"(?<=[A-Za-z])(20\d{2})(?![A-Za-z0-9])",
+        ):
+            for match in re.finditer(pattern, name):
+                year = match.group(1)
+                if best is None or match.start() < best[0]:
+                    best = (match.start(), year, match)
+        if best is None:
+            return None, None
+        return best[2], best[1]
+
     def parse_media_filename(self, filename: str) -> dict[str, Any]:
-        name = re.sub(r"\.[^.]+$", "", filename)
         ext_match = re.search(r"\.[^.]+$", filename)
         ext = ext_match.group(0) if ext_match else ""
+        name = filename[: -len(ext)] if ext else filename
+        name = self._prepare_filename_stem(name)
 
-        year_match = re.search(r"\b(19\d{2}|20\d{2})\b", name)
-        year = year_match.group(1) if year_match else None
+        year_match, year = self._find_year_match(name)
 
         media_type = "movie"
         season = None
@@ -1188,8 +1286,23 @@ class ArchiveService:
         if year_match and year_match.start() < title_end:
             title_end = year_match.start()
 
+        tech_match = TECH_CUT_RE.search(name)
+        if tech_match and tech_match.start() < title_end:
+            title_end = tech_match.start()
+
+        zh_noise_match = ZH_NOISE_CUT_RE.search(name)
+        if zh_noise_match and zh_noise_match.start() < title_end:
+            # 仅当噪音词出现在片名之后（前面已有有效文字）时才截断
+            prefix = name[: zh_noise_match.start()].strip(" ._-")
+            if prefix:
+                title_end = zh_noise_match.start()
+
         raw_title = name[:title_end] if title_end > 0 else name
-        query_title = self._normalize_title(raw_title) or self._normalize_title(name)
+        # 去掉片名前缀广告组 【xxx】 [xxx]
+        raw_title = re.sub(r"^[\s\[【（(]+[^\]】）)]*[\]】）)]\s*", "", raw_title)
+        query_title = self._normalize_title(raw_title)
+        if not query_title:
+            query_title = self._normalize_title(name)
 
         return {
             "source_filename": filename,
@@ -1199,7 +1312,84 @@ class ArchiveService:
             "year": year,
             "season": season,
             "episode": episode,
+            "raw_title": raw_title.strip(" ._-"),
         }
+
+    @classmethod
+    def _build_title_query_candidates(cls, parsed: dict[str, Any]) -> list[str]:
+        """生成多个 TMDB 查询候选，提高脏文件名命中率。"""
+        candidates: list[str] = []
+
+        def _add(value: str | None) -> None:
+            text = cls._normalize_title(str(value or ""))
+            if len(text) < 2:
+                return
+            if text not in candidates:
+                candidates.append(text)
+
+        _add(parsed.get("query_title"))
+        _add(parsed.get("raw_title"))
+
+        source = str(parsed.get("source_filename") or "")
+        stem = cls._prepare_filename_stem(re.sub(r"\.[^.]+$", "", source))
+        cut = len(stem)
+        for pattern in EPISODE_PATTERNS:
+            match = pattern.search(stem)
+            if match:
+                cut = min(cut, match.start())
+                break
+        year_match, _year = cls._find_year_match(stem)
+        if year_match:
+            cut = min(cut, year_match.start())
+        tech_match = TECH_CUT_RE.search(stem)
+        if tech_match:
+            cut = min(cut, tech_match.start())
+        zh_noise_match = ZH_NOISE_CUT_RE.search(stem)
+        if zh_noise_match and stem[: zh_noise_match.start()].strip(" ._-"):
+            cut = min(cut, zh_noise_match.start())
+
+        head = stem[:cut]
+        _add(head)
+
+        # 连续中日韩文字块（常见：火遮眼4K... -> 火遮眼）
+        for match in re.finditer(
+            r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]{2,}", head or stem
+        ):
+            _add(match.group(0))
+            break
+
+        # PascalCase 英文片名（115Zootopia... -> Zootopia）
+        for match in re.finditer(r"[A-Z][a-z]{2,}", head or stem):
+            _add(match.group(0))
+
+        # 英文片名：取技术标记前的单词（至少 2 个字母，避免 K/p 等碎片）
+        ascii_words = re.findall(r"[A-Za-z][A-Za-z'']+", head)
+        if ascii_words:
+            _add(" ".join(ascii_words[:8]))
+
+        # 过长查询逐步缩短
+        primary = candidates[0] if candidates else ""
+        if len(primary) > 24:
+            _add(primary[:24].rstrip())
+            parts = primary.split()
+            if len(parts) > 1:
+                _add(" ".join(parts[:2]))
+                _add(parts[0])
+
+        return candidates
+
+    @staticmethod
+    def _normalize_title(value: str) -> str:
+        text = str(value or "")
+        text = re.sub(r"[【\[][^】\]]*[】\]]", " ", text)
+        text = re.sub(r"[（(][^）)]*[）)]", " ", text)
+        text = text.replace("&", " ")
+        for pattern in IGNORE_PATTERNS:
+            text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+        text = text.replace(".", " ").replace("_", " ").replace("-", " ")
+        text = re.sub(r"[<>:\"/\\|?*]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip(" ._-")
+        return text
 
     # ---------- 任务 CRUD ----------
 
@@ -1380,17 +1570,6 @@ class ArchiveService:
         if idx < 0:
             return False
         return filename[idx:].lower() in SUBTITLE_EXTENSIONS
-
-    @staticmethod
-    def _normalize_title(value: str) -> str:
-        text = str(value or "")
-        text = re.sub(r"\[[^\]]*\]", " ", text)
-        text = re.sub(r"\([^)]*\)", " ", text)
-        for pattern in IGNORE_PATTERNS:
-            text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
-        text = text.replace(".", " ").replace("_", " ").replace("-", " ")
-        text = re.sub(r"\s+", " ", text).strip()
-        return text
 
     @staticmethod
     def _extract_genre_name(detail: dict[str, Any], media_type: str) -> str:

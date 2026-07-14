@@ -127,7 +127,12 @@ const EXPLORE_SPEED_MODE = resolveExploreSpeedMode()
 
 const route = useRoute()
 const router = useRouter()
-const normalizeExploreSource = (rawSource) => (String(rawSource || '').toLowerCase() === 'tmdb' ? 'tmdb' : 'douban')
+const normalizeExploreSource = (rawSource) => {
+  const source = String(rawSource || '').toLowerCase()
+  if (source === 'tmdb') return 'tmdb'
+  if (source === 'maoyan') return 'maoyan'
+  return 'douban'
+}
 const exploreSource = computed(() => normalizeExploreSource(route.params.source))
 
 const loading = ref(false)
@@ -500,6 +505,10 @@ const getPosterUrl = (path, options = {}) => {
     if (raw.includes('image.tmdb.org')) {
       return rewriteTmdbPosterSize(raw, compact)
     }
+    if (raw.includes('pipi.cn') || raw.includes('meituan.net')) {
+      const size = compact ? 'small' : 'medium'
+      return `/api/search/explore/poster?url=${encodeURIComponent(raw)}&size=${size}`
+    }
     return raw
   }
   if (raw.startsWith('/')) return rewriteTmdbPosterSize(`${TMDB_IMAGE_BASE}${raw}`, compact)
@@ -544,8 +553,10 @@ const resolveItemRoute = async (item) => {
     const payload = {
       source: exploreSource.value,
       id: item.id,
-      douban_id: item.douban_id || item.id,
+      douban_id: exploreSource.value === 'douban' ? (item.douban_id || item.id) : '',
+      maoyan_id: exploreSource.value === 'maoyan' ? (item.maoyan_id || item.id) : '',
       title: item.title || '',
+      original_title: item.original_title || '',
       year: item.year || '',
       media_type: directType,
       tmdb_id: exploreSource.value === 'tmdb' ? directTmdbId : null

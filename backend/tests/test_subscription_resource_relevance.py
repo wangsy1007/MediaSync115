@@ -124,3 +124,27 @@ class TestSubscriptionResourceRelevance:
       )
       assert excluded == 1
       assert len(kept) == 2
+
+  def test_accepts_hdhive_generic_label_with_matched_media_title(self) -> None:
+      sub = _movie_snapshot(title="十二生肖", tmdb_id=98567, year="2012")
+      context = {"title": "十二生肖", "original_title": "十二生肖", "year": "2012"}
+      item = {
+          "title": "1080P蓝光原盘[港版原盘 国粤双语 简繁中字][DTS-HDMA 7.1]",
+          "matched_media_title": "十二生肖",
+          "hdhive_source_tmdb_id": 98567,
+      }
+      assert subscription_service._is_resource_relevant_for_subscription(
+          sub, item, context
+      )
+
+  def test_rejects_hdhive_collection_pack_for_single_movie(self) -> None:
+      sub = _movie_snapshot(title="十二生肖", tmdb_id=98567, year="2012")
+      context = {"title": "十二生肖", "original_title": "十二生肖", "year": "2012"}
+      item = {
+          "title": "[成龙1992-2016蓝光原盘集2][878.70GB]12生肖 Chinese Zodiac 2012 .iso",
+          "matched_media_title": "十二生肖",
+          "hdhive_source_tmdb_id": 98567,
+      }
+      assert not subscription_service._is_resource_relevant_for_subscription(
+          sub, item, context
+      )

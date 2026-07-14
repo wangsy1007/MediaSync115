@@ -91,7 +91,12 @@ const handleLogin = async () => {
     const redirect = String(route.query.redirect || '/').trim() || '/'
     await router.replace(redirect)
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '登录失败')
+    const detail = error.response?.data?.detail
+    if (!error.response) {
+      ElMessage.error('登录请求失败，请检查网络后重试')
+    } else {
+      ElMessage.error(detail || '登录失败')
+    }
   } finally {
     loggingIn.value = false
   }

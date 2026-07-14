@@ -249,7 +249,13 @@ img {
 .el-dialog,
 .el-drawer,
 .el-notification,
-.el-message-box,
+.el-message-box {
+  background: var(--ms-bg-card) !important;
+  border: 1px solid var(--ms-border-color) !important;
+  box-shadow: none !important;
+  color: var(--ms-text-primary) !important;
+}
+
 .el-select-dropdown,
 .el-dropdown-menu,
 .el-popper {
@@ -261,6 +267,160 @@ img {
 
 .el-overlay {
   background-color: rgba(15, 23, 42, 0.45) !important;
+}
+
+.el-overlay-dialog {
+  min-height: 100%;
+  box-sizing: border-box;
+}
+
+.el-dialog.is-align-center {
+  margin: auto !important;
+}
+
+.is-message-box .el-overlay-message-box {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-height: 100%;
+  padding: 16px;
+  box-sizing: border-box;
+  text-align: initial;
+
+  &::after {
+    display: none !important;
+    content: none !important;
+  }
+}
+
+.is-message-box .el-message-box {
+  width: min(92vw, var(--el-messagebox-width, 420px)) !important;
+  max-width: min(92vw, var(--el-messagebox-width, 420px)) !important;
+  display: block !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+
+  .el-message-box__header {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-height: 48px;
+    padding: 16px 48px 12px 20px;
+    border-bottom: 1px solid var(--ms-border-color);
+  }
+
+  .el-message-box__title {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--ms-text-primary) !important;
+  }
+
+  .el-message-box__headerbtn {
+    position: absolute;
+    top: 50%;
+    right: 16px;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: var(--ms-radius-md);
+    background: transparent;
+    cursor: pointer;
+    transition: background-color var(--ms-transition-fast), color var(--ms-transition-fast);
+
+    &:hover {
+      background: var(--ms-bg-hover);
+    }
+
+    .el-message-box__close {
+      color: var(--ms-text-muted);
+    }
+
+    &:hover .el-message-box__close {
+      color: var(--ms-text-primary);
+    }
+  }
+
+  .el-message-box__content {
+    padding: 16px 20px;
+    color: var(--ms-text-secondary) !important;
+  }
+
+  .el-message-box__container {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .el-message-box__status {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    margin: 2px 0 0;
+    font-size: 22px;
+    line-height: 1;
+  }
+
+  .el-message-box__message {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--ms-text-secondary) !important;
+    word-break: break-word;
+
+    p {
+      margin: 0;
+      line-height: inherit;
+    }
+  }
+
+  .el-message-box__input {
+    width: 100%;
+    padding-top: 12px;
+  }
+
+  .el-message-box__btns {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 20px 16px;
+    border-top: 1px solid var(--ms-border-color);
+
+    .el-button + .el-button {
+      margin-left: 0;
+    }
+  }
+
+  &.el-message-box--center {
+    .el-message-box__header,
+    .el-message-box__content,
+    .el-message-box__btns {
+      text-align: center;
+    }
+
+    .el-message-box__container {
+      justify-content: center;
+    }
+
+    .el-message-box__btns {
+      justify-content: center;
+    }
+  }
 }
 
 [data-theme='light'] .el-overlay {
@@ -288,7 +448,6 @@ img {
 
 [data-theme='dark'] .el-dialog__header,
 [data-theme='dark'] .el-drawer__header,
-[data-theme='dark'] .el-message-box__header,
 [data-theme='dark'] .el-card__header,
 [data-theme='dark'] .el-popconfirm__main,
 [data-theme='dark'] .el-picker-panel__footer {
@@ -296,14 +455,12 @@ img {
 }
 
 [data-theme='dark'] .el-dialog__footer,
-[data-theme='dark'] .el-message-box__btns,
 [data-theme='dark'] .el-drawer__footer {
   border-top: 1px solid var(--ms-border-color);
 }
 
 [data-theme='dark'] .el-dialog__title,
 [data-theme='dark'] .el-drawer__title,
-[data-theme='dark'] .el-message-box__title,
 [data-theme='dark'] .el-message__content,
 [data-theme='dark'] .el-notification__title,
 [data-theme='dark'] .el-popconfirm__main,
@@ -546,8 +703,8 @@ img {
   }
 
   .el-dialog {
-    width: min(92vw, 720px) !important;
-    margin-top: 6vh !important;
+    width: min(92vw, var(--el-dialog-width, 720px)) !important;
+    max-width: 92vw;
   }
 
   .el-drawer {
@@ -581,8 +738,8 @@ img {
     gap: 6px;
   }
 
-  .el-message-box,
   .el-dialog {
-    width: min(94vw, 560px) !important;
+    width: min(94vw, var(--el-dialog-width, 560px)) !important;
+    max-width: 94vw;
   }
 }

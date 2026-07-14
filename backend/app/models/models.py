@@ -77,6 +77,32 @@ class Subscription(Base):
     downloads: Mapped[list["DownloadRecord"]] = relationship(
         "DownloadRecord", back_populates="subscription"
     )
+    tv_missing_cache: Mapped["SubscriptionTvMissingCache | None"] = relationship(
+        "SubscriptionTvMissingCache",
+        back_populates="subscription",
+        uselist=False,
+    )
+
+
+class SubscriptionTvMissingCache(Base):
+    """电视剧订阅缺集状态持久化缓存。"""
+
+    __tablename__ = "subscription_tv_missing_cache"
+
+    subscription_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("subscriptions.id"), primary_key=True
+    )
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="unknown")
+    total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    existing_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    missing_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    missing_by_season: Mapped[str | None] = mapped_column(Text, nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now)
+
+    subscription: Mapped["Subscription"] = relationship(
+        "Subscription", back_populates="tv_missing_cache"
+    )
 
 
 class DownloadRecord(Base):

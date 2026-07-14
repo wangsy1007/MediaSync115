@@ -1,4 +1,5 @@
 from app.models.strm_index import StrmFileIndex
+from app.services.runtime_settings_service import runtime_settings_service
 from app.services.strm_service import StrmService
 
 
@@ -89,3 +90,50 @@ def test_scope_normalization_deduplicates_and_rejects_empty_entries() -> None:
     assert scopes == [
         {"fid": "1", "target_cid": "2", "relative_prefix": "Movies/Test"}
     ]
+
+
+def test_scope_normalization_accepts_archive_source_fid_alias() -> None:
+    assert StrmService._normalize_scopes(
+        [{"source_fid": "1", "target_cid": "2", "relative_prefix": "TV/Test"}]
+    ) == [{"fid": "1", "target_cid": "2", "relative_prefix": "TV/Test"}]
+
+
+def test_manifest_rejects_wrong_owner_and_unsafe_paths(tmp_path) -> None:
+    manifest = tmp_path / ".mediasync115-strm-manifest.json"
+    manifest.write_text(
+        '{"output_cid":"other","generated_files":["safe.strm","../escape.strm"]}',
+        encoding="utf-8",
+    )
+    assert StrmService._load_manifest_files(
+        manifest, expected_output_cid="current"
+    ) == set()
+
+    manifest.write_text(
+        '{"output_cid":"current","generated_files":["safe.strm","../escape.strm"]}',
+        encoding="utf-8",
+    )
+    assert StrmService._load_manifest_files(
+        manifest, expected_output_cid="current"
+    ) == {"safe.strm"}
+
+
+def test_config_fingerprint_changes_with_output_dir(monkeypatch) -> None:
+    service = StrmService()
+    monkeypatch.setattr(
+        runtime_settings_service, "get_strm_base_url", lambda: "http://localhost:9008"
+    )
+    monkeypatch.setattr(
+        runtime_settings_service, "get_strm_proxy_enabled", lambda: False
+    )
+    monkeypatch.setattr(
+        runtime_settings_service, "get_strm_proxy_port", lambda: 8099
+    )
+    monkeypatch.setattr(service, "_get_token_secret", lambda: "secret")
+    monkeypatch.setattr(
+        runtime_settings_service, "get_strm_output_dir", lambda: "/tmp/strm-a"
+    )
+    first = service._config_fingerprint()
+    monkeypatch.setattr(
+        runtime_settings_service, "get_strm_output_dir", lambda: "/tmp/strm-b"
+    )
+    assert service._config_fingerprint() != first

@@ -9,6 +9,7 @@ import logging
 import mimetypes
 import os
 import socket
+import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -22,6 +23,7 @@ from app.models.strm_index import StrmFileIndex, StrmFolderIndex, StrmSyncState
 from app.services.emby_service import emby_service
 from app.services.feiniu_service import feiniu_service
 from app.services.operation_log_service import operation_log_service
+from app.services.playback_log_service import playback_log_service
 from app.services.pan115_service import Pan115Service, pan115_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.utils.proxy import proxy_manager
@@ -40,8 +42,17 @@ VIDEO_EXTENSIONS = {
     ".webm",
     ".m4v",
     ".ts",
+    ".m2ts",
+    ".mpg",
+    ".mpeg",
+    ".vob",
+    ".iso",
+    ".rmvb",
+    ".rm",
 }
 MANIFEST_FILENAME = ".mediasync115-strm-manifest.json"
+DOWNLOAD_URL_CACHE_DEFAULT_TTL_SECONDS = 1800.0
+DOWNLOAD_URL_CACHE_MAX_ITEMS = 512
 
 
 class StrmService:
@@ -49,12 +60,15 @@ class StrmService:
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
+        self._download_url_cache_lock = asyncio.Lock()
+        self._download_url_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._generate_task: asyncio.Task[dict[str, Any]] | None = None
         self._last_generate_started_at: str = ""
         self._last_generate_finished_at: str = ""
         self._last_generate_error: str = ""
         self._last_generate_summary: dict[str, Any] | None = None
         self._last_generate_trigger: str = ""
+        self._current_mode: str = ""
         self._pending_mode: str | None = None
         self._pending_scopes: list[dict[str, str]] = []
         self._pending_unscoped = False
@@ -73,11 +87,56 @@ class StrmService:
             "last_generate_error": self._last_generate_error,
             "last_generate_summary": self._last_generate_summary,
             "last_generate_trigger": self._last_generate_trigger,
+            "current_mode": self._current_mode,
             "queued": bool(self._pending_mode),
             "queued_mode": self._pending_mode or "",
             "queued_scope_count": len(self._pending_scopes),
             "index_stats": dict(self._index_stats),
+            "last_incremental_at": str(
+                self._index_stats.get("last_incremental_at") or ""
+            ),
+            "last_full_at": str(self._index_stats.get("last_full_at") or ""),
         }
+
+    async def get_runtime_status_async(self) -> dict[str, Any]:
+        """合并进程内任务状态与持久化索引状态。"""
+        status = self.get_runtime_status()
+        output_cid = runtime_settings_service.get_archive_output_cid()
+        if not output_cid:
+            return status
+        try:
+            await ensure_tables_exist(
+                "strm_file_index", "strm_folder_index", "strm_sync_state"
+            )
+            async with async_session_maker() as session:
+                state = await session.get(StrmSyncState, output_cid)
+                if state is None:
+                    return status
+                index_stats = {
+                    "output_cid": output_cid,
+                    "output_dir": state.output_dir,
+                    "file_count": state.file_count,
+                    "folder_count": state.folder_count,
+                    "last_mode": state.last_mode,
+                    "last_status": state.last_status,
+                    "last_incremental_at": (
+                        state.last_incremental_at.isoformat()
+                        if state.last_incremental_at
+                        else ""
+                    ),
+                    "last_full_at": (
+                        state.last_full_at.isoformat() if state.last_full_at else ""
+                    ),
+                }
+                self._index_stats = index_stats
+                status["index_stats"] = index_stats
+                status["last_incremental_at"] = index_stats["last_incremental_at"]
+                status["last_full_at"] = index_stats["last_full_at"]
+                if not status["last_generate_error"] and state.last_error:
+                    status["last_generate_error"] = state.last_error
+        except Exception:
+            logger.warning("读取 STRM 持久化状态失败", exc_info=True)
+        return status
 
     @staticmethod
     def detect_mount_paths() -> list[dict[str, str]]:
@@ -124,7 +183,7 @@ class StrmService:
         except Exception:
             return "127.0.0.1"
 
-    def build_play_url(self, pick_code: str) -> str:
+    def build_play_url(self, pick_code: str, filename: str = "") -> str:
         base_url = runtime_settings_service.get_strm_base_url()
         if not base_url:
             raise ValueError("STRM 播放地址未配置")
@@ -134,7 +193,11 @@ class StrmService:
             from urllib.parse import urlparse
             parsed = urlparse(base_url)
             base_url = f"{parsed.scheme}://{parsed.hostname}:{proxy_port}"
-        token = self._encode_token({"pc": str(pick_code or "").strip()})
+        payload: dict[str, str] = {"pc": str(pick_code or "").strip()}
+        source_name = str(filename or "").strip()
+        if source_name:
+            payload["fn"] = source_name
+        token = self._encode_token(payload)
         return f"{base_url}/api/strm/play/{token}"
 
     async def start_generate_library(
@@ -147,13 +210,18 @@ class StrmService:
         normalized_scopes = self._normalize_scopes(scopes)
         if self._is_generate_running():
             if mode == "full":
-                raise ValueError("STRM 生成任务正在执行中，完整扫描不能排队")
-            self._merge_pending_scopes(normalized_scopes, unscoped=scopes is None)
+                self._pending_mode = "full"
+                self._pending_scopes = []
+                self._pending_unscoped = True
+            elif self._pending_mode != "full":
+                self._merge_pending_scopes(
+                    normalized_scopes, unscoped=scopes is None
+                )
             return {
                 "success": True,
                 "started": False,
                 "queued": True,
-                "mode": "incremental",
+                "mode": self._pending_mode or mode,
                 "queued_scope_count": len(self._pending_scopes),
                 "trigger": str(trigger or "manual"),
             }
@@ -188,8 +256,13 @@ class StrmService:
         scopes: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         mode = self._validate_mode(mode)
-        if self._is_generate_running() and not self._lock.locked():
-            raise ValueError("STRM 生成任务正在执行中，请稍后再试")
+        running_task = self._generate_task
+        if (
+            running_task
+            and not running_task.done()
+            and asyncio.current_task() is not running_task
+        ):
+            await asyncio.shield(running_task)
 
         output_cid, output_dir = self._prepare_generate()
 
@@ -219,6 +292,7 @@ class StrmService:
             self._last_generate_error = ""
             self._last_generate_summary = None
             self._last_generate_trigger = trigger
+            self._current_mode = mode
 
             await operation_log_service.log_background_event(
                 source_type="background_task",
@@ -273,6 +347,12 @@ class StrmService:
             except Exception as exc:
                 self._last_generate_finished_at = self._now_iso()
                 self._last_generate_error = str(exc)[:2000]
+                await self._mark_state_failed(
+                    output_cid=output_cid,
+                    output_dir=output_dir,
+                    mode=mode,
+                    error=exc,
+                )
                 await operation_log_service.log_background_event(
                     source_type="background_task",
                     module="strm",
@@ -314,7 +394,7 @@ class StrmService:
             if not isinstance(raw, dict):
                 continue
             scope = {
-                "fid": str(raw.get("fid") or "").strip(),
+                "fid": str(raw.get("fid") or raw.get("source_fid") or "").strip(),
                 "target_cid": str(raw.get("target_cid") or "").strip(),
                 "relative_prefix": cls._normalize_prefix(
                     str(raw.get("relative_prefix") or "")
@@ -457,6 +537,10 @@ class StrmService:
         token: str,
         method: str = "GET",
         request_headers: dict[str, str] | None = None,
+        *,
+        client_ip: str = "",
+        request_path: str = "",
+        force_proxy: bool = False,
     ) -> Response:
         payload = self._decode_token(token)
         pick_code = str(payload.get("pc") or "").strip()
@@ -466,30 +550,51 @@ class StrmService:
         player_user_agent = self._extract_request_user_agent(request_headers or {})
 
         try:
-            raw_resp = await pan115_service._async_call(
-                "download_url_app",
-                {"pickcode": pick_code},
-                app="chrome",
+            download_info = await self._fetch_pick_code_download_info(
+                pick_code,
                 user_agent=player_user_agent if player_user_agent is not None else "",
+                force_proxy=force_proxy,
             )
         except Exception as exc:
             logger.exception("STRM download_url_app failed for pick_code=%s", pick_code)
             raise ValueError(f"获取 115 下载地址失败: {exc}") from exc
-        download_url = self._extract_download_url(raw_resp)
+        download_url = str(download_info.get("download_url") or "")
         if not download_url:
             raise ValueError("未能解析 115 下载地址")
-        required_headers = self._extract_download_headers(raw_resp)
-        filename = self._extract_file_name(raw_resp, fallback=f"{pick_code}.mp4")
-        direct_requirement = self._get_direct_requirement(download_url)
+        required_headers = dict(download_info.get("required_headers") or {})
+        filename = str(download_info.get("filename") or f"{pick_code}.mp4")
+        direct_requirement = str(download_info.get("direct_requirement") or "")
         mode = runtime_settings_service.get_strm_redirect_mode()
-        if mode == "redirect" and direct_requirement == "3":
+        if force_proxy:
+            mode = "proxy"
+        elif mode == "redirect" and direct_requirement == "3":
             mode = "proxy"
         elif mode == "auto":
             requires_proxy = direct_requirement == "3"
             mode = "proxy" if requires_proxy else "redirect"
 
         if mode == "redirect":
+            if method == "GET":
+                await self._log_strm_playback(
+                    title=filename,
+                    pick_code=pick_code,
+                    player=player_user_agent or "",
+                    client_ip=client_ip,
+                    play_mode="redirect",
+                    http_method=method,
+                    path=request_path,
+                )
             return RedirectResponse(url=download_url, status_code=302)
+        if method == "GET":
+            await self._log_strm_playback(
+                title=filename,
+                pick_code=pick_code,
+                player=player_user_agent or "",
+                client_ip=client_ip,
+                play_mode="proxy",
+                http_method=method,
+                path=request_path,
+            )
         return await self._build_proxy_response(
             method=method,
             download_url=download_url,
@@ -497,6 +602,31 @@ class StrmService:
             required_headers=required_headers,
             request_headers=request_headers or {},
         )
+
+    @staticmethod
+    async def _log_strm_playback(
+        *,
+        title: str,
+        pick_code: str,
+        player: str,
+        client_ip: str,
+        play_mode: str,
+        http_method: str,
+        path: str,
+    ) -> None:
+        try:
+            await playback_log_service.log_playback(
+                source="strm_gateway",
+                title=title,
+                pick_code=pick_code,
+                player=player,
+                client_ip=client_ip,
+                play_mode=play_mode,
+                http_method=http_method,
+                path=path,
+            )
+        except Exception:
+            logger.exception("写入 STRM 播放日志失败")
 
     async def _generate(
         self,
@@ -511,6 +641,7 @@ class StrmService:
         existing_files, existing_folders, state = await self._load_index(output_cid)
         config_fingerprint = self._config_fingerprint()
         requested_mode = mode
+        await self._mark_state_started(output_cid, output_dir, requested_mode)
         if not existing_files:
             mode = "full"
 
@@ -576,6 +707,15 @@ class StrmService:
 
         scanned_files = scan["files"]
         scanned_by_fid = {item["fid"]: item for item in scanned_files}
+        scanned_paths: dict[str, str] = {}
+        for item in scanned_files:
+            relative_path = item["relative_path"]
+            previous_fid = scanned_paths.get(relative_path)
+            if previous_fid and previous_fid != item["fid"]:
+                raise ValueError(
+                    f"115 文件映射到重复 STRM 路径：{relative_path}"
+                )
+            scanned_paths[relative_path] = item["fid"]
         existing_by_fid = {item.fid: item for item in existing_files}
         stale_fids = self._select_stale_fids(
             existing_files=existing_files,
@@ -587,7 +727,9 @@ class StrmService:
 
         await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
         manifest_path = output_dir / MANIFEST_FILENAME
-        previous_manifest_files = await self._load_manifest_files_async(manifest_path)
+        previous_manifest_files = await self._load_manifest_files_async(
+            manifest_path, expected_output_cid=output_cid
+        )
         written_count = 0
         unchanged_count = 0
         removed_count = 0
@@ -602,15 +744,13 @@ class StrmService:
             if old and old.relative_path != item["relative_path"]:
                 paths_to_remove.add(self._strm_relative_path(old.relative_path))
 
-        for relative in sorted(paths_to_remove):
-            if await self._remove_generated_file(output_dir, relative):
-                removed_count += 1
-
         for item in scanned_files:
             item["content_hash"] = self._record_content_hash(item)
             strm_relative = self._strm_relative_path(item["relative_path"])
             target_path = output_dir.joinpath(*PurePosixPath(strm_relative).parts)
-            content = self.build_play_url(item["pick_code"]) + "\n"
+            content = self.build_play_url(
+                item["pick_code"], item.get("name") or item.get("relative_path") or ""
+            ) + "\n"
             old = existing_by_fid.get(item["fid"])
             needs_write = (
                 old is None
@@ -635,7 +775,9 @@ class StrmService:
                         continue
                 except Exception:
                     pass
-            await asyncio.to_thread(target_path.write_text, content, encoding="utf-8")
+            await asyncio.to_thread(
+                self._write_text_atomic, target_path, content
+            )
             written_count += 1
 
         final_records = {
@@ -648,10 +790,6 @@ class StrmService:
             self._strm_relative_path(item["relative_path"])
             for item in final_records.values()
         }
-        if mode == "full":
-            for relative in sorted(previous_manifest_files - generated_files):
-                if await self._remove_generated_file(output_dir, relative):
-                    removed_count += 1
         await self._persist_index(
             output_cid=output_cid,
             scanned_files=scanned_files,
@@ -664,6 +802,12 @@ class StrmService:
             mode=mode,
             file_count=len(final_records),
         )
+        stale_paths = paths_to_remove - generated_files
+        if mode == "full":
+            stale_paths.update(previous_manifest_files - generated_files)
+        for relative in sorted(stale_paths):
+            if await self._remove_generated_file(output_dir, relative):
+                removed_count += 1
         await asyncio.to_thread(self._cleanup_empty_dirs, output_dir)
         await self._save_manifest_async(manifest_path, generated_files, output_cid)
 
@@ -786,7 +930,14 @@ class StrmService:
                 )
                 files.extend(tree_files)
                 folders.extend(tree_folders)
-                complete_prefixes.add(prefix)
+                visible_fids = {item["fid"] for item in tree_files}
+                if not fid or fid in visible_fids:
+                    complete_prefixes.add(prefix)
+                else:
+                    logger.info(
+                        "115 归档文件 fid=%s 尚未在目标目录可见，本轮仅增补、不执行范围删除",
+                        fid,
+                    )
 
         return {
             "files": self._dedupe_records(files),
@@ -809,16 +960,6 @@ class StrmService:
         try:
             root_items = await self._list_folder_items(pan115, output_cid)
             root_hash = self._snapshot_hash(root_items, pan115)
-            if state and state.root_snapshot_hash == root_hash:
-                return {
-                    "files": [],
-                    "folders": [],
-                    "complete_prefixes": [],
-                    "exact_fids": set(),
-                    "parent_cids": set(),
-                    "root_snapshot_hash": root_hash,
-                    "source": "root_snapshot_unchanged",
-                }
 
             indexed_folders = {item.fid: item for item in existing_folders}
             old_top = {
@@ -921,13 +1062,29 @@ class StrmService:
             response = await pan115.get_file_list(
                 cid=str(cid), offset=offset, limit=limit
             )
+            if (
+                isinstance(response, dict)
+                and response.get("_normalized_list_valid") is False
+            ):
+                raise ValueError(f"115 目录 {cid} 返回了无法识别的列表结构")
             items = response.get("data") if isinstance(response, dict) else None
             if isinstance(items, dict):
                 items = items.get("data") or items.get("list")
             if not isinstance(items, list):
                 raise ValueError(f"115 目录 {cid} 返回了不完整的列表")
             valid_items = [item for item in items if isinstance(item, dict)]
+            if len(valid_items) != len(items):
+                raise ValueError(f"115 目录 {cid} 返回了不完整的条目")
             results.extend(valid_items)
+            total_value = None
+            if isinstance(response, dict):
+                total_value = response.get("count", response.get("total"))
+            try:
+                total = int(total_value) if total_value is not None else None
+            except (TypeError, ValueError):
+                total = None
+            if total is not None and offset + len(items) < total and len(items) < limit:
+                raise ValueError(f"115 目录 {cid} 分页结果不完整")
             if len(items) < limit:
                 break
             offset += len(items)
@@ -974,6 +1131,7 @@ class StrmService:
         safe_path = cls._safe_relative_path(PurePosixPath(relative_path)).as_posix()
         return {
             "fid": fid,
+            "name": name,
             "pick_code": pick_code,
             "pc": pick_code,
             "relative_path": safe_path,
@@ -1032,6 +1190,11 @@ class StrmService:
     def _config_fingerprint(self) -> str:
         payload = {
             "base_url": runtime_settings_service.get_strm_base_url(),
+            "output_dir": str(
+                self._resolve_output_dir(
+                    runtime_settings_service.get_strm_output_dir()
+                )
+            ),
             "proxy_enabled": runtime_settings_service.get_strm_proxy_enabled(),
             "proxy_port": runtime_settings_service.get_strm_proxy_port(),
             "token_secret": self._get_token_secret(),
@@ -1078,7 +1241,17 @@ class StrmService:
 
     @staticmethod
     async def _remove_generated_file(output_dir: Path, relative: str) -> bool:
-        target = output_dir.joinpath(*PurePosixPath(relative).parts)
+        relative_path = PurePosixPath(str(relative or ""))
+        if relative_path.is_absolute() or any(
+            part in {"", ".", ".."} for part in relative_path.parts
+        ):
+            logger.warning("拒绝删除不安全的 STRM 相对路径：%s", relative)
+            return False
+        root = output_dir.resolve()
+        target = output_dir.joinpath(*relative_path.parts).resolve()
+        if not target.is_relative_to(root):
+            logger.warning("拒绝删除 STRM 输出目录之外的路径：%s", target)
+            return False
         if await asyncio.to_thread(target.is_file):
             await asyncio.to_thread(target.unlink)
             return True
@@ -1108,6 +1281,44 @@ class StrmService:
             )
             state = await session.get(StrmSyncState, output_cid)
             return files, folders, state
+
+    async def _mark_state_started(
+        self, output_cid: str, output_dir: Path, mode: str
+    ) -> None:
+        async with async_session_maker() as session:
+            state = await session.get(StrmSyncState, output_cid)
+            if state is None:
+                state = StrmSyncState(output_cid=output_cid)
+                session.add(state)
+            state.output_dir = str(output_dir)
+            state.last_mode = mode
+            state.last_status = "running"
+            state.last_error = None
+            state.last_started_at = beijing_now()
+            await session.commit()
+
+    async def _mark_state_failed(
+        self,
+        *,
+        output_cid: str,
+        output_dir: Path,
+        mode: str,
+        error: Exception,
+    ) -> None:
+        try:
+            async with async_session_maker() as session:
+                state = await session.get(StrmSyncState, output_cid)
+                if state is None:
+                    state = StrmSyncState(output_cid=output_cid)
+                    session.add(state)
+                state.output_dir = str(output_dir)
+                state.last_mode = mode
+                state.last_status = "failed"
+                state.last_error = str(error)[:2000]
+                state.last_finished_at = beijing_now()
+                await session.commit()
+        except Exception:
+            logger.warning("持久化 STRM 失败状态时出错", exc_info=True)
 
     @staticmethod
     def _file_model_to_record(item: StrmFileIndex) -> dict[str, str]:
@@ -1215,12 +1426,21 @@ class StrmService:
                 session.add(state)
             state.config_fingerprint = config_fingerprint
             state.root_snapshot_hash = root_snapshot_hash
+            state.output_dir = str(
+                self._resolve_output_dir(
+                    runtime_settings_service.get_strm_output_dir()
+                )
+            )
             state.last_mode = mode
             state.last_status = "success"
             state.last_error = None
             state.file_count = file_count
             state.folder_count = folder_count
             state.last_finished_at = beijing_now()
+            if mode == "full":
+                state.last_full_at = state.last_finished_at
+            else:
+                state.last_incremental_at = state.last_finished_at
             await session.commit()
         self._index_stats = {
             "output_cid": output_cid,
@@ -1228,6 +1448,12 @@ class StrmService:
             "folder_count": folder_count,
             "last_mode": mode,
             "last_status": "success",
+            "last_incremental_at": (
+                state.last_incremental_at.isoformat()
+                if state.last_incremental_at
+                else ""
+            ),
+            "last_full_at": state.last_full_at.isoformat() if state.last_full_at else "",
         }
 
     async def _refresh_media_servers(self) -> dict[str, Any]:
@@ -1358,6 +1584,99 @@ class StrmService:
             hashlib.sha256,
         ).hexdigest()
         return f"{encoded}.{signature}"
+
+    async def resolve_download_url_with_ua(
+        self, token: str, *, user_agent: str = ""
+    ) -> dict[str, Any]:
+        """按播放器 UA 解析 115 直链，供 Emby 代理做单跳 302。"""
+        payload = self._decode_token(token)
+        pick_code = str(payload.get("pc") or "").strip()
+        if not pick_code:
+            raise ValueError("无效的 STRM 播放令牌")
+
+        download_info = await self._fetch_pick_code_download_info(
+            pick_code, user_agent=str(user_agent or "")
+        )
+        download_url = str(download_info.get("download_url") or "")
+        if not download_url:
+            raise ValueError("未能解析 115 下载地址")
+        direct_requirement = str(download_info.get("direct_requirement") or "")
+        mode = runtime_settings_service.get_strm_redirect_mode()
+        if mode == "redirect" and direct_requirement == "3":
+            mode = "proxy"
+        elif mode == "auto":
+            mode = "proxy" if direct_requirement == "3" else "redirect"
+        return {
+            "download_url": download_url,
+            "pick_code": pick_code,
+            "direct_requirement": direct_requirement,
+            "mode": mode,
+            "required_headers": dict(download_info.get("required_headers") or {}),
+        }
+
+    async def _fetch_pick_code_download_info(
+        self,
+        pick_code: str,
+        *,
+        user_agent: str = "",
+        force_proxy: bool = False,
+    ) -> dict[str, Any]:
+        """获取并缓存 115 下载信息，避免 ISO 等频繁 Range 请求反复换链。"""
+        cache_key = f"{pick_code}\0{user_agent or ''}"
+        now = time.monotonic()
+        async with self._download_url_cache_lock:
+            cached = self._download_url_cache.get(cache_key)
+            if cached and cached[0] > now:
+                info = dict(cached[1])
+                if force_proxy:
+                    info["force_proxy"] = True
+                return info
+
+        raw_resp = await pan115_service._async_call(
+            "download_url_app",
+            {"pickcode": pick_code},
+            app="chrome",
+            user_agent=user_agent,
+        )
+        download_url = self._extract_download_url(raw_resp)
+        if not download_url:
+            raise ValueError("未能解析 115 下载地址")
+        info = {
+            "download_url": download_url,
+            "required_headers": self._extract_download_headers(raw_resp),
+            "direct_requirement": self._get_direct_requirement(download_url) or "",
+            "filename": self._extract_file_name(raw_resp, fallback=f"{pick_code}.mp4"),
+            "force_proxy": force_proxy,
+        }
+        ttl = self._download_url_cache_ttl(download_url)
+        async with self._download_url_cache_lock:
+            if len(self._download_url_cache) >= DOWNLOAD_URL_CACHE_MAX_ITEMS:
+                oldest_key = min(
+                    self._download_url_cache.items(), key=lambda item: item[1][0]
+                )[0]
+                self._download_url_cache.pop(oldest_key, None)
+            self._download_url_cache[cache_key] = (now + ttl, dict(info))
+        return info
+
+    @staticmethod
+    def _download_url_cache_ttl(
+        download_url: str,
+        *,
+        default: float = DOWNLOAD_URL_CACHE_DEFAULT_TTL_SECONDS,
+    ) -> float:
+        from urllib.parse import parse_qs, urlparse
+
+        try:
+            query = parse_qs(urlparse(download_url).query)
+            values = query.get("t") or []
+            if values:
+                expires_at = int(values[0])
+                remaining = expires_at - int(time.time()) - 120
+                if remaining > 60:
+                    return float(min(default, remaining))
+        except Exception:
+            pass
+        return default
 
     def _decode_token(self, token: str) -> dict[str, Any]:
         encoded, _, signature = str(token or "").partition(".")
@@ -1559,7 +1878,9 @@ class StrmService:
         parts: list[str] = []
         for raw_part in path.parts:
             cleaned = raw_part.replace("/", "_").replace("\\", "_").strip()
-            parts.append(cleaned or "_")
+            if cleaned in {"", ".", ".."}:
+                cleaned = "_"
+            parts.append(cleaned)
         return PurePosixPath(*parts)
 
     @staticmethod
@@ -1596,21 +1917,50 @@ class StrmService:
         )
 
     @staticmethod
-    def _load_manifest_files(manifest_path: Path) -> set[str]:
+    def _load_manifest_files(
+        manifest_path: Path, expected_output_cid: str | None = None
+    ) -> set[str]:
         if not manifest_path.exists():
             return set()
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
         except Exception:
             return set()
+        if expected_output_cid is not None:
+            manifest_cid = (
+                str(payload.get("output_cid") or "").strip()
+                if isinstance(payload, dict)
+                else ""
+            )
+            if manifest_cid and manifest_cid != str(expected_output_cid).strip():
+                logger.warning(
+                    "STRM manifest 属于其他输出目录 cid=%s，本轮不据此删除文件",
+                    manifest_cid,
+                )
+                return set()
         files = payload.get("generated_files") if isinstance(payload, dict) else None
         if not isinstance(files, list):
             return set()
-        return {str(item).strip() for item in files if str(item).strip()}
+        safe_files: set[str] = set()
+        for item in files:
+            value = str(item or "").strip()
+            path = PurePosixPath(value)
+            if (
+                not value
+                or path.is_absolute()
+                or any(part in {"", ".", ".."} for part in path.parts)
+            ):
+                continue
+            safe_files.add(path.as_posix())
+        return safe_files
 
     @classmethod
-    async def _load_manifest_files_async(cls, manifest_path: Path) -> set[str]:
-        return await asyncio.to_thread(cls._load_manifest_files, manifest_path)
+    async def _load_manifest_files_async(
+        cls, manifest_path: Path, expected_output_cid: str | None = None
+    ) -> set[str]:
+        return await asyncio.to_thread(
+            cls._load_manifest_files, manifest_path, expected_output_cid
+        )
 
     @staticmethod
     def _save_manifest(manifest_path: Path, files: set[str], output_cid: str) -> None:
@@ -1618,10 +1968,22 @@ class StrmService:
             "output_cid": str(output_cid or "").strip(),
             "generated_files": sorted(files),
         }
-        manifest_path.write_text(
+        StrmService._write_text_atomic(
+            manifest_path,
             json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
+
+    @staticmethod
+    def _write_text_atomic(path: Path, content: str) -> None:
+        """同目录写临时文件后原子替换，避免中途失败留下半文件。"""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            temp_path.write_text(content, encoding="utf-8")
+            os.replace(temp_path, path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
 
     @classmethod
     async def _save_manifest_async(

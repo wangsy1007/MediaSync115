@@ -898,6 +898,7 @@ class Pan115Service:
         receive_code: str = "",
         cid: str = "0",
         visited_cids: Optional[Set[str]] = None,
+        path_prefix: str = "",
     ) -> List[Dict[str, Any]]:
         """
         递归获取分享链接中的所有文件（包括子文件夹中的文件）
@@ -940,8 +941,16 @@ class Pan115Service:
                     if not sub_folder_cid:
                         continue
 
+                    folder_name = self._share_item_name(item)
+                    sub_prefix = (
+                        f"{path_prefix}/{folder_name}" if path_prefix else folder_name
+                    )
                     sub_files = await self.get_share_all_files_recursive(
-                        share_code, receive_code, sub_folder_cid, visited_cids
+                        share_code,
+                        receive_code,
+                        sub_folder_cid,
+                        visited_cids,
+                        sub_prefix,
                     )
                     all_files.extend(sub_files)
                     continue
@@ -953,6 +962,7 @@ class Pan115Service:
                             "fid": fid,
                             "name": self._share_item_name(item),
                             "size": self._share_item_size(item),
+                            "relative_path": path_prefix,
                         }
                     )
                     continue
@@ -962,8 +972,16 @@ class Pan115Service:
                 if not sub_folder_cid:
                     continue
 
+                folder_name = self._share_item_name(item)
+                sub_prefix = (
+                    f"{path_prefix}/{folder_name}" if path_prefix else folder_name
+                )
                 sub_files = await self.get_share_all_files_recursive(
-                    share_code, receive_code, sub_folder_cid, visited_cids
+                    share_code,
+                    receive_code,
+                    sub_folder_cid,
+                    visited_cids,
+                    sub_prefix,
                 )
                 all_files.extend(sub_files)
 
@@ -1307,11 +1325,6 @@ class Pan115Service:
         name = cls._CHINESE_TAGS_PATTERN.sub("", name)
         # 规范化剩余分隔符为空格
         name = re.sub(r"[.\-_]+", " ", name)
-        # 合并空白
-        name = re.sub(r"\s+", " ", name).strip()
-        return name.lower()
-        for pattern in cls._CORE_NAME_TAG_PATTERNS:
-            name = re.sub(pattern, "", name, flags=re.IGNORECASE)
         # 去掉空的方括号/圆括号
         name = re.sub(r"\[\s*\]|\(\s*\)", " ", name)
         # 去掉只剩标签内容的括号（内容被上面的规则清空后括号变空）
@@ -1320,6 +1333,194 @@ class Pan115Service:
         # 合并空白
         name = re.sub(r"\s+", " ", name).strip()
         return name.lower()
+
+    _ENGLISH_STOP_TOKENS = frozenset(
+        {
+            "the",
+            "and",
+            "for",
+            "web",
+            "dl",
+            "bluray",
+            "blu",
+            "ray",
+            "remux",
+            "x264",
+            "x265",
+            "hevc",
+            "h264",
+            "h265",
+            "avc",
+            "aac",
+            "dts",
+            "truehd",
+            "atmos",
+            "ddp",
+            "hdr",
+            "uhd",
+            "gb",
+            "ourbits",
+            "hdtv",
+            "webdl",
+            "webrip",
+        }
+    )
+
+    @classmethod
+    def _extract_year_from_filename(cls, filename: str) -> str:
+        match = re.search(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)", str(filename or ""))
+        return match.group(1) if match else ""
+
+    @classmethod
+    def _extract_chinese_runs(cls, filename: str) -> list[str]:
+        runs = re.findall(r"[\u4e00-\u9fff]{2,}", str(filename or ""))
+        return sorted({run.strip() for run in runs if run.strip()}, key=len, reverse=True)
+
+    @classmethod
+    def _extract_english_tokens(cls, filename: str) -> set[str]:
+        core = cls._extract_core_name(filename)
+        tokens = re.findall(r"[a-z0-9]{3,}", core)
+        return {
+            token
+            for token in tokens
+            if token not in cls._ENGLISH_STOP_TOKENS and not token.isdigit()
+        }
+
+    @classmethod
+    def _is_tv_video_filename(cls, filename: str) -> bool:
+        from app.utils.name_parser import name_parser
+
+        return name_parser.parse_episode(filename) is not None
+
+    @classmethod
+    def _are_same_movie(cls, name_a: str, name_b: str) -> bool:
+        """判断两个文件名是否指向同一部电影（允许中英文片名写法不同）。"""
+        if cls._extract_core_name(name_a) == cls._extract_core_name(name_b):
+            return True
+        if cls._is_tv_video_filename(name_a) or cls._is_tv_video_filename(name_b):
+            return False
+
+        year_a = cls._extract_year_from_filename(name_a)
+        year_b = cls._extract_year_from_filename(name_b)
+        if year_a and year_b and year_a != year_b:
+            return False
+
+        chinese_a = cls._extract_chinese_runs(name_a)
+        chinese_b = cls._extract_chinese_runs(name_b)
+        for left in chinese_a:
+            for right in chinese_b:
+                if left == right or left in right or right in left:
+                    return True
+
+        raw_a = str(name_a or "").lower()
+        raw_b = str(name_b or "").lower()
+        for segment in chinese_a:
+            if len(segment) >= 2 and segment in raw_b:
+                return True
+        for segment in chinese_b:
+            if len(segment) >= 2 and segment in raw_a:
+                return True
+
+        tokens_a = cls._extract_english_tokens(name_a)
+        tokens_b = cls._extract_english_tokens(name_b)
+        overlap = tokens_a & tokens_b
+        if len(overlap) >= 2:
+            return True
+        if len(overlap) == 1:
+            token = next(iter(overlap))
+            if len(token) >= 5:
+                return True
+        return False
+
+    @classmethod
+    def _distinct_chinese_titles(cls, group: list[dict[str, Any]]) -> list[str]:
+        titles: list[str] = []
+        for item in group:
+            runs = cls._extract_chinese_runs(cls._share_item_name(item))
+            if not runs:
+                continue
+            primary = runs[0]
+            if any(
+                primary != existing
+                and primary not in existing
+                and existing not in primary
+                for existing in titles
+            ):
+                titles.append(primary)
+            elif not any(primary in existing or existing in primary for existing in titles):
+                titles.append(primary)
+        return titles
+
+    @classmethod
+    def _folder_likely_single_movie(cls, group: list[dict[str, Any]]) -> bool:
+        """同一文件夹内仅一部电影的多个版本（如中英文片名不同）。"""
+        if len(group) <= 1:
+            return True
+        if len(group) > 6:
+            return False
+
+        years = {
+            cls._extract_year_from_filename(cls._share_item_name(item)) for item in group
+        }
+        years.discard("")
+        if len(years) > 1:
+            return False
+        if len(cls._distinct_chinese_titles(group)) > 1:
+            return False
+        if len(years) == 1:
+            return True
+        return len(group) <= 3
+
+    @classmethod
+    def _cluster_same_movie_files(
+        cls, group: list[dict[str, Any]]
+    ) -> list[list[dict[str, Any]]]:
+        size = len(group)
+        if size <= 1:
+            return [group]
+
+        parent = list(range(size))
+
+        def find(index: int) -> int:
+            while parent[index] != index:
+                parent[index] = parent[parent[index]]
+                index = parent[index]
+            return index
+
+        def union(left: int, right: int) -> None:
+            root_left = find(left)
+            root_right = find(right)
+            if root_left != root_right:
+                parent[root_right] = root_left
+
+        for left in range(size):
+            left_name = cls._share_item_name(group[left])
+            for right in range(left + 1, size):
+                right_name = cls._share_item_name(group[right])
+                if cls._are_same_movie(left_name, right_name):
+                    union(left, right)
+
+        buckets: dict[int, list[dict[str, Any]]] = {}
+        for index in range(size):
+            buckets.setdefault(find(index), []).append(group[index])
+        return list(buckets.values())
+
+    @classmethod
+    def _pick_best_from_group(
+        cls,
+        group: list[dict[str, Any]],
+        quality_filter: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if len(group) == 1:
+            return group[0]
+        if quality_filter:
+            from app.utils.resource_tags import filter_and_sort_by_quality
+
+            filtered = filter_and_sort_by_quality(group, **quality_filter)
+            if filtered:
+                return filtered[0]
+        best = cls.pick_best_video_file(group, quality_filter)
+        return best or group[0]
 
     @staticmethod
     def _extract_share_file_size(item: dict[str, Any]) -> int:
@@ -1433,8 +1634,9 @@ class Pan115Service:
     def _select_files_for_best_quality_transfer(
         cls, files: list[dict[str, Any]],
         quality_filter: dict[str, Any] | None = None,
+        media_type: str | None = None,
     ) -> list[dict[str, Any]]:
-        """多视频分享：同一影片只转存画质最好的一个；合集则全部转存。"""
+        """多视频分享：同一文件夹内同一电影只转存画质最好的一个；电视剧不受影响。"""
 
         video_files = [
             item
@@ -1445,38 +1647,46 @@ class Pan115Service:
         if len(video_files) <= 1:
             return video_files
 
-        core_names = {
-            cls._extract_core_name(cls._share_item_name(v)): []
-            for v in video_files
-        }
-        for v in video_files:
-            name = cls._share_item_name(v)
-            core_names.setdefault(cls._extract_core_name(name), []).append(v)
+        normalized_media_type = str(media_type or "").strip().lower()
+        if normalized_media_type == "tv":
+            return video_files
 
-        if len(core_names) <= 1:
-            # 所有文件核心名称一致 → 同一影片多个版本，只取画质最好的
-            if quality_filter:
-                from app.utils.resource_tags import filter_and_sort_by_quality
+        if not normalized_media_type:
+            tv_count = sum(
+                1
+                for item in video_files
+                if cls._is_tv_video_filename(cls._share_item_name(item))
+            )
+            if tv_count >= max(2, len(video_files) // 2):
+                return video_files
 
-                filtered = filter_and_sort_by_quality(video_files, **quality_filter)
-                if filtered:
-                    return [filtered[0]]
-            best = cls.pick_best_video_file(video_files)
-            return [best] if best else video_files
+        tv_files: list[dict[str, Any]] = []
+        movie_files: list[dict[str, Any]] = []
+        for item in video_files:
+            name = cls._share_item_name(item)
+            if cls._is_tv_video_filename(name):
+                tv_files.append(item)
+            else:
+                movie_files.append(item)
 
-        # 核心名称不同 → 合集资源，每个核心名称各取画质最高的一个
-        selected: list[dict[str, Any]] = []
-        for group in core_names.values():
+        selected: list[dict[str, Any]] = list(tv_files)
+        if not movie_files:
+            return selected
+
+        by_folder: dict[str, list[dict[str, Any]]] = {}
+        for item in movie_files:
+            folder = str(item.get("relative_path") or "").strip().lower()
+            by_folder.setdefault(folder, []).append(item)
+
+        for group in by_folder.values():
             if len(group) == 1:
                 selected.append(group[0])
-            elif quality_filter:
-                from app.utils.resource_tags import filter_and_sort_by_quality
-
-                filtered = filter_and_sort_by_quality(group, **quality_filter)
-                selected.append(filtered[0] if filtered else group[0])
-            else:
-                best = cls.pick_best_video_file(group)
-                selected.append(best if best else group[0])
+                continue
+            if cls._folder_likely_single_movie(group):
+                selected.append(cls._pick_best_from_group(group, quality_filter))
+                continue
+            for cluster in cls._cluster_same_movie_files(group):
+                selected.append(cls._pick_best_from_group(cluster, quality_filter))
         return selected
 
     async def start_qr_login(self, app: str = "alipaymini") -> Dict[str, Any]:
@@ -2019,24 +2229,31 @@ class Pan115Service:
     def _normalize_file_list_result(data: Any) -> Dict[str, Any]:
         """统一文件列表返回结构，保证 data 为列表。"""
         if isinstance(data, list):
-            return {"data": data}
+            return {"data": data, "_normalized_list_valid": True}
         if isinstance(data, dict):
             result = dict(data)
             raw_data = result.get("data")
             if isinstance(raw_data, list):
+                result["_normalized_list_valid"] = True
                 return result
             if isinstance(raw_data, dict):
                 nested_list = raw_data.get("list")
                 if isinstance(nested_list, list):
                     result["data"] = nested_list
+                    result["_normalized_list_valid"] = True
+                    for key in ("count", "total"):
+                        if key not in result and raw_data.get(key) is not None:
+                            result[key] = raw_data.get(key)
                     return result
             top_level_list = result.get("list")
             if isinstance(top_level_list, list):
                 result["data"] = top_level_list
+                result["_normalized_list_valid"] = True
                 return result
             result["data"] = []
+            result["_normalized_list_valid"] = False
             return result
-        return {"data": []}
+        return {"data": [], "_normalized_list_valid": False}
 
     @staticmethod
     def _is_auth_related_error(error_text: str) -> bool:
@@ -2230,6 +2447,7 @@ class Pan115Service:
         parent_id: str = "0",
         receive_code: str = "",
         quality_filter: dict[str, Any] | None = None,
+        media_type: str | None = None,
     ) -> Dict[str, Any]:
         """
         将分享链接转存到指定文件夹中（递归转存所有文件）
@@ -2257,7 +2475,9 @@ class Pan115Service:
         if not all_files:
             raise ValueError("分享中没有可转存的文件")
 
-        selected_files = self._select_files_for_best_quality_transfer(all_files, quality_filter)
+        selected_files = self._select_files_for_best_quality_transfer(
+            all_files, quality_filter, media_type
+        )
 
         file_ids = self._collect_share_file_ids(selected_files)
         if not file_ids:
@@ -2309,6 +2529,7 @@ class Pan115Service:
         parent_id: str = "0",
         receive_code: str = "",
         quality_filter: dict[str, Any] | None = None,
+        media_type: str | None = None,
     ) -> Dict[str, Any]:
         """将分享里的所有文件直接转存到目标目录，不创建影视外层文件夹。"""
         share_code, receive_code = self._resolve_share_payload(share_url, receive_code)
@@ -2316,7 +2537,9 @@ class Pan115Service:
         if not all_files:
             raise ValueError("分享中没有可转存的文件")
 
-        selected_files = self._select_files_for_best_quality_transfer(all_files, quality_filter)
+        selected_files = self._select_files_for_best_quality_transfer(
+            all_files, quality_filter, media_type
+        )
         file_ids = self._collect_share_file_ids(selected_files)
         if not file_ids:
             file_ids = self._collect_share_file_ids(all_files)

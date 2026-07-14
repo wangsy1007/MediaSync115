@@ -1,4 +1,5 @@
 import asyncio
+from time import monotonic
 
 from app.services.hdhive_service import HDHiveService
 
@@ -211,6 +212,49 @@ class TestHDHiveService:
         assert access_code == "abcd"
         assert already_owned is False
 
+    def test_resolve_unlock_action_id_uses_cache_without_refetch(self) -> None:
+        service = HDHiveService()
+        web = service._web
+        web._unlock_action_id = "cached-action-id"
+        web._unlock_action_id_cached_at = monotonic()
+
+        async def fake_fetch(*args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("should not fetch chunks when action id cache is warm")
+
+        web._fetch_text_with_retry = fake_fetch  # type: ignore[method-assign]
+        action_id = asyncio.run(web._resolve_unlock_action_id("<html></html>"))
+        assert action_id == "cached-action-id"
+
+    def test_unlock_resource_skips_action_when_page_already_has_link(self) -> None:
+        service = HDHiveService(cookie="token=test")
+        web = service._web
+        slug = "abc123def456"
+        share_url = "https://115.com/s/example?password=abcd"
+        html = (
+            f'\\"slug\\":\\"{slug}\\",\\"data\\":{{'
+            f'\\"url\\":\\"{share_url}\\",\\"access_code\\":\\"abcd\\",\\"full_url\\":\\"{share_url}\\",'
+            f'\\"unlock_points\\":0}},\\"error\\":null,\\"poster\\":'
+        )
+
+        async def fake_fetch(client, path, accept=None, max_retries=2):  # noqa: ANN001
+            assert path == f"/resource/115/{slug}"
+            return html
+
+        async def fake_prefetch(client) -> None:  # noqa: ANN001
+            return None
+
+        async def fake_unlock_action(*args, **kwargs):  # noqa: ANN002, ANN003
+            raise AssertionError("should not call unlock action when page already unlocked")
+
+        web._fetch_text_with_retry_using_client = fake_fetch  # type: ignore[method-assign]
+        web._prefetch_action_token = fake_prefetch  # type: ignore[method-assign]
+        web._unlock_resource_via_next_action = fake_unlock_action  # type: ignore[method-assign]
+
+        result = asyncio.run(web.unlock_resource(slug))
+        assert result["success"] is True
+        assert result["method"] == "cached_page"
+        assert result["share_link"] == share_url
+
     def test_list_resources_by_tmdb_only_keeps_115_rows(self) -> None:
         service = HDHiveService(cookie="test-cookie")
 
@@ -266,3 +310,12 @@ class TestHDHiveService:
 
         assert [row["slug"] for row in rows] == ["115slug", "115slug2"]
         assert all(row["hdhive_pan_type"] == "115" for row in rows)
+
+    def test_extract_bracket_payload_respects_string_brackets(self) -> None:
+        raw = r'prefix \"115\":[{\"title\":\"A [4K]\",\"remark\":\"line1\nline2\"}] suffix'
+        payload = HDHiveService._extract_bracket_payload(raw, '\\"115\\":[')
+        parsed = HDHiveService._decode_json_candidates(payload)
+        assert parsed
+        rows = parsed[0]
+        assert isinstance(rows, list)
+        assert rows[0]["title"] == "A [4K]"

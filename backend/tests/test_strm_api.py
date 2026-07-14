@@ -1,7 +1,13 @@
 import pytest
 from fastapi import HTTPException
+from unittest.mock import AsyncMock
 
-from app.api.strm import _validate_strm_settings
+from app.api.strm import (
+    StrmGenerateRequest,
+    _validate_strm_settings,
+    generate_strm_files,
+)
+from app.services.runtime_settings_service import RuntimeSettingsService
 
 
 class TestStrmApi:
@@ -31,3 +37,50 @@ class TestStrmApi:
             _validate_strm_settings({"strm_base_url": "not-a-url"})
 
         assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_generate_defaults_to_incremental(self, monkeypatch) -> None:
+        start = AsyncMock(return_value={"started": True})
+        monkeypatch.setattr("app.api.strm.strm_service.start_generate_library", start)
+
+        await generate_strm_files(payload=None, mode=None)
+
+        start.assert_awaited_once_with(trigger="manual", mode="incremental")
+
+    @pytest.mark.asyncio
+    async def test_generate_accepts_json_full_mode(self, monkeypatch) -> None:
+        start = AsyncMock(return_value={"started": True})
+        monkeypatch.setattr("app.api.strm.strm_service.start_generate_library", start)
+
+        await generate_strm_files(
+            payload=StrmGenerateRequest(mode="full"),
+            mode=None,
+        )
+
+        start.assert_awaited_once_with(trigger="manual", mode="full")
+
+    @pytest.mark.asyncio
+    async def test_generate_rejects_invalid_mode(self) -> None:
+        with pytest.raises(HTTPException) as exc_info:
+            await generate_strm_files(
+                payload=StrmGenerateRequest(mode="invalid"),
+                mode=None,
+            )
+
+        assert exc_info.value.status_code == 400
+
+    def test_strm_schedule_config_validation(self) -> None:
+        service = RuntimeSettingsService.__new__(RuntimeSettingsService)
+        service._data = {
+            "strm_incremental_interval_minutes": 360,
+            "strm_full_schedule_day": "sun",
+            "strm_full_schedule_time": "03:00",
+        }
+        service._save = lambda: None
+
+        with pytest.raises(ValueError, match="30"):
+            service.update_strm_config({"strm_incremental_interval_minutes": 10})
+        with pytest.raises(ValueError, match="星期"):
+            service.update_strm_config({"strm_full_schedule_day": "holiday"})
+        with pytest.raises(ValueError, match="HH:MM"):
+            service.update_strm_config({"strm_full_schedule_time": "25:00"})

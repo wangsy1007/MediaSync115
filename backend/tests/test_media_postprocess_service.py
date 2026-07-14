@@ -37,6 +37,9 @@ class TestMediaPostprocessService:
     async def test_trigger_strm_after_archive(self, monkeypatch) -> None:
         """测试归档完成后自动触发 STRM 生成"""
         monkeypatch.setattr(runtime_settings_service, "get_strm_enabled", lambda: True)
+        monkeypatch.setattr(
+            runtime_settings_service, "get_strm_auto_after_archive", lambda: True
+        )
 
         called: dict = {}
 
@@ -65,11 +68,32 @@ class TestMediaPostprocessService:
         assert called["scopes"] is None
 
     @pytest.mark.asyncio
+    async def test_skip_strm_when_auto_after_archive_disabled(self, monkeypatch) -> None:
+        """关闭「归档后自动生成 STRM」时应跳过"""
+        monkeypatch.setattr(runtime_settings_service, "get_strm_enabled", lambda: True)
+        monkeypatch.setattr(
+            runtime_settings_service, "get_strm_auto_after_archive", lambda: False
+        )
+
+        result = await media_postprocess_service.trigger_strm_after_archive(
+            {"success": 1, "skipped": 0},
+            trigger="archive_manual",
+        )
+
+        assert result == {
+            "triggered": False,
+            "reason": "strm_auto_after_archive_disabled",
+        }
+
+    @pytest.mark.asyncio
     async def test_trigger_strm_forwards_deduplicated_archive_scopes(
         self, monkeypatch
     ) -> None:
         """测试归档成果转换为去重后的 STRM 增量范围"""
         monkeypatch.setattr(runtime_settings_service, "get_strm_enabled", lambda: True)
+        monkeypatch.setattr(
+            runtime_settings_service, "get_strm_auto_after_archive", lambda: True
+        )
 
         called: dict = {}
 
@@ -111,7 +135,7 @@ class TestMediaPostprocessService:
             "mode": "incremental",
             "scopes": [
                 {
-                    "source_fid": "fid-1",
+                    "fid": "fid-1",
                     "target_cid": "cid-1",
                     "relative_prefix": "电影/华语电影/测试电影 (2026)",
                 }
@@ -122,6 +146,9 @@ class TestMediaPostprocessService:
     async def test_skip_strm_when_no_processed_items(self, monkeypatch) -> None:
         """测试没有归档成果时跳过 STRM 生成"""
         monkeypatch.setattr(runtime_settings_service, "get_strm_enabled", lambda: True)
+        monkeypatch.setattr(
+            runtime_settings_service, "get_strm_auto_after_archive", lambda: True
+        )
 
         result = await media_postprocess_service.trigger_strm_after_archive(
             {"success": 0, "skipped": 0, "failed": 3},

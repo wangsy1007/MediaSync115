@@ -314,6 +314,10 @@ const getPosterUrl = (path, options = {}) => {
     if (rawUrl.includes('image.tmdb.org')) {
       return rewriteTmdbPosterSize(rawUrl, compact)
     }
+    if (rawUrl.includes('pipi.cn') || rawUrl.includes('meituan.net')) {
+      const size = compact ? 'small' : 'medium'
+      return `/api/search/explore/poster?url=${encodeURIComponent(rawUrl)}&size=${size}`
+    }
     return rawUrl
   }
   if (source.startsWith('/')) return rewriteTmdbPosterSize(`${TMDB_IMAGE_BASE}${source}`, compact)

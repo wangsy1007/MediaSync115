@@ -142,11 +142,10 @@ const handleClosed = () => {
 </style>
 
 <style lang="scss">
-.pan115-progress-dialog-wrap {
-  .el-dialog {
-    width: min(92vw, 380px) !important;
-    margin: 0 auto;
-  }
+.el-dialog.pan115-progress-dialog-wrap {
+  width: min(92vw, 380px) !important;
+  max-width: 92vw;
+  margin: auto !important;
 
   .el-dialog__body {
     padding-top: 8px;

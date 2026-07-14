@@ -61,6 +61,7 @@ class StrmSyncState(Base):
     __tablename__ = "strm_sync_state"
 
     output_cid: Mapped[str] = mapped_column(String(100), primary_key=True)
+    output_dir: Mapped[str] = mapped_column(Text, nullable=False, default="")
     config_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     root_snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     last_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="")
@@ -70,6 +71,8 @@ class StrmSyncState(Base):
     folder_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_incremental_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_full_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=beijing_now, onupdate=beijing_now, nullable=False
     )

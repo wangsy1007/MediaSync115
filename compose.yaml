@@ -21,11 +21,11 @@ services:
       HTTPS_PROXY: ""
       http_proxy: ""
       https_proxy: ""
-      NO_PROXY: "localhost,127.0.0.1,host.docker.internal"
-      no_proxy: "localhost,127.0.0.1,host.docker.internal"
+      NO_PROXY: "localhost,127.0.0.1,host.docker.internal,emby"
+      no_proxy: "localhost,127.0.0.1,host.docker.internal,emby"
       STRM_HOST_IP: ${STRM_HOST_IP:-}
       KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-}
-      EMBY_PROXY_HOST: ${EMBY_PROXY_HOST:-host.docker.internal}
+      EMBY_PROXY_HOST: ${EMBY_PROXY_HOST:-emby}
       EMBY_PROXY_PORT: ${EMBY_PROXY_PORT:-8096}
     volumes:
       - ./data:/app/data

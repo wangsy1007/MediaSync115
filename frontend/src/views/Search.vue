@@ -279,9 +279,18 @@ const isSearchRouteActive = () => (
   && (route.path.startsWith('/explore/') || route.path === '/' || route.path === '/search')
 )
 
-const normalizeExploreSource = (rawSource) => (String(rawSource || '').toLowerCase() === 'tmdb' ? 'tmdb' : 'douban')
+const normalizeExploreSource = (rawSource) => {
+  const source = String(rawSource || '').toLowerCase()
+  if (source === 'tmdb') return 'tmdb'
+  if (source === 'maoyan') return 'maoyan'
+  return 'douban'
+}
 const exploreSource = computed(() => normalizeExploreSource(route.params.source))
-const exploreSourceLabel = computed(() => (exploreSource.value === 'tmdb' ? 'TMDB 榜单探索' : '豆瓣榜单探索'))
+const exploreSourceLabel = computed(() => {
+  if (exploreSource.value === 'tmdb') return 'TMDB 榜单探索'
+  if (exploreSource.value === 'maoyan') return '猫眼榜单探索'
+  return '豆瓣榜单探索'
+})
 
 const searchQuery = ref('')
 const results = ref([])
@@ -1166,6 +1175,10 @@ const getPosterUrl = (path, options = {}) => {
     if (rawUrl.includes('image.tmdb.org')) {
       return rewriteTmdbPosterSize(rawUrl, compact)
     }
+    if (rawUrl.includes('pipi.cn') || rawUrl.includes('meituan.net')) {
+      const size = compact ? 'small' : 'medium'
+      return `/api/search/explore/poster?url=${encodeURIComponent(rawUrl)}&size=${size}`
+    }
     return rawUrl
   }
   if (String(path).startsWith('/')) return rewriteTmdbPosterSize(`${TMDB_IMAGE_BASE}${path}`, compact)
@@ -1593,8 +1606,10 @@ const resolveExploreItemRoute = async (item) => {
     const payload = {
       source: exploreSource.value,
       id: item.id,
-      douban_id: item.douban_id || item.id,
+      douban_id: exploreSource.value === 'douban' ? (item.douban_id || item.id) : '',
+      maoyan_id: exploreSource.value === 'maoyan' ? (item.maoyan_id || item.id) : '',
       title: item.title || item.name || '',
+      original_title: item.original_title || '',
       year: item.year || getYear(item) || '',
       media_type: directType,
       tmdb_id: exploreSource.value === 'tmdb' ? directTmdbId : null
@@ -1964,43 +1979,55 @@ onBeforeUnmount(() => {
 
 <style lang="scss" scoped>
 .explore-page {
-  animation: explorePageFadeIn 0.22s ease;
-  
   .search-header {
     margin-bottom: 24px;
     padding: 0;
     border: 0;
     background: transparent;
     box-shadow: none;
-    
-    :deep(.el-input) {
+
+    :deep(.el-input.el-input-group--append) {
       --search-pill-bg: var(--ms-bg-elevated);
+      display: inline-flex;
+      align-items: stretch;
       width: 100%;
 
-      .el-input__wrapper {
-        border-radius: 10px 0 0 10px;
+      > .el-input__wrapper {
+        flex: 1;
         min-height: 44px;
         padding: 0 12px;
-        background: var(--search-pill-bg);
-        box-shadow: none;
+        background: var(--search-pill-bg) !important;
+        box-shadow: none !important;
+        border-top-left-radius: var(--ms-radius-md) !important;
+        border-bottom-left-radius: var(--ms-radius-md) !important;
+        border-top-right-radius: 0 !important;
+        border-bottom-right-radius: 0 !important;
+        border-right: none !important;
       }
 
-      &.is-focus .el-input__wrapper {
-        box-shadow: 0 0 0 1px var(--ms-accent-primary);
+      > .el-input__wrapper.is-focus,
+      &.is-focus > .el-input__wrapper {
+        border-color: var(--ms-accent-primary) !important;
+        box-shadow: none !important;
       }
 
-      .el-input-group__append {
-        padding: 0;
-        border-radius: 0 10px 10px 0;
-        background: transparent;
-        box-shadow: none;
+      > .el-input-group__append {
+        padding: 0 !important;
+        margin: 0;
+        border: none !important;
+        border-radius: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
 
         .el-button {
-          border-radius: 0 10px 10px 0;
           height: 44px;
+          min-height: 44px;
           padding: 0 20px;
-          margin: 0;
-          border: none;
+          margin: 0 !important;
+          border-top-left-radius: 0 !important;
+          border-bottom-left-radius: 0 !important;
+          border-top-right-radius: var(--ms-radius-md) !important;
+          border-bottom-right-radius: var(--ms-radius-md) !important;
           font-weight: 500;
 
           .el-icon {
@@ -2658,8 +2685,10 @@ onBeforeUnmount(() => {
     }
   }
 
-  .explore-page .search-header :deep(.el-input .el-input__wrapper) {
+  .explore-page .search-header :deep(.el-input.el-input-group--append > .el-input__wrapper),
+  .explore-page .search-header :deep(.el-input.el-input-group--append > .el-input-group__append .el-button) {
     min-height: 40px;
+    height: 40px;
   }
 
   .explore-page .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
@@ -2752,11 +2781,6 @@ onBeforeUnmount(() => {
       transform: translate(-50%, 0);
     }
   }
-}
-
-@keyframes explorePageFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
 }
 
 @keyframes skeleton-loading {

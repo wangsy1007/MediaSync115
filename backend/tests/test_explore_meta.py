@@ -28,3 +28,12 @@ class TestExploreMeta:
         assert response.status_code == 200
         payload = response.json()
         assert payload.get("tmdb_configured") is False
+
+    def test_maoyan_meta_returns_sections(self, client) -> None:
+        """猫眼来源应返回三个探索分区"""
+        response = client.get("/api/search/explore/meta", params={"source": "maoyan"})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload.get("source") == "maoyan"
+        keys = {row.get("key") for row in (payload.get("sections") or [])}
+        assert keys == {"movie_on_show", "movie_coming", "box_office"}

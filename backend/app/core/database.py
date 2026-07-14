@@ -65,6 +65,12 @@ SUBSCRIPTION_COLUMN_SQL = {
     "max_size_gb": "ALTER TABLE subscriptions ADD COLUMN max_size_gb REAL",
 }
 
+STRM_SYNC_STATE_COLUMN_SQL = {
+    "output_dir": "ALTER TABLE strm_sync_state ADD COLUMN output_dir TEXT NOT NULL DEFAULT ''",
+    "last_incremental_at": "ALTER TABLE strm_sync_state ADD COLUMN last_incremental_at DATETIME",
+    "last_full_at": "ALTER TABLE strm_sync_state ADD COLUMN last_full_at DATETIME",
+}
+
 
 def load_model_metadata() -> None:
     for module_name in MODEL_MODULES:
@@ -135,6 +141,7 @@ async def init_db():
     await ensure_tables_exist()
     await ensure_subscription_columns()
     await ensure_download_record_columns()
+    await ensure_strm_sync_state_columns()
     await ensure_performance_indexes()
 
 
@@ -177,6 +184,25 @@ async def ensure_download_record_columns() -> None:
                 "ON download_records (offline_info_hash)"
             )
         )
+
+
+async def ensure_strm_sync_state_columns() -> None:
+    """兼容已创建的 STRM 同步状态表。"""
+    async with engine.begin() as conn:
+        existing_tables = await conn.run_sync(
+            lambda sync_conn: set(inspect(sync_conn).get_table_names())
+        )
+        if "strm_sync_state" not in existing_tables:
+            return
+        existing_columns = await conn.run_sync(
+            lambda sync_conn: {
+                column["name"]
+                for column in inspect(sync_conn).get_columns("strm_sync_state")
+            }
+        )
+        for column_name, ddl in STRM_SYNC_STATE_COLUMN_SQL.items():
+            if column_name not in existing_columns:
+                await conn.execute(text(ddl))
 
 
 async def get_db():

@@ -33,6 +33,9 @@ export const buildExploreQueuePayload = (item, options = {}) => {
       tmdbId = toValidTmdbId(rawId)
     }
     doubanId = explicitDoubanId || ''
+  } else if (source === 'maoyan') {
+    tmdbId = explicitTmdbId
+    doubanId = explicitDoubanId || ''
   } else {
     if (!doubanId && /^\d+$/.test(rawId)) {
       doubanId = rawId
@@ -43,7 +46,11 @@ export const buildExploreQueuePayload = (item, options = {}) => {
 
   return {
     source,
-    id: source === 'douban' ? (doubanId || null) : (tmdbId ? String(tmdbId) : (rawId || null)),
+    id: source === 'douban'
+      ? (doubanId || null)
+      : source === 'maoyan'
+        ? (String(item?.maoyan_id || rawId || '').trim() || null)
+        : (tmdbId ? String(tmdbId) : (rawId || null)),
     douban_id: doubanId || null,
     title: String(item?.title || item?.name || '').trim(),
     name: String(item?.name || item?.title || '').trim(),

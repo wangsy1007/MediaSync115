@@ -24,6 +24,9 @@
             @click="toggleExpand(log.id)"
           >
             <span class="log-time">{{ formatTime(log.created_at) }}</span>
+            <el-tag v-if="log.module === 'play'" size="small" type="success" class="log-module">
+              播放
+            </el-tag>
             <el-tag :type="statusTagType(log.status)" size="small" class="log-status">
               {{ statusLabels[log.status] || log.status }}
             </el-tag>
@@ -245,6 +248,10 @@ onMounted(fetchLogs)
   }
 
   .log-status {
+    flex-shrink: 0;
+  }
+
+  .log-module {
     flex-shrink: 0;
   }
 

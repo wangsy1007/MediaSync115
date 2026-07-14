@@ -674,7 +674,7 @@ async def _search_115_resources(
     from app.services.pansou_service import pansou_service
 
     auto_unlock_hdhive = runtime_settings_service.get_tg_bot_hdhive_auto_unlock()
-    priority = runtime_settings_service.get_subscription_resource_priority()
+    priority = runtime_settings_service.get_active_subscription_resource_priority()
 
     if media_type == "movie":
         tmdb_detail = await tmdb_service.get_movie_detail(tmdb_id)

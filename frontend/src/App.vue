@@ -1,5 +1,5 @@
 <template>
-  <el-config-provider :locale="zhCn">
+  <el-config-provider :locale="zhCn" :dialog="{ alignCenter: true }">
     <router-view v-if="isLoginRoute" v-slot="{ Component }">
       <transition name="page-fade" mode="out-in">
         <component :is="Component" />
@@ -42,6 +42,7 @@
             </template>
             <el-menu-item index="/explore/douban" @click="navigateSideMenu('/explore/douban')">豆瓣榜单</el-menu-item>
             <el-menu-item index="/explore/tmdb" @click="navigateSideMenu('/explore/tmdb')">TMDB榜单</el-menu-item>
+            <el-menu-item index="/explore/maoyan" @click="navigateSideMenu('/explore/maoyan')">猫眼榜单</el-menu-item>
           </el-sub-menu>
           <el-menu-item index="/subscriptions" @click="navigateSideMenu('/subscriptions')">
             <el-icon><Star /></el-icon>
@@ -221,6 +222,14 @@
                 <el-icon><Search /></el-icon>
                 <span>TMDB 榜单</span>
               </button>
+              <button
+                class="more-item"
+                :class="{ 'more-item-active': lastExplorePage === '/explore/maoyan' }"
+                @click="handleExploreNav('/explore/maoyan')"
+              >
+                <el-icon><Search /></el-icon>
+                <span>猫眼榜单</span>
+              </button>
             </div>
             <button class="more-cancel" @click="showExploreMenu = false">取消</button>
           </div>
@@ -274,9 +283,18 @@ const isLoginRoute = computed(() => route.path === '/login')
 
 // 需要缓存的页面组件名（探索首页 + 更多页），返回时保持滚动位置和数据状态
 const keepAlivePages = ['Search', 'ExploreSection']
-const keepAliveMax = 5
+const keepAliveMax = 8
 const resolveViewKey = (currentRoute) => {
   const routeName = String(currentRoute?.name || '').trim()
+  if (routeName === 'Search') {
+    const source = String(currentRoute.params?.source || 'douban').trim()
+    return `Search:${source}`
+  }
+  if (routeName === 'ExploreSection') {
+    const source = String(currentRoute.params?.source || 'douban').trim()
+    const sectionKey = String(currentRoute.params?.key || '').trim()
+    return `ExploreSection:${source}:${sectionKey}`
+  }
   if (keepAlivePages.includes(routeName)) {
     return routeName
   }
@@ -287,6 +305,7 @@ const activeMenu = computed(() => {
   // 处理首页重定向
   if (route.path === '/' || route.path === '/search') return '/explore/douban'
   if (route.path.startsWith('/explore/tmdb')) return '/explore/tmdb'
+  if (route.path.startsWith('/explore/maoyan')) return '/explore/maoyan'
   if (route.path.startsWith('/explore/douban')) return '/explore/douban'
   if (route.path.startsWith('/settings')) return '/settings'
   // 处理详情页等其他页面，返回最近访问的探索页面
@@ -331,7 +350,11 @@ function tickBeijingClock() {
 }
 
 function handleGoHome() {
-  const homePath = route.path.startsWith('/explore/tmdb') ? '/explore/tmdb' : '/explore/douban'
+  const homePath = route.path.startsWith('/explore/tmdb')
+    ? '/explore/tmdb'
+    : route.path.startsWith('/explore/maoyan')
+      ? '/explore/maoyan'
+      : '/explore/douban'
   router.replace({ path: homePath, query: {} })
 }
 
@@ -434,6 +457,7 @@ watch(() => route.path, () => {
   showExploreMenu.value = false
   if (route.path.startsWith('/explore/douban')) lastExplorePage.value = '/explore/douban'
   else if (route.path.startsWith('/explore/tmdb')) lastExplorePage.value = '/explore/tmdb'
+  else if (route.path.startsWith('/explore/maoyan')) lastExplorePage.value = '/explore/maoyan'
 })
 
 watch(isCompact, (compact) => {

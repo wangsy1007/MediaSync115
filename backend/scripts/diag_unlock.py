@@ -37,7 +37,11 @@ async def main() -> None:
             if action_id:
                 print(f"found {fn_name} action:", action_id)
 
-    action_result = await web._unlock_resource_via_next_action(slug, html)
+    client = web._create_client()
+    try:
+        action_result = await web._unlock_resource_via_next_action(slug, html, client)
+    finally:
+        await client.aclose()
     print("\naction_result:", json.dumps(action_result, ensure_ascii=False)[:2500])
 
     unlock = await hdhive_service.unlock_resource(slug)

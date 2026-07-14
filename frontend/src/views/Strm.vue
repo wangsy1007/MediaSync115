@@ -36,6 +36,11 @@
             <el-switch v-model="config.strm_enabled" />
           </el-form-item>
 
+          <el-form-item label="归档后自动生成">
+            <el-switch v-model="config.strm_auto_after_archive" :disabled="!config.strm_enabled" />
+            <div class="form-hint">归档成功（或跳过重复项）后自动增量生成 STRM，默认开启</div>
+          </el-form-item>
+
           <el-form-item label="播放模式">
             <el-select v-model="config.strm_redirect_mode" style="width: 220px">
               <el-option label="自动（推荐）" value="auto" />
@@ -51,6 +56,45 @@
 
           <el-form-item label="生成后刷新飞牛">
             <el-switch v-model="config.strm_refresh_feiniu_after_generate" />
+          </el-form-item>
+
+          <el-form-item label="定时增量生成">
+            <el-switch v-model="config.strm_schedule_enabled" />
+          </el-form-item>
+
+          <el-form-item label="增量生成间隔">
+            <el-input-number
+              v-model="config.strm_incremental_interval_minutes"
+              :min="30"
+              :step="30"
+              :disabled="!config.strm_schedule_enabled"
+              style="width: 180px"
+            />
+            <span class="input-suffix">分钟</span>
+          </el-form-item>
+
+          <el-form-item label="每周全量校准">
+            <el-switch v-model="config.strm_full_schedule_enabled" />
+          </el-form-item>
+
+          <el-form-item label="全量校准时间">
+            <div class="schedule-time-row">
+              <el-select
+                v-model="config.strm_full_schedule_day"
+                :disabled="!config.strm_full_schedule_enabled"
+                style="width: 110px"
+              >
+                <el-option v-for="item in weekOptions" :key="item.value" :label="item.label" :value="item.value" />
+              </el-select>
+              <el-time-select
+                v-model="config.strm_full_schedule_time"
+                start="00:00"
+                step="00:30"
+                end="23:30"
+                :disabled="!config.strm_full_schedule_enabled"
+                style="width: 130px"
+              />
+            </div>
           </el-form-item>
 
           <el-form-item label="STRM 输出目录" class="grid-span-2">
@@ -80,7 +124,7 @@
 
           <el-form-item label="Emby 代理">
             <el-switch v-model="config.strm_proxy_enabled" />
-            <div class="form-hint">启用后 STRM 文件将指向代理端口，Emby 客户端连接 `:&lt;代理端口&gt;` 即可统一管理播放与 302 跳转。</div>
+            <div class="form-hint">启用后 STRM 文件将指向代理端口。Emby 客户端必须连接 `IP:8099`（不要用 8096），播放时才会 302 到 115 直链，服务器不再中转视频流量。</div>
           </el-form-item>
 
           <el-form-item v-if="config.strm_proxy_enabled" label="代理端口">
@@ -91,7 +135,8 @@
 
         <div class="config-actions">
           <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
-          <el-button type="warning" :loading="generating" @click="generateFiles">立即生成</el-button>
+          <el-button type="primary" :loading="generating && generatingMode === 'incremental'" :disabled="generating && generatingMode !== 'incremental'" @click="generateFiles('incremental')">增量生成</el-button>
+          <el-button type="danger" plain :loading="generating && generatingMode === 'full'" :disabled="generating && generatingMode !== 'full'" @click="confirmFullGenerate">全量校准</el-button>
           <el-button :loading="diagnosing" @click="diagnoseStrm">STRM 诊断</el-button>
         </div>
       </el-form>
@@ -110,6 +155,22 @@
         <div class="status-item">
           <span class="status-label">播放模式</span>
           <span class="status-value">{{ redirectModeLabel }}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">当前生成模式</span>
+          <span class="status-value">{{ generateModeLabel }}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">索引规模</span>
+          <span class="status-value">{{ indexCountsText }}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">最近增量生成</span>
+          <span class="status-value">{{ formatRuntimeTime(lastIncrementalAt) }}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">最近全量校准</span>
+          <span class="status-value">{{ formatRuntimeTime(lastFullAt) }}</span>
         </div>
         <div class="status-item status-item-full">
           <span class="status-label">输出目录</span>
@@ -181,28 +242,44 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { strmApi } from '@/api'
 import { formatBeijingTableCell } from '@/utils/timezone'
 
 const refreshing = ref(false)
 const saving = ref(false)
 const generating = ref(false)
+const generatingMode = ref('')
 const diagnosing = ref(false)
 const mountPaths = ref([])
 const suggestedBaseUrl = ref('')
 const diagnosis = ref(null)
 let pollingTimer = null
+const weekOptions = [
+  { label: '周一', value: 'mon' },
+  { label: '周二', value: 'tue' },
+  { label: '周三', value: 'wed' },
+  { label: '周四', value: 'thu' },
+  { label: '周五', value: 'fri' },
+  { label: '周六', value: 'sat' },
+  { label: '周日', value: 'sun' }
+]
 
 const config = reactive({
   strm_enabled: false,
   strm_output_dir: '',
   strm_base_url: '',
   strm_redirect_mode: 'auto',
+  strm_auto_after_archive: true,
   strm_refresh_emby_after_generate: false,
   strm_refresh_feiniu_after_generate: false,
   strm_proxy_enabled: false,
   strm_proxy_port: 8099,
+  strm_schedule_enabled: false,
+  strm_incremental_interval_minutes: 360,
+  strm_full_schedule_enabled: false,
+  strm_full_schedule_day: 'sun',
+  strm_full_schedule_time: '03:00',
   archive_output_cid: '',
   archive_output_name: ''
 })
@@ -213,7 +290,13 @@ const runtime = reactive({
   last_generate_finished_at: '',
   last_generate_error: '',
   last_generate_summary: null,
-  last_generate_trigger: ''
+  last_generate_trigger: '',
+  current_mode: '',
+  last_generate_mode: '',
+  index_file_count: 0,
+  index_directory_count: 0,
+  last_incremental_at: '',
+  last_full_at: ''
 })
 
 const redirectModeLabel = computed(() => {
@@ -237,6 +320,44 @@ const summaryText = computed(() => {
   if (!summary) return '暂无生成记录'
   return `扫描 ${summary.scanned_video_count || 0} 个视频，写入 ${summary.written_count || 0} 个，未改动 ${summary.unchanged_count || 0} 个，删除 ${summary.removed_count || 0} 个`
 })
+
+const generateModeLabel = computed(() => {
+  const mode = runtime.current_mode
+    || runtime.generate_mode
+    || runtime.last_generate_mode
+    || runtime.last_generate_summary?.mode
+    || runtime.index_stats?.last_mode
+  if (mode === 'incremental') return runtime.generate_running ? '增量生成中' : '增量生成'
+  if (mode === 'full') return runtime.generate_running ? '全量校准中' : '全量校准'
+  return runtime.generate_running ? '生成中' : '-'
+})
+
+const indexCountsText = computed(() => {
+  const files = runtime.index_stats?.file_count
+    ?? runtime.index_file_count
+    ?? runtime.indexed_file_count
+    ?? runtime.index_count
+    ?? 0
+  const directories = runtime.index_stats?.folder_count
+    ?? runtime.index_directory_count
+    ?? runtime.indexed_directory_count
+    ?? runtime.directory_count
+  return directories == null ? `${files} 个文件` : `${files} 个文件，${directories} 个目录`
+})
+
+const lastIncrementalAt = computed(() => (
+  runtime.last_incremental_at
+  || runtime.last_incremental_finished_at
+  || (runtime.last_generate_summary?.mode === 'incremental' ? runtime.last_generate_finished_at : '')
+))
+const lastFullAt = computed(() => (
+  runtime.last_full_at
+  || runtime.last_full_finished_at
+  || (runtime.last_generate_summary?.mode === 'full' ? runtime.last_generate_finished_at : '')
+))
+const formatRuntimeTime = (value) => (
+  value ? formatBeijingTableCell(null, null, value) : '-'
+)
 
 const getModeLabel = (mode) => {
   if (mode === 'redirect') return '302 直链播放'
@@ -266,16 +387,23 @@ const applyConfig = (data) => {
   config.strm_output_dir = data.strm_output_dir || ''
   config.strm_base_url = data.strm_base_url || ''
   config.strm_redirect_mode = data.strm_redirect_mode || 'auto'
+  config.strm_auto_after_archive = data.strm_auto_after_archive !== false
   config.strm_refresh_emby_after_generate = !!data.strm_refresh_emby_after_generate
   config.strm_refresh_feiniu_after_generate = !!data.strm_refresh_feiniu_after_generate
   config.strm_proxy_enabled = !!data.strm_proxy_enabled
   config.strm_proxy_port = Number(data.strm_proxy_port) || 8099
+  config.strm_schedule_enabled = !!data.strm_schedule_enabled
+  config.strm_incremental_interval_minutes = Number(data.strm_incremental_interval_minutes) || 360
+  config.strm_full_schedule_enabled = !!data.strm_full_schedule_enabled
+  config.strm_full_schedule_day = data.strm_full_schedule_day || 'sun'
+  config.strm_full_schedule_time = data.strm_full_schedule_time || '03:00'
   config.archive_output_cid = data.archive_output_cid || ''
   config.archive_output_name = data.archive_output_name || ''
   mountPaths.value = Array.isArray(data.mount_paths) ? data.mount_paths : []
   suggestedBaseUrl.value = data.suggested_base_url || ''
 
   const nextRuntime = data.runtime || {}
+  Object.assign(runtime, nextRuntime)
   runtime.generate_running = !!nextRuntime.generate_running
   runtime.last_generate_started_at = nextRuntime.last_generate_started_at || ''
   runtime.last_generate_finished_at = nextRuntime.last_generate_finished_at || ''
@@ -284,6 +412,9 @@ const applyConfig = (data) => {
   runtime.last_generate_trigger = nextRuntime.last_generate_trigger || ''
 
   generating.value = runtime.generate_running
+  if (runtime.generate_running) {
+    generatingMode.value = nextRuntime.current_mode || nextRuntime.generate_mode || nextRuntime.last_generate_mode || generatingMode.value
+  }
   if (wasGenerating && !runtime.generate_running) {
     if (runtime.last_generate_error) {
       ElMessage.error(runtime.last_generate_error)
@@ -292,6 +423,7 @@ const applyConfig = (data) => {
         `STRM 后台生成完成：写入 ${runtime.last_generate_summary.written_count || 0} 个，删除 ${runtime.last_generate_summary.removed_count || 0} 个`
       )
     }
+    generatingMode.value = ''
   }
 }
 
@@ -318,10 +450,16 @@ const saveConfig = async () => {
       strm_output_dir: config.strm_output_dir,
       strm_base_url: config.strm_base_url,
       strm_redirect_mode: config.strm_redirect_mode,
+      strm_auto_after_archive: config.strm_auto_after_archive,
       strm_refresh_emby_after_generate: config.strm_refresh_emby_after_generate,
       strm_refresh_feiniu_after_generate: config.strm_refresh_feiniu_after_generate,
       strm_proxy_enabled: config.strm_proxy_enabled,
-      strm_proxy_port: config.strm_proxy_port
+      strm_proxy_port: config.strm_proxy_port,
+      strm_schedule_enabled: config.strm_schedule_enabled,
+      strm_incremental_interval_minutes: config.strm_incremental_interval_minutes,
+      strm_full_schedule_enabled: config.strm_full_schedule_enabled,
+      strm_full_schedule_day: config.strm_full_schedule_day,
+      strm_full_schedule_time: config.strm_full_schedule_time
     })
     applyConfig(data)
     ElMessage.success('STRM 配置已保存')
@@ -330,17 +468,37 @@ const saveConfig = async () => {
   }
 }
 
-const generateFiles = async () => {
+const generateFiles = async (mode = 'incremental') => {
   generating.value = true
+  generatingMode.value = mode
   try {
-    const { data } = await strmApi.generate()
-    ElMessage.success(data.started ? 'STRM 后台生成任务已启动' : 'STRM 生成任务已提交')
+    const { data } = await strmApi.generate(mode)
+    const label = mode === 'full' ? '全量校准' : '增量生成'
+    ElMessage.success(data.started ? `STRM ${label}任务已启动` : `STRM ${label}任务已提交`)
     await loadConfig()
     setupPolling()
   } catch (error) {
     generating.value = false
+    generatingMode.value = ''
     throw error
   }
+}
+
+const confirmFullGenerate = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '全量校准会重新扫描整个归档目录并清理失效 STRM，耗时可能较长。确定继续吗？',
+      '确认全量校准',
+      {
+        confirmButtonText: '开始全量校准',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+  } catch {
+    return
+  }
+  await generateFiles('full')
 }
 
 const diagnoseStrm = async () => {
@@ -457,6 +615,16 @@ onBeforeUnmount(stopPolling)
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.5;
+}
+
+.input-suffix {
+  margin-left: 8px;
+  color: var(--el-text-color-secondary);
+}
+
+.schedule-time-row {
+  display: flex;
+  gap: 8px;
 }
 
 .status-grid {

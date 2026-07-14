@@ -28,6 +28,7 @@ from app.services.emby_sync_index_service import emby_sync_index_service
 from app.services.emby_sync_scheduler_service import emby_sync_scheduler_service
 from app.services.feiniu_sync_index_service import feiniu_sync_index_service
 from app.services.feiniu_sync_scheduler_service import feiniu_sync_scheduler_service
+from app.services.strm_scheduler_service import strm_scheduler_service
 from app.services.tg_sync_service import tg_sync_service
 from app.services.tg_service import tg_service
 from app.services.tmdb_service import tmdb_service
@@ -96,6 +97,7 @@ class RuntimeSettingsRequest(BaseModel):
     subscription_enabled: Optional[bool] = None
     subscription_interval_hours: Optional[int] = None
     subscription_resource_priority: Optional[list[str]] = None
+    subscription_resource_enabled: Optional[dict[str, bool]] = None
     subscription_hdhive_auto_unlock_enabled: Optional[bool] = None
     subscription_hdhive_unlock_max_points_per_item: Optional[int] = None
     subscription_hdhive_unlock_budget_points_per_run: Optional[int] = None
@@ -130,6 +132,11 @@ class RuntimeSettingsRequest(BaseModel):
     llm_model: Optional[str] = None
     llm_api_key: Optional[str] = None
     llm_enabled: Optional[bool] = None
+    strm_schedule_enabled: Optional[bool] = None
+    strm_incremental_interval_minutes: Optional[int] = None
+    strm_full_schedule_enabled: Optional[bool] = None
+    strm_full_schedule_day: Optional[str] = None
+    strm_full_schedule_time: Optional[str] = None
 
 
 _SUBSCRIPTION_SCHEDULER_SETTING_KEYS = frozenset(
@@ -137,6 +144,7 @@ _SUBSCRIPTION_SCHEDULER_SETTING_KEYS = frozenset(
         "subscription_enabled",
         "subscription_interval_hours",
         "subscription_resource_priority",
+        "subscription_resource_enabled",
         "subscription_hdhive_auto_unlock_enabled",
         "subscription_hdhive_unlock_max_points_per_item",
         "subscription_hdhive_unlock_budget_points_per_run",
@@ -207,6 +215,15 @@ _TG_BOT_SETTING_KEYS = frozenset(
         "tg_bot_allowed_users",
         "tg_bot_notify_chat_ids",
         "tg_bot_hdhive_auto_unlock",
+    }
+)
+_STRM_SCHEDULER_SETTING_KEYS = frozenset(
+    {
+        "strm_schedule_enabled",
+        "strm_incremental_interval_minutes",
+        "strm_full_schedule_enabled",
+        "strm_full_schedule_day",
+        "strm_full_schedule_time",
     }
 )
 class TgVerifyPasswordRequest(BaseModel):
@@ -286,9 +303,19 @@ async def _validate_priority_source_config(merged_settings: dict) -> None:
     priority = _normalize_subscription_priority(
         merged_settings.get("subscription_resource_priority")
     )
+    enabled_raw = merged_settings.get("subscription_resource_enabled")
+    if isinstance(enabled_raw, dict):
+        enabled_map = {
+            str(key or "").strip().lower(): bool(value)
+            for key, value in enabled_raw.items()
+        }
+    else:
+        enabled_map = runtime_settings_service.get_subscription_resource_enabled()
     errors: list[str] = []
 
     for source in priority:
+        if not enabled_map.get(source, True):
+            continue
         if source == "hdhive":
             base_url = str(merged_settings.get("hdhive_base_url") or "").strip()
             if not base_url:
@@ -657,16 +684,40 @@ async def _perform_tg_check() -> dict[str, Any]:
         }
 
 
-async def _perform_tmdb_check() -> dict[str, Any]:
+def _build_tmdb_check_response(result: dict[str, Any]) -> dict[str, Any]:
+    images_configured = bool(result.get("images_configured"))
+    change_keys_count = int(result.get("change_keys_count") or 0)
+    message = "TMDB API Key 可用"
+    if images_configured:
+        message = f"TMDB API Key 可用（图片配置已加载，变更键 {change_keys_count} 项）"
+    return {
+        "valid": True,
+        "message": message,
+        "configuration": result.get("configuration"),
+        "images_configured": images_configured,
+        "change_keys_count": change_keys_count,
+    }
+
+
+async def _perform_tmdb_check(
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    language: str | None = None,
+    region: str | None = None,
+) -> dict[str, Any]:
     try:
-        result = await tmdb_service.check_connection()
-        return {
-            "valid": True,
-            "message": "TMDB API 配置可用",
-            "configuration": result.get("configuration"),
-            "images_configured": bool(result.get("images_configured")),
-            "change_keys_count": int(result.get("change_keys_count") or 0),
-        }
+        custom_key = str(api_key or "").strip()
+        if custom_key:
+            result = await tmdb_service.check_connection_with_config(
+                api_key=custom_key,
+                base_url=base_url,
+                language=language,
+                region=region,
+            )
+        else:
+            result = await tmdb_service.check_connection()
+        return _build_tmdb_check_response(result)
     except Exception as exc:
         return {
             "valid": False,
@@ -688,6 +739,27 @@ def _validate_update_source_settings(merged_settings: dict[str, Any]) -> None:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+def _validate_strm_schedule_settings(merged_settings: dict[str, Any]) -> None:
+    try:
+        interval = int(merged_settings.get("strm_incremental_interval_minutes", 360))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="STRM 增量生成间隔必须是整数")
+    if interval < 30:
+        raise HTTPException(status_code=400, detail="STRM 增量生成间隔不能少于 30 分钟")
+
+    day = str(merged_settings.get("strm_full_schedule_day") or "sun").lower()
+    if day not in {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}:
+        raise HTTPException(status_code=400, detail="STRM 全量校准星期设置无效")
+
+    run_time = str(merged_settings.get("strm_full_schedule_time") or "03:00")
+    try:
+        hour, minute = (int(part) for part in run_time.split(":", 1))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="STRM 全量校准时间格式应为 HH:MM")
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise HTTPException(status_code=400, detail="STRM 全量校准时间格式应为 HH:MM")
+
+
 @router.put("/runtime")
 async def update_runtime_settings(
     request: RuntimeSettingsRequest,
@@ -701,7 +773,7 @@ async def update_runtime_settings(
         api_key_value = payload.pop("llm_api_key")
         if api_key_value is not None:
             runtime_settings_service.set_llm_api_key(str(api_key_value))
-    if "subscription_resource_priority" in payload:
+    if "subscription_resource_priority" in payload or "subscription_resource_enabled" in payload:
         await _validate_priority_source_config(merged_settings)
     unlock_keys = {
         "subscription_hdhive_auto_unlock_enabled",
@@ -743,6 +815,8 @@ async def update_runtime_settings(
         _validate_feiniu_sync_settings(merged_settings)
     if any(key in payload for key in {"update_source_type", "update_repository"}):
         _validate_update_source_settings(merged_settings)
+    if set(payload) & _STRM_SCHEDULER_SETTING_KEYS:
+        _validate_strm_schedule_settings(merged_settings)
     _invalidate_settings_check_cache()
     try:
         updated = runtime_settings_service.update_bulk(payload)
@@ -768,6 +842,8 @@ async def update_runtime_settings(
             await emby_sync_scheduler_service.ensure_sync_task()
         if payload_keys & _FEINIU_SYNC_SETTING_KEYS:
             await feiniu_sync_scheduler_service.ensure_sync_task()
+        if payload_keys & _STRM_SCHEDULER_SETTING_KEYS:
+            await strm_scheduler_service.ensure_tasks()
         if payload_keys & _TG_BOT_SETTING_KEYS:
             background_tasks.add_task(_restart_tg_bot_background)
     except ValueError as exc:
@@ -893,9 +969,19 @@ async def check_tg_credentials():
 
 
 @router.get("/tmdb/check")
-async def check_tmdb_credentials():
-    """检查 TMDB API 配置是否有效"""
-    return await _perform_tmdb_check()
+async def check_tmdb_credentials(
+    tmdb_api_key: Optional[str] = None,
+    tmdb_base_url: Optional[str] = None,
+    tmdb_language: Optional[str] = None,
+    tmdb_region: Optional[str] = None,
+):
+    """检查 TMDB API Key 是否可用；可传入表单值在保存前验证。"""
+    return await _perform_tmdb_check(
+        api_key=tmdb_api_key,
+        base_url=tmdb_base_url,
+        language=tmdb_language,
+        region=tmdb_region,
+    )
 
 
 @router.get("/pansou/check")

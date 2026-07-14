@@ -22,7 +22,7 @@ const routes = [
     redirect: '/explore/douban'
   },
   {
-    path: '/explore/:source(douban|tmdb)',
+    path: '/explore/:source(douban|tmdb|maoyan)',
     name: 'Search',
     component: () => import('@/views/Search.vue')
   },
@@ -31,7 +31,7 @@ const routes = [
     redirect: to => `/explore/douban/section/${encodeURIComponent(to.params.key)}`
   },
   {
-    path: '/explore/:source(douban|tmdb)/section/:key',
+    path: '/explore/:source(douban|tmdb|maoyan)/section/:key',
     name: 'ExploreSection',
     component: () => import('@/views/ExploreSection.vue')
   },
