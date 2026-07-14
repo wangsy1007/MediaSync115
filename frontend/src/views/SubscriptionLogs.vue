@@ -10,6 +10,7 @@
         </el-select>
         <el-input v-model.trim="filters.runId" placeholder="Run ID" clearable class="filter-item filter-item-runid" />
         <el-input-number v-model="filters.limit" :min="20" :max="1000" :step="20" />
+        <el-switch v-model="autoRefresh" active-text="自动刷新" />
         <el-button type="primary" :loading="loading" @click="fetchStepLogs">刷新</el-button>
       </div>
     </div>
@@ -52,12 +53,16 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { subscriptionApi } from '@/api'
 import { formatBeijingTableCell } from '@/utils/timezone'
 
+const AUTO_REFRESH_MS = 5000
+
 const loading = ref(false)
+const autoRefresh = ref(true)
 const logs = ref([])
+let refreshTimer = null
 const filters = reactive({
   channel: '',
   runId: '',
@@ -128,8 +133,8 @@ const statusTagType = (status) => {
   return 'info'
 }
 
-const fetchStepLogs = async () => {
-  loading.value = true
+const fetchStepLogs = async ({ silent = false } = {}) => {
+  if (!silent) loading.value = true
   try {
     const params = {
       limit: Number(filters.limit || 200)
@@ -139,13 +144,36 @@ const fetchStepLogs = async () => {
     const { data } = await subscriptionApi.listStepLogs(params)
     logs.value = Array.isArray(data) ? data : []
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
 
-onMounted(() => {
-  fetchStepLogs()
+const stopAutoRefresh = () => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+const startAutoRefresh = () => {
+  stopAutoRefresh()
+  if (!autoRefresh.value) return
+  refreshTimer = setInterval(() => {
+    fetchStepLogs({ silent: true })
+  }, AUTO_REFRESH_MS)
+}
+
+watch(autoRefresh, (enabled) => {
+  if (enabled) startAutoRefresh()
+  else stopAutoRefresh()
 })
+
+onMounted(async () => {
+  await fetchStepLogs()
+  startAutoRefresh()
+})
+
+onBeforeUnmount(stopAutoRefresh)
 </script>
 
 <style lang="scss" scoped>

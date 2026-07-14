@@ -4,6 +4,7 @@
       <h2>日志中心</h2>
       <div class="page-actions">
         <el-input-number v-model="filters.limit" :min="20" :max="500" :step="20" />
+        <el-switch v-model="autoRefresh" active-text="自动刷新" />
         <el-button type="primary" :loading="loading" @click="handleSearch">刷新</el-button>
         <el-button type="danger" plain :loading="clearing" @click="handleClearLogs">清空日志</el-button>
       </div>
@@ -66,9 +67,11 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { logsApi } from '@/api'
+
+const AUTO_REFRESH_MS = 5000
 
 const statusLabels = {
   success: '成功',
@@ -80,10 +83,12 @@ const statusLabels = {
 
 const loading = ref(false)
 const clearing = ref(false)
+const autoRefresh = ref(true)
 const logs = ref([])
 const total = ref(0)
 const currentPage = ref(1)
 const expandedIds = ref(new Set())
+let refreshTimer = null
 
 const filters = ref({
   limit: 100
@@ -133,8 +138,8 @@ const toggleExpand = (id) => {
   else set.add(id)
 }
 
-const fetchLogs = async () => {
-  loading.value = true
+const fetchLogs = async ({ silent = false } = {}) => {
+  if (!silent) loading.value = true
   try {
     const params = {
       limit: Number(filters.value.limit || 100),
@@ -146,11 +151,33 @@ const fetchLogs = async () => {
     logs.value = Array.isArray(data?.items) ? data.items : []
     total.value = Number(data?.total || 0)
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '日志获取失败')
+    if (!silent) {
+      ElMessage.error(error.response?.data?.detail || '日志获取失败')
+    }
   } finally {
-    loading.value = false
+    if (!silent) loading.value = false
   }
 }
+
+const stopAutoRefresh = () => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
+const startAutoRefresh = () => {
+  stopAutoRefresh()
+  if (!autoRefresh.value) return
+  refreshTimer = setInterval(() => {
+    fetchLogs({ silent: true })
+  }, AUTO_REFRESH_MS)
+}
+
+watch(autoRefresh, (enabled) => {
+  if (enabled) startAutoRefresh()
+  else stopAutoRefresh()
+})
 
 const handleSearch = async () => {
   currentPage.value = 1
@@ -179,7 +206,12 @@ const handleClearLogs = async () => {
   }
 }
 
-onMounted(fetchLogs)
+onMounted(async () => {
+  await fetchLogs()
+  startAutoRefresh()
+})
+
+onBeforeUnmount(stopAutoRefresh)
 </script>
 
 <style lang="scss" scoped>
