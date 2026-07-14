@@ -483,7 +483,12 @@
                   </el-table-column>
                   <el-table-column label="操作" width="180" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" @click="handleSaveMagnet(row)">
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :loading="Boolean(row?.offlineSaving)"
+                        @click="handleSaveMagnet(row)"
+                      >
                         离线下载
                       </el-button>
                       <el-button size="small" @click="handleCopyMagnet(row.magnet)">
@@ -557,7 +562,12 @@
                   </el-table-column>
                   <el-table-column label="操作" width="160" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" @click="handleSaveMagnet(row)">
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :loading="Boolean(row?.offlineSaving)"
+                        @click="handleSaveMagnet(row)"
+                      >
                         离线
                       </el-button>
                       <el-button size="small" @click="handleCopyMagnet(row.magnet)">
@@ -739,6 +749,12 @@ import {
   loadPan115SelectSaveFiles,
   SelectSaveAbortError,
 } from '@/utils/pan115SelectSave'
+import {
+  notifyDetailOfflineInProgress,
+  notifyDetailOfflineStarted,
+  notifyDetailTransferInProgress,
+  notifyDetailTransferStarted,
+} from '@/utils/detailActionToast'
 
 const _visibleTabs = getVisibleTabs()
 const tabVisible = (key) => isTabVisible(_visibleTabs.value, key)
@@ -1410,10 +1426,16 @@ const checkSubscribed = async () => {
 }
 
 const handleSaveToPan115 = async (item) => {
-  if (saving.value || item?.saving || item?.extracting || checkHdhiveUnlocking(item)) return
+  if (saving.value || item?.saving || item?.extracting || checkHdhiveUnlocking(item)) {
+    notifyDetailTransferInProgress()
+    return
+  }
 
   item.saving = true
   saving.value = true
+  if (item?.source_service !== 'hdhive') {
+    notifyDetailTransferStarted(item)
+  }
   try {
     let defaultFolderId = '0'
     try {
@@ -1714,23 +1736,30 @@ const handleSaveMagnet = async (item) => {
     ElMessage.warning('无效的磁力链接')
     return
   }
-
-  let defaultFolderId = '0'
-  try {
-    const { data } = await pan115Api.getOfflineDefaultFolder()
-    defaultFolderId = data.folder_id || '0'
-  } catch (error) {
-    console.error('Failed to get offline default folder:', error)
+  if (item?.offlineSaving) {
+    notifyDetailOfflineInProgress()
+    return
   }
 
-  const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
-  const folderName = tv.value.name + ' (' + tv.value.first_air_date?.split('-')[0] + ')' + seasonSuffix
-
+  item.offlineSaving = true
+  notifyDetailOfflineStarted(item)
   try {
+    let defaultFolderId = '0'
+    try {
+      const { data } = await pan115Api.getOfflineDefaultFolder()
+      defaultFolderId = data.folder_id || '0'
+    } catch (error) {
+      console.error('Failed to get offline default folder:', error)
+    }
+
+    const seasonSuffix = selectedSeason.value ? ` S${String(selectedSeason.value).padStart(2, '0')}` : ''
+    const folderName = tv.value.name + ' (' + tv.value.first_air_date?.split('-')[0] + ')' + seasonSuffix
     await pan115Api.addOfflineTask(item.magnet, defaultFolderId, folderName)
     ElMessage.success(`已添加到离线下载任务，保存至: ${defaultFolderId === '0' ? '根目录' : folderName}`)
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '添加离线任务失败')
+  } finally {
+    item.offlineSaving = false
   }
 }
 

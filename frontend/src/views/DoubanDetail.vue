@@ -415,7 +415,14 @@
                   </el-table-column>
                   <el-table-column label="操作" width="180" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" @click="saveMagnet(row)">离线</el-button>
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :loading="Boolean(row?.offlineSaving)"
+                        @click="saveMagnet(row)"
+                      >
+                        离线
+                      </el-button>
                       <el-button size="small" @click="copyMagnet(row.magnet)">复制</el-button>
                     </template>
                   </el-table-column>
@@ -470,7 +477,14 @@
                   </el-table-column>
                   <el-table-column label="操作" width="180" align="center" fixed="right">
                     <template #default="{ row }">
-                      <el-button type="primary" size="small" @click="saveMagnet(row)">离线</el-button>
+                      <el-button
+                        type="primary"
+                        size="small"
+                        :loading="Boolean(row?.offlineSaving)"
+                        @click="saveMagnet(row)"
+                      >
+                        离线
+                      </el-button>
                       <el-button size="small" @click="copyMagnet(row.magnet)">复制</el-button>
                     </template>
                   </el-table-column>
@@ -647,6 +661,12 @@ import {
   loadPan115SelectSaveFiles,
   SelectSaveAbortError,
 } from '@/utils/pan115SelectSave'
+import {
+  notifyDetailOfflineInProgress,
+  notifyDetailOfflineStarted,
+  notifyDetailTransferInProgress,
+  notifyDetailTransferStarted,
+} from '@/utils/detailActionToast'
 
 const _visibleTabs = getVisibleTabs()
 const tabVisible = (key) => isTabVisible(_visibleTabs.value, key)
@@ -1316,9 +1336,15 @@ const submitManualMagnet = async () => {
 }
 
 const savePan115Resource = async (row) => {
-  if (row?.saving || row?.extracting || checkHdhiveUnlocking(row)) return
+  if (row?.saving || row?.extracting || checkHdhiveUnlocking(row)) {
+    notifyDetailTransferInProgress()
+    return
+  }
 
   row.saving = true
+  if (row?.source_service !== 'hdhive') {
+    notifyDetailTransferStarted(row)
+  }
   try {
     const folderName = detail.value?.title || '豆瓣资源'
 
@@ -1485,6 +1511,13 @@ const saveMagnet = async (row) => {
     ElMessage.warning('磁链为空')
     return
   }
+  if (row?.offlineSaving) {
+    notifyDetailOfflineInProgress()
+    return
+  }
+
+  row.offlineSaving = true
+  notifyDetailOfflineStarted(row)
   try {
     const folderId = await getDefaultOfflineFolderId()
     const title = detail.value?.title || '豆瓣资源'
@@ -1492,6 +1525,8 @@ const saveMagnet = async (row) => {
     ElMessage.success('已提交离线任务')
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || error.message || '离线失败')
+  } finally {
+    row.offlineSaving = false
   }
 }
 
