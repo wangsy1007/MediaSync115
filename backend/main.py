@@ -18,6 +18,7 @@ from app.api import (
     license as license_api,
     logs as logs_api,
     pan115,
+    pan115_play as pan115_play_api,
     pansou,
     quark,
     scheduler,
@@ -270,6 +271,8 @@ UNAUTHENTICATED_API_PATHS = {
 }
 UNAUTHENTICATED_API_PREFIXES = (
     "/api/strm/play/",
+    "/api/115/url/",
+    "/api/proxy-115",
     "/api/emby/stream-redirect/",
     "/api/emby/playbackinfo/",
 )
@@ -441,6 +444,7 @@ app.include_router(watchlists.router, prefix="/api")
 app.include_router(person_follows.router, prefix="/api")
 app.include_router(person_follows.person_follow_router, prefix="/api")
 app.include_router(pan115.router, prefix="/api")
+app.include_router(pan115_play_api.router, prefix="/api")
 app.include_router(quark.router, prefix="/api")
 app.include_router(pansou.router, prefix="/api")
 app.include_router(runtime_settings_api.router, prefix="/api")

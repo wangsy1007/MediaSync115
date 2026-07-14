@@ -186,6 +186,7 @@ class StrmService:
             return "127.0.0.1"
 
     def build_play_url(self, pick_code: str, filename: str = "") -> str:
+        """生成 STRM 播放地址（对齐 qmediasync: /api/115/url/video.{ext}?pickcode=）。"""
         base_url = runtime_settings_service.get_strm_base_url()
         if not base_url:
             raise ValueError("STRM 播放地址未配置")
@@ -193,14 +194,28 @@ class StrmService:
         if runtime_settings_service.get_strm_proxy_enabled():
             proxy_port = runtime_settings_service.get_strm_proxy_port()
             from urllib.parse import urlparse
+
             parsed = urlparse(base_url)
             base_url = f"{parsed.scheme}://{parsed.hostname}:{proxy_port}"
-        payload: dict[str, str] = {"pc": str(pick_code or "").strip()}
+        base_url = str(base_url).rstrip("/")
+        pc = str(pick_code or "").strip()
+        if not pc:
+            raise ValueError("pickcode 为空")
         source_name = str(filename or "").strip()
+        ext = ".mp4"
         if source_name:
-            payload["fn"] = source_name
-        token = self._encode_token(payload)
-        return f"{base_url}/api/strm/play/{token}"
+            lower = source_name.lower()
+            if lower.endswith(".strm"):
+                lower = lower[: -len(".strm")]
+            idx = lower.rfind(".")
+            if idx >= 0:
+                candidate = lower[idx:]
+                body = candidate[1:]
+                if body and len(body) <= 8 and body.isalnum():
+                    ext = candidate
+        from urllib.parse import urlencode
+
+        return f"{base_url}/api/115/url/video{ext}?{urlencode({'pickcode': pc})}"
 
     async def start_generate_library(
         self,

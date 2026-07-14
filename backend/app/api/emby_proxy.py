@@ -1,9 +1,8 @@
-"""Emby 代理端口上的 STRM 直链跳转。
+"""Emby 代理端口上的 STRM 直链跳转（对齐 qmediasync emby302）。
 
-对齐 MediaWarp 的成功路径：
-1. 改写 PlaybackInfo：强制 DirectPlay，DirectStreamUrl 仍指向 /videos/{id}/stream
-2. 拦截 /videos/*/stream：按客户端 UA 解析 115 直链，单次 302（避免双重跳转）
-3. HosPlayer 等不跟随 302 的客户端回退 Emby 中转
+1. 改写 PlaybackInfo：强制 DirectPlay，DirectStreamUrl=/Videos/{id}/stream?Static=true
+2. 拦截 /Videos/*/stream：跟随 STRM/115/url 重定向拿到最终 CDN，307 给客户端
+3. 最终若为 /api/proxy-115（本地代理）则回源 Emby
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse, parse_qs
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -29,15 +28,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/emby", tags=["Emby代理"])
 
-# ISO 原盘会发起大量小 Range；每次都查 Emby/换链会严重拖慢首播与寻址。
 _PLAY_CONTEXT_CACHE_TTL_SECONDS = 300.0
 _PLAY_CONTEXT_CACHE_MAX_ITEMS = 256
 _play_context_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _play_context_cache_lock = asyncio.Lock()
-_CDN_REDIRECT_CACHE_TTL_SECONDS = 120.0
-_CDN_REDIRECT_CACHE_MAX_ITEMS = 256
-_cdn_redirect_cache: dict[str, tuple[float, str, str]] = {}
-_cdn_redirect_cache_lock = asyncio.Lock()
+_FINAL_LINK_CACHE_TTL_SECONDS = 600.0  # qmediasync: 10 分钟
+_FINAL_LINK_CACHE_MAX_ITEMS = 256
+_final_link_cache: dict[str, tuple[float, str]] = {}
+_final_link_cache_lock = asyncio.Lock()
 
 _EMBY_PATH_PREFIXES = (
     "/media/strm",
@@ -46,16 +44,8 @@ _EMBY_PATH_PREFIXES = (
     "/app/strm",
 )
 
-# 直链已按客户端 UA 解析（115 CDN 绑定 UA），绝大多数播放器都能跟随 302。
-# HosPlayer 对 ISO 的 302+Range 兼容差，单独走直链/代理策略。
-_STREAM_REDIRECT_BLOCKLIST_UA = re.compile(
-    r"$^",
-)
-_HOSPLAYER_UA = re.compile(r"HosPlayer", re.IGNORECASE)
-_DISC_IMAGE_CONTAINERS = frozenset({"iso", "img"})
+_STREAM_REDIRECT_BLOCKLIST_UA = re.compile(r"$^")
 
-# 已知的视频容器扩展名（用于从真实源文件名回填 Container 信息，
-# 让 VidHub/SenPlayer 等客户端正确识别 ISO 原盘并以磁盘镜像方式播放）。
 _KNOWN_VIDEO_CONTAINERS = frozenset(
     {
         "mkv",
@@ -146,51 +136,52 @@ def _is_strm_play_url(url: str) -> bool:
         parsed = urlparse(url)
     except Exception:
         return False
-    return "/api/strm/play/" in (parsed.path or "")
+    path = parsed.path or ""
+    return (
+        "/api/strm/play/" in path
+        or "/api/115/url/" in path
+        or path.endswith("/api/proxy-115")
+        or "/api/proxy-115" in path
+    )
+
+
+def _is_local_proxy_url(url: str) -> bool:
+    """最终链仍是本站网关/proxy-115 时，对齐 qmediasync 回源处理。"""
+    text = str(url or "")
+    return "/api/proxy-115" in text or "/api/strm/play/" in text
+
+
+def _is_remote_http(url: str) -> bool:
+    text = str(url or "").strip()
+    return text.startswith("http://") or text.startswith("https://")
 
 
 def extract_filename_from_play_token(play_url: str) -> str:
-    """从 STRM 播放令牌中读取源文件名（若生成时已写入）。"""
-    if not _is_strm_play_url(play_url):
-        return ""
+    """从旧 STRM token 或 /115/url/video.ext 路径读取扩展名线索。"""
     try:
-        from app.services.strm_service import strm_service
+        parsed = urlparse(play_url)
+        path = parsed.path or ""
+        if "/api/strm/play/" in path:
+            from app.services.strm_service import strm_service
 
-        token = strm_service._extract_token_from_url(play_url)
-        payload = strm_service._decode_token(token)
-        return str(payload.get("fn") or "").strip()
+            token = strm_service._extract_token_from_url(play_url)
+            payload = strm_service._decode_token(token)
+            return str(payload.get("fn") or "").strip()
+        # /api/115/url/video.iso → video.iso
+        name = path.rsplit("/", 1)[-1]
+        if name.startswith("video.") and "." in name:
+            return name
     except Exception:
         return ""
-
-
-def _collect_source_name_candidates(
-    source: dict[str, Any] | None,
-    *,
-    item_path: str = "",
-    play_url: str = "",
-) -> list[str]:
-    names: list[str] = []
-    for value in (
-        str((source or {}).get("Path") or "").strip(),
-        str(item_path or "").strip(),
-        extract_filename_from_play_token(play_url),
-    ):
-        if value and value not in names:
-            names.append(value)
-    local = _map_emby_strm_path(str((source or {}).get("Path") or item_path or ""))
-    if local is not None:
-        local_name = local.name
-        if local_name and local_name not in names:
-            names.append(local_name)
-    return names
+    return ""
 
 
 async def _lookup_index_source_filename(play_url: str) -> str:
-    """通过 STRM 索引库反查源文件名（旧令牌不含 fn 时使用）。"""
     if not _is_strm_play_url(play_url):
         return ""
     try:
         from pathlib import PurePosixPath
+        from urllib.parse import parse_qs
 
         from sqlalchemy import select
 
@@ -198,9 +189,14 @@ async def _lookup_index_source_filename(play_url: str) -> str:
         from app.models.strm_index import StrmFileIndex
         from app.services.strm_service import strm_service
 
-        token = strm_service._extract_token_from_url(play_url)
-        payload = strm_service._decode_token(token)
-        pick_code = str(payload.get("pc") or "").strip()
+        pick_code = ""
+        parsed = urlparse(play_url)
+        if "/api/115/url/" in (parsed.path or ""):
+            pick_code = str((parse_qs(parsed.query).get("pickcode") or [""])[0]).strip()
+        elif "/api/strm/play/" in (parsed.path or ""):
+            token = strm_service._extract_token_from_url(play_url)
+            payload = strm_service._decode_token(token)
+            pick_code = str(payload.get("pc") or "").strip()
         if not pick_code:
             return ""
         async with async_session_maker() as session:
@@ -225,10 +221,6 @@ def resolve_source_container(
     resolved_filename: str = "",
     play_url: str = "",
 ) -> str:
-    """确定 STRM 源的真实容器格式（如 iso/mkv），供客户端识别。
-
-    优先级：真实源文件名扩展名 > 令牌 fn > Emby 探测到的 Container。
-    """
     for name in (
         str(resolved_filename or ""),
         extract_filename_from_play_token(play_url),
@@ -257,19 +249,6 @@ async def resolve_source_container_async(
 
 def _should_skip_stream_redirect(user_agent: str) -> bool:
     return bool(_STREAM_REDIRECT_BLOCKLIST_UA.search(user_agent or ""))
-
-
-def _is_hosplayer(user_agent: str) -> bool:
-    return bool(_HOSPLAYER_UA.search(user_agent or ""))
-
-
-def _is_disc_image_container(container: str) -> bool:
-    return str(container or "").strip().lower() in _DISC_IMAGE_CONTAINERS
-
-
-def _should_force_proxy_stream(user_agent: str, container: str) -> bool:
-    """HosPlayer 播放 ISO 时跟随 302+Range 表现差（约 5MB/s 卡顿）。"""
-    return _is_hosplayer(user_agent) and _is_disc_image_container(container)
 
 
 def _play_context_cache_key(item_id: str, media_source_id: str | None) -> str:
@@ -315,7 +294,6 @@ async def _set_cached_play_context(
 async def resolve_stream_play_context_cached(
     item_id: str, *, media_source_id: str | None = None
 ) -> dict[str, Any]:
-    """带缓存的播放上下文解析，避免 ISO 频繁 Range 反复打 Emby。"""
     cached = await _get_cached_play_context(
         item_id, media_source_id=media_source_id
     )
@@ -330,49 +308,7 @@ async def resolve_stream_play_context_cached(
     return context
 
 
-def _cdn_redirect_cache_key(play_url: str, user_agent: str) -> str:
-    return f"{play_url}\0{user_agent or ''}"
-
-
-async def _get_cached_cdn_redirect(
-    play_url: str, *, user_agent: str
-) -> tuple[str, str] | None:
-    key = _cdn_redirect_cache_key(play_url, user_agent)
-    now = time.monotonic()
-    async with _cdn_redirect_cache_lock:
-        cached = _cdn_redirect_cache.get(key)
-        if not cached:
-            return None
-        expires_at, final_url, play_mode = cached
-        if expires_at <= now:
-            _cdn_redirect_cache.pop(key, None)
-            return None
-        return final_url, play_mode
-
-
-async def _set_cached_cdn_redirect(
-    play_url: str, *, user_agent: str, final_url: str, play_mode: str
-) -> None:
-    if not final_url or _is_strm_play_url(final_url):
-        # 需要代理的链接不缓存为 302 目标，避免把网关地址当成 CDN。
-        return
-    key = _cdn_redirect_cache_key(play_url, user_agent)
-    now = time.monotonic()
-    async with _cdn_redirect_cache_lock:
-        if len(_cdn_redirect_cache) >= _CDN_REDIRECT_CACHE_MAX_ITEMS:
-            oldest_key = min(_cdn_redirect_cache.items(), key=lambda item: item[1][0])[
-                0
-            ]
-            _cdn_redirect_cache.pop(oldest_key, None)
-        _cdn_redirect_cache[key] = (
-            now + _CDN_REDIRECT_CACHE_TTL_SECONDS,
-            final_url,
-            play_mode,
-        )
-
-
 def _extract_api_pairs_from_direct_url(direct_url: str) -> dict[str, str]:
-    """从原始 DirectStreamUrl 里保留 api_key / X-Emby-Token 等鉴权参数。"""
     keep = {}
     try:
         query = dict(parse_qsl(urlparse(str(direct_url or "")).query, keep_blank_values=True))
@@ -393,11 +329,7 @@ def build_emby_style_direct_stream_url(
     extra_query: dict[str, str] | None = None,
     container: str = "",
 ) -> str:
-    """MediaWarp 风格：让客户端继续请求 /videos/{id}/stream，再由代理 302。
-
-    container 非空时生成 /Videos/{id}/stream.{container}，让客户端从 URL
-    扩展名感知真实格式（对 ISO 原盘尤其重要）。
-    """
+    """qmediasync 风格：/Videos/{id}/stream?MediaSourceId=...&Static=true（不加容器后缀）。"""
     params: dict[str, str] = {
         "MediaSourceId": media_source_id,
         "Static": "true",
@@ -407,14 +339,12 @@ def build_emby_style_direct_stream_url(
         for key, value in extra_query.items():
             if value:
                 params[str(key)] = str(value)
-    ext = str(container or "").strip().lstrip(".").lower()
-    suffix = f".{ext}" if ext else ""
-    # MediaWarp / Emby 客户端习惯大写 Videos
-    return f"/Videos/{item_id}/stream{suffix}?{urlencode(params)}"
+    # 对齐 qmediasync：不加 .iso / .mkv 后缀
+    _ = container  # 保留参数兼容旧调用，但不写入 URL 扩展名
+    return f"/Videos/{item_id}/stream?{urlencode(params)}"
 
 
 def _extract_container_from_filename(filename: str) -> str:
-    """从真实源文件名提取容器扩展名（不含点）。"""
     name = str(filename or "").strip()
     if not name:
         return ""
@@ -487,7 +417,7 @@ def extract_strm_play_url_from_source(
         if not candidate:
             continue
         if candidate.startswith("http://") or candidate.startswith("https://"):
-            if _is_strm_play_url(candidate):
+            if _is_strm_play_url(candidate) or _is_remote_http(candidate):
                 return candidate
             continue
         play_url = resolve_local_strm_play_url(candidate)
@@ -499,7 +429,6 @@ def extract_strm_play_url_from_source(
 async def resolve_stream_play_context(
     item_id: str, *, media_source_id: str | None = None
 ) -> dict[str, Any]:
-    """解析 Emby 条目播放上下文（含片名等元数据）。"""
     normalized_id = _normalize_item_id(item_id)
     if not normalized_id:
         return {
@@ -518,9 +447,7 @@ async def resolve_stream_play_context(
     )
     container = ""
     if play_url:
-        container = await resolve_source_container_async(
-            source, play_url=play_url
-        )
+        container = await resolve_source_container_async(source, play_url=play_url)
     return {
         "play_url": play_url,
         "item_id": normalized_id,
@@ -534,7 +461,6 @@ async def resolve_stream_play_context(
 async def resolve_stream_redirect_url(
     item_id: str, *, media_source_id: str | None = None
 ) -> str:
-    """解析 Emby 条目对应的 STRM 播放地址；非 STRM 返回空字符串。"""
     context = await resolve_stream_play_context(
         item_id, media_source_id=media_source_id
     )
@@ -547,9 +473,8 @@ def _apply_direct_play_rewrite(
     item_id: str,
     fallback_api_key: str = "",
     container: str = "",
-    direct_stream_url: str = "",
 ) -> None:
-    """把单个 MediaSource 改写成强制 DirectPlay + 代理 302 的形式。"""
+    """对齐 qmediasync：强制 DirectPlay，DirectStreamUrl 指向 /Videos/.../stream。"""
     media_source_id = str(source.get("Id") or f"mediasource_{item_id}").strip()
     original_direct = str(source.get("DirectStreamUrl") or "")
     extra = {}
@@ -558,9 +483,6 @@ def _apply_direct_play_rewrite(
     ):
         extra["api_key"] = fallback_api_key
 
-    # 对齐 MediaWarp：不改 Path（避免 Emby/客户端用 Lavf 去探网关），
-    # 默认 DirectStreamUrl 为 /Videos/{id}/stream.{container}，由代理再 302。
-    # ISO 可直接写入 115 CDN 绝对地址，避免 HosPlayer 等对每次 Range 跟 302。
     source["SupportsDirectPlay"] = True
     source["SupportsDirectStream"] = True
     source["SupportsTranscoding"] = False
@@ -569,40 +491,14 @@ def _apply_direct_play_rewrite(
     source["TranscodingContainer"] = None
     if container:
         source["Container"] = container
-    absolute = str(direct_stream_url or "").strip()
-    if absolute.startswith("http://") or absolute.startswith("https://"):
-        source["Protocol"] = "Http"
-        source["DirectStreamUrl"] = absolute
-    else:
-        source["DirectStreamUrl"] = build_emby_style_direct_stream_url(
-            item_id=str(item_id),
-            media_source_id=media_source_id,
-            original_direct_url=original_direct,
-            extra_query=extra,
-            container=container,
-        )
+    source["DirectStreamUrl"] = build_emby_style_direct_stream_url(
+        item_id=str(item_id),
+        media_source_id=media_source_id,
+        original_direct_url=original_direct,
+        extra_query=extra,
+        container=container,
+    )
     source.pop("TranscodingInfo", None)
-
-
-async def _resolve_cdn_direct_stream_url(
-    play_url: str, *, user_agent: str
-) -> str:
-    """解析可直接写入 PlaybackInfo 的 115 CDN 绝对地址。"""
-    if not play_url:
-        return ""
-    try:
-        final_url, play_mode = await _resolve_final_redirect_info(
-            play_url, user_agent=user_agent
-        )
-    except Exception:
-        logger.debug("resolve CDN direct url failed", exc_info=True)
-        return ""
-    if play_mode != "redirect":
-        return ""
-    text = str(final_url or "").strip()
-    if text.startswith("http://") or text.startswith("https://"):
-        return text
-    return ""
 
 
 def rewrite_playback_info_for_strm(
@@ -612,7 +508,6 @@ def rewrite_playback_info_for_strm(
     fallback_api_key: str = "",
     item_path: str = "",
 ) -> bool:
-    """强制 STRM DirectPlay（同步版，容器信息仅取自令牌 fn / Emby 探测）。"""
     sources = payload.get("MediaSources")
     if not isinstance(sources, list):
         return False
@@ -621,9 +516,7 @@ def rewrite_playback_info_for_strm(
     for source in sources:
         if not isinstance(source, dict):
             continue
-        play_url = extract_strm_play_url_from_source(
-            source, item_path=item_path
-        )
+        play_url = extract_strm_play_url_from_source(source, item_path=item_path)
         if not play_url:
             continue
         container = resolve_source_container(source, play_url=play_url)
@@ -634,7 +527,6 @@ def rewrite_playback_info_for_strm(
             container=container,
         )
         changed = True
-
     return changed
 
 
@@ -646,7 +538,7 @@ async def rewrite_playback_info_for_strm_async(
     item_path: str = "",
     user_agent: str = "",
 ) -> bool:
-    """异步版 PlaybackInfo 改写，可回查 STRM 索引库确定真实容器（ISO 等）。"""
+    _ = user_agent
     sources = payload.get("MediaSources")
     if not isinstance(sources, list):
         return False
@@ -655,36 +547,17 @@ async def rewrite_playback_info_for_strm_async(
     for source in sources:
         if not isinstance(source, dict):
             continue
-        play_url = extract_strm_play_url_from_source(
-            source, item_path=item_path
-        )
+        play_url = extract_strm_play_url_from_source(source, item_path=item_path)
         if not play_url:
             continue
-        container = await resolve_source_container_async(
-            source, play_url=play_url
-        )
-        direct_stream_url = ""
-        # ISO/IMG：PlaybackInfo 直接下发 CDN 绝对地址，客户端 Range 不再经 Emby 302。
-        # 对 HosPlayer 尤其关键，可显著提升吞吐、减少缓冲。
-        if _is_disc_image_container(container):
-            direct_stream_url = await _resolve_cdn_direct_stream_url(
-                play_url, user_agent=user_agent
-            )
-            if direct_stream_url:
-                logger.info(
-                    "ISO PlaybackInfo uses absolute CDN url item=%s ua=%s",
-                    item_id,
-                    (user_agent or "")[:80],
-                )
+        container = await resolve_source_container_async(source, play_url=play_url)
         _apply_direct_play_rewrite(
             source,
             item_id=str(item_id),
             fallback_api_key=fallback_api_key,
             container=container,
-            direct_stream_url=direct_stream_url,
         )
         changed = True
-
     return changed
 
 
@@ -704,39 +577,66 @@ def _filter_request_headers(request: Request) -> dict[str, str]:
     return headers
 
 
-async def _resolve_final_redirect_url(play_url: str, *, user_agent: str) -> str:
-    """把 STRM 网关地址解析成最终 115 CDN，避免客户端需要跟两次 302。"""
-    from app.services.strm_service import strm_service
+def _with_force_query(url: str) -> str:
+    """对齐 qmediasync：对 /115/url 或 /115/newurl 追加 force=1。"""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    path = parsed.path or ""
+    if "/api/115/url/" not in path and "/115/url" not in path and "/115/newurl" not in path:
+        # 旧 token 播放网关：直接解析，无需 force
+        return url
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    query["force"] = ["1"]
+    flat = [(k, v) for k, values in query.items() for v in values]
+    return urlunparse(parsed._replace(query=urlencode(flat)))
 
-    if not _is_strm_play_url(play_url):
-        return play_url
 
-    token = strm_service._extract_token_from_url(play_url)
-    info = await strm_service.resolve_download_url_with_ua(
-        token, user_agent=user_agent
-    )
-    if info.get("mode") == "proxy":
-        # 需要 Cookie 的链接无法裸 302，退回网关由服务端代理
-        return play_url
-    return str(info.get("download_url") or play_url)
+async def get_final_redirect_link(
+    origin_link: str, request_headers: dict[str, str] | None = None
+) -> str:
+    """服务端跟随重定向拿到最终 CDN（对齐 qmediasync getFinalRedirectLink）。"""
+    origin = str(origin_link or "").strip()
+    if not origin:
+        return origin
 
+    follow_url = _with_force_query(origin)
+    cache_key = follow_url
+    now = time.monotonic()
+    async with _final_link_cache_lock:
+        cached = _final_link_cache.get(cache_key)
+        if cached and cached[0] > now:
+            return cached[1]
 
-async def _resolve_final_redirect_info(
-    play_url: str, *, user_agent: str
-) -> tuple[str, str]:
-    """返回 (最终跳转地址, play_mode)。"""
-    cached = await _get_cached_cdn_redirect(play_url, user_agent=user_agent)
-    if cached is not None:
-        return cached
-    final_url = await _resolve_final_redirect_url(play_url, user_agent=user_agent)
-    play_mode = "proxy" if _is_strm_play_url(final_url) else "redirect"
-    await _set_cached_cdn_redirect(
-        play_url,
-        user_agent=user_agent,
-        final_url=final_url,
-        play_mode=play_mode,
-    )
-    return final_url, play_mode
+    headers = {}
+    for key, value in (request_headers or {}).items():
+        if key.lower() in {"user-agent", "range", "if-range", "cookie", "referer"}:
+            headers[key] = value
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
+            # 用 HEAD；部分 CDN 不支持 HEAD 时回退 GET Range
+            try:
+                response = await client.head(follow_url, headers=headers)
+                final_url = str(response.url)
+                if response.status_code >= 400 or not final_url:
+                    raise httpx.HTTPError(f"HEAD status={response.status_code}")
+            except Exception:
+                range_headers = dict(headers)
+                range_headers["Range"] = "bytes=0-0"
+                response = await client.get(follow_url, headers=range_headers)
+                final_url = str(response.url)
+    except Exception as exc:
+        logger.warning("跟随重定向失败，回退原始链接: %s err=%s", origin[:120], exc)
+        return origin
+
+    async with _final_link_cache_lock:
+        if len(_final_link_cache) >= _FINAL_LINK_CACHE_MAX_ITEMS:
+            oldest_key = min(_final_link_cache.items(), key=lambda item: item[1][0])[0]
+            _final_link_cache.pop(oldest_key, None)
+        _final_link_cache[cache_key] = (now + _FINAL_LINK_CACHE_TTL_SECONDS, final_url)
+    return final_url
 
 
 async def _log_playback_start(
@@ -773,14 +673,9 @@ async def emby_stream_redirect(
     MediaSourceId: str | None = Query(default=None),
     mediaSourceId: str | None = Query(default=None),
 ) -> Response:
-    """将 Emby stream 请求 302 到 115 直链（单跳）。"""
+    """跟随 STRM/115/url 重定向，307 到最终 115 CDN（对齐 qmediasync）。"""
     ua = request.headers.get("user-agent") or ""
     if _should_skip_stream_redirect(ua):
-        logger.info(
-            "Skip stream 302 for UA=%s item=%s, fallback to Emby",
-            ua[:80],
-            item_id,
-        )
         raise HTTPException(status_code=404, detail="ua_fallback")
 
     media_source_id = MediaSourceId or mediaSourceId
@@ -792,37 +687,22 @@ async def emby_stream_redirect(
         if not play_url:
             raise HTTPException(status_code=404, detail="not_strm")
 
-        container = str(context.get("container") or "").strip().lower()
-        if _should_force_proxy_stream(ua, container):
-            from app.services.strm_service import strm_service
-
-            token = strm_service._extract_token_from_url(play_url)
-            if request.method == "GET":
-                await _log_playback_start(
-                    request=request,
-                    context=context,
-                    play_mode="proxy",
-                    path=request.url.path,
+        # 远程 Path / STRM HTTP：服务端跟随拿到最终链
+        if _is_remote_http(play_url):
+            final_url = await get_final_redirect_link(
+                play_url, _filter_request_headers(request)
+            )
+            if _is_local_proxy_url(final_url):
+                # 对齐 qmediasync：含 proxy-115 → 回源 Emby（走 NAS）
+                logger.info(
+                    "Emby stream fallback origin (local proxy) item=%s url=%s",
+                    item_id,
+                    final_url[:120],
                 )
-            logger.info(
-                "Emby stream proxy for HosPlayer disc item=%s container=%s ua=%s",
-                item_id,
-                container,
-                ua[:80],
-            )
-            return await strm_service.resolve_play_response_with_headers(
-                token=token,
-                method=request.method,
-                request_headers=_filter_request_headers(request),
-                client_ip=get_client_ip(request),
-                request_path=request.url.path,
-                force_proxy=True,
-            )
-
-        # 其余客户端：缓存后的单跳 302，客户端直连 115 CDN。
-        final_url, play_mode = await _resolve_final_redirect_info(
-            play_url, user_agent=ua
-        )
+                raise HTTPException(status_code=404, detail="local_proxy_origin")
+            play_mode = "redirect"
+        else:
+            raise HTTPException(status_code=404, detail="not_remote_strm")
     except HTTPException:
         raise
     except Exception as exc:
@@ -837,19 +717,14 @@ async def emby_stream_redirect(
             path=request.url.path,
         )
 
-    container = str(context.get("container") or "").strip().lower()
-    # ISO 寻址频繁，降级为 debug，避免同步写日志拖慢 302。
-    log_fn = logger.debug if container in {"iso", "img"} else logger.info
-    log_fn(
-        "Emby stream redirect item=%s container=%s mode=%s -> %s ua=%s",
+    logger.info(
+        "Emby stream 307 item=%s mode=%s -> %s ua=%s",
         item_id,
-        container or "-",
         play_mode,
         final_url[:160],
         ua[:80],
     )
-    # 与 MediaWarp / 既有 MKV 路径保持一致，使用 302。
-    return RedirectResponse(url=final_url, status_code=302)
+    return RedirectResponse(url=final_url, status_code=307)
 
 
 @router.api_route(
@@ -857,7 +732,7 @@ async def emby_stream_redirect(
     methods=["GET", "POST"],
 )
 async def emby_playbackinfo_proxy(item_id: str, request: Request) -> Response:
-    """代理 PlaybackInfo，并对 STRM 强制 DirectPlay + Emby 风格 DirectStreamUrl。"""
+    """代理 PlaybackInfo，并对 STRM 强制 DirectPlay + qmediasync 风格 DirectStreamUrl。"""
     base_url = runtime_settings_service.get_emby_url().rstrip("/")
     api_key = runtime_settings_service.get_emby_api_key()
     if not base_url or not api_key:
@@ -937,7 +812,7 @@ async def emby_playbackinfo_proxy(item_id: str, request: Request) -> Response:
         )
         if changed:
             logger.info(
-                "Rewrote PlaybackInfo for item=%s to MediaWarp-style DirectStreamUrl",
+                "Rewrote PlaybackInfo for item=%s to qmediasync-style DirectStreamUrl",
                 item_id,
             )
         return JSONResponse(content=payload, status_code=response.status_code)
