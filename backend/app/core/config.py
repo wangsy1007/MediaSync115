@@ -4,7 +4,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     APP_NAME: str = "MediaSync115"
-    APP_VERSION: str = "1.3.0"
+    APP_VERSION: str = "1.3.1"
     DEBUG: bool = True
     TZ: str = "Asia/Shanghai"
 
