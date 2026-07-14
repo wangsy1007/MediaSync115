@@ -25,7 +25,7 @@ class StrmSchedulerService:
         hour, minute = (int(part) for part in run_time.split(":", 1))
         await self._ensure_task(
             job_key="system.generate_strm_full",
-            display_name="STRM 每周全量校准",
+            display_name="STRM 每周全量生成",
             trigger_type="cron",
             interval_seconds=None,
             cron_expr=(

@@ -661,6 +661,17 @@ class StrmService:
         await self._mark_state_started(output_cid, output_dir, requested_mode)
         if not existing_files:
             mode = "full"
+        elif mode == "incremental" and not scopes:
+            # 本地 STRM 被清空但索引还在时，增量可能因 root snapshot 未变而不补写，强制全量重建
+            local_strm_count = await asyncio.to_thread(
+                self._count_local_strm_files, output_dir
+            )
+            if local_strm_count == 0:
+                logger.info(
+                    "STRM 输出目录无 .strm 文件但索引仍有 %s 条，自动升级为全量生成",
+                    len(existing_files),
+                )
+                mode = "full"
 
         config_only = (
             mode == "incremental"
@@ -2032,6 +2043,17 @@ class StrmService:
         cls, manifest_path: Path, files: set[str], output_cid: str
     ) -> None:
         await asyncio.to_thread(cls._save_manifest, manifest_path, files, output_cid)
+
+    @staticmethod
+    def _count_local_strm_files(output_dir: Path) -> int:
+        """统计输出目录下现有 .strm 文件数量（不含临时文件）。"""
+        if not output_dir.exists() or not output_dir.is_dir():
+            return 0
+        count = 0
+        for path in output_dir.rglob("*.strm"):
+            if path.is_file() and not path.name.startswith("."):
+                count += 1
+        return count
 
     @staticmethod
     def _cleanup_empty_dirs(root_dir: Path) -> None:

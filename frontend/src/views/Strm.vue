@@ -73,11 +73,11 @@
             <span class="input-suffix">分钟</span>
           </el-form-item>
 
-          <el-form-item label="每周全量校准">
+          <el-form-item label="每周全量生成">
             <el-switch v-model="config.strm_full_schedule_enabled" />
           </el-form-item>
 
-          <el-form-item label="全量校准时间">
+          <el-form-item label="全量生成时间">
             <div class="schedule-time-row">
               <el-select
                 v-model="config.strm_full_schedule_day"
@@ -119,7 +119,7 @@
 
           <el-form-item label="播放根地址" class="grid-span-2">
             <el-input v-model="config.strm_base_url" :placeholder="suggestedBaseUrl || '例如：http://192.168.1.100:9008'" />
-            <div class="form-hint">STRM 播放地址使用端口 `9008`。系统会自动拼出 `/api/strm/play/&lt;token&gt;`。</div>
+            <div class="form-hint">STRM 播放地址使用端口 `9008`（或代理端口）。生成格式为 `/api/115/url/video.扩展名?pickcode=...`（旧 token 链接仍兼容）。</div>
           </el-form-item>
 
           <el-form-item label="Emby 代理">
@@ -136,8 +136,11 @@
         <div class="config-actions">
           <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
           <el-button type="primary" :loading="generating && generatingMode === 'incremental'" :disabled="generating && generatingMode !== 'incremental'" @click="generateFiles('incremental')">增量生成</el-button>
-          <el-button type="danger" plain :loading="generating && generatingMode === 'full'" :disabled="generating && generatingMode !== 'full'" @click="confirmFullGenerate">全量校准</el-button>
+          <el-button type="danger" plain :loading="generating && generatingMode === 'full'" :disabled="generating && generatingMode !== 'full'" @click="confirmFullGenerate">全量生成</el-button>
           <el-button :loading="diagnosing" @click="diagnoseStrm">STRM 诊断</el-button>
+        </div>
+        <div class="form-hint" style="margin-top: 8px">
+          清空本地 STRM 目录后请点「全量生成」重建；仅点增量可能因快照未变而不补写文件。
         </div>
       </el-form>
     </el-card>
@@ -169,7 +172,7 @@
           <span class="status-value">{{ formatRuntimeTime(lastIncrementalAt) }}</span>
         </div>
         <div class="status-item">
-          <span class="status-label">最近全量校准</span>
+          <span class="status-label">最近全量生成</span>
           <span class="status-value">{{ formatRuntimeTime(lastFullAt) }}</span>
         </div>
         <div class="status-item status-item-full">
@@ -328,7 +331,7 @@ const generateModeLabel = computed(() => {
     || runtime.last_generate_summary?.mode
     || runtime.index_stats?.last_mode
   if (mode === 'incremental') return runtime.generate_running ? '增量生成中' : '增量生成'
-  if (mode === 'full') return runtime.generate_running ? '全量校准中' : '全量校准'
+  if (mode === 'full') return runtime.generate_running ? '全量生成中' : '全量生成'
   return runtime.generate_running ? '生成中' : '-'
 })
 
@@ -473,7 +476,7 @@ const generateFiles = async (mode = 'incremental') => {
   generatingMode.value = mode
   try {
     const { data } = await strmApi.generate(mode)
-    const label = mode === 'full' ? '全量校准' : '增量生成'
+    const label = mode === 'full' ? '全量生成' : '增量生成'
     ElMessage.success(data.started ? `STRM ${label}任务已启动` : `STRM ${label}任务已提交`)
     await loadConfig()
     setupPolling()
@@ -487,10 +490,10 @@ const generateFiles = async (mode = 'incremental') => {
 const confirmFullGenerate = async () => {
   try {
     await ElMessageBox.confirm(
-      '全量校准会重新扫描整个归档目录并清理失效 STRM，耗时可能较长。确定继续吗？',
-      '确认全量校准',
+      '全量生成会重新扫描整个 115 归档目录并重建全部 STRM 文件，适合清空本地 STRM 目录后使用，耗时可能较长。确定继续吗？',
+      '确认全量生成',
       {
-        confirmButtonText: '开始全量校准',
+        confirmButtonText: '开始全量生成',
         cancelButtonText: '取消',
         type: 'warning'
       }
