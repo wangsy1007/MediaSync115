@@ -172,12 +172,24 @@ async def diagnose_strm(request: Request):
 @router.api_route("/play/{token}", methods=["GET", "HEAD"])
 async def play_strm(token: str, request: Request):
     try:
+        ua = request.headers.get("user-agent") or ""
+        force_proxy = False
+        try:
+            payload = strm_service._decode_token(token)
+            filename = str(payload.get("fn") or "").strip().lower()
+            if "hosplayer" in ua.lower() and (
+                filename.endswith(".iso") or filename.endswith(".img")
+            ):
+                force_proxy = True
+        except Exception:
+            force_proxy = False
         return await strm_service.resolve_play_response_with_headers(
             token=token,
             method=request.method,
             request_headers=dict(request.headers),
             client_ip=get_client_ip(request),
             request_path=request.url.path,
+            force_proxy=force_proxy,
         )
     except Exception as exc:
         _raise_strm_error(exc)

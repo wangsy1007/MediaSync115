@@ -7,6 +7,7 @@ import app.api.emby_proxy as emby_proxy_module
 from app.api.emby_proxy import (
     _map_emby_strm_path,
     _pick_media_source,
+    _should_force_proxy_stream,
     _should_skip_stream_redirect,
     build_emby_style_direct_stream_url,
     resolve_local_strm_play_url,
@@ -187,6 +188,107 @@ class TestEmbyStreamRedirect:
         assert _should_skip_stream_redirect("HosPlayer/0.10.3") is False
         assert _should_skip_stream_redirect("Infuse/7.0") is False
         assert _should_skip_stream_redirect("") is False
+
+    def test_hosplayer_iso_forces_proxy_fallback(self) -> None:
+        assert _should_force_proxy_stream("HosPlayer/0.11.1", "iso") is True
+        assert _should_force_proxy_stream("HosPlayer/0.11.1", "mkv") is False
+        assert _should_force_proxy_stream("SenPlayer/1.0", "iso") is False
+
+    @pytest.mark.asyncio
+    async def test_iso_playbackinfo_uses_absolute_cdn(self, monkeypatch) -> None:
+        async def fake_cdn(play_url: str, *, user_agent: str = ""):
+            assert "HosPlayer" in user_agent
+            return "https://cdn.115.com/movie.iso"
+
+        monkeypatch.setattr(
+            emby_proxy_module,
+            "_resolve_cdn_direct_stream_url",
+            fake_cdn,
+        )
+        monkeypatch.setattr(
+            emby_proxy_module,
+            "extract_filename_from_play_token",
+            lambda _url: "movie.iso",
+        )
+        payload = {
+            "MediaSources": [
+                {
+                    "Id": "mediasource_12",
+                    "Path": "http://172.16.100.2:8099/api/strm/play/abc",
+                    "Container": "mkv",
+                }
+            ]
+        }
+        changed = await emby_proxy_module.rewrite_playback_info_for_strm_async(
+            payload,
+            item_id="12",
+            user_agent="HosPlayer/0.11.1",
+        )
+        assert changed is True
+        ms = payload["MediaSources"][0]
+        assert ms["Container"] == "iso"
+        assert ms["DirectStreamUrl"] == "https://cdn.115.com/movie.iso"
+        assert ms["Protocol"] == "Http"
+
+    @pytest.mark.asyncio
+    async def test_hosplayer_iso_stream_uses_proxy(self, monkeypatch) -> None:
+        proxied: dict[str, object] = {}
+
+        async def fake_context(item_id: str, *, media_source_id=None):
+            return {
+                "play_url": "http://172.16.100.2:8099/api/strm/play/abc.token",
+                "item_id": item_id,
+                "title": "Test ISO",
+                "media_type": "Movie",
+                "series_name": "",
+                "container": "iso",
+            }
+
+        class FakeResponse:
+            status_code = 206
+
+        class FakeStrm:
+            @staticmethod
+            def _extract_token_from_url(url: str) -> str:
+                return "abc.token"
+
+            @staticmethod
+            async def resolve_play_response_with_headers(**kwargs):
+                proxied.update(kwargs)
+                return FakeResponse()
+
+        monkeypatch.setattr(
+            emby_proxy_module,
+            "resolve_stream_play_context_cached",
+            fake_context,
+        )
+        monkeypatch.setattr(
+            "app.services.strm_service.strm_service",
+            FakeStrm(),
+        )
+        from fastapi import Request
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/api/emby/stream-redirect/12",
+            "raw_path": b"/api/emby/stream-redirect/12",
+            "query_string": b"",
+            "headers": [
+                (b"user-agent", b"HosPlayer/0.11.1"),
+                (b"range", b"bytes=0-1"),
+            ],
+            "client": ("127.0.0.1", 123),
+            "server": ("127.0.0.1", 80),
+        }
+        request = Request(scope)
+        response = await emby_proxy_module.emby_stream_redirect("12", request)
+        assert response.status_code == 206
+        assert proxied.get("force_proxy") is True
+        assert proxied.get("token") == "abc.token"
 
     @pytest.mark.asyncio
     async def test_endpoint_redirects_iso_with_cached_cdn(self, monkeypatch) -> None:

@@ -47,10 +47,12 @@ _EMBY_PATH_PREFIXES = (
 )
 
 # 直链已按客户端 UA 解析（115 CDN 绑定 UA），绝大多数播放器都能跟随 302。
-# 仅保留确认无法跟随 302 的客户端；目前为空。
+# HosPlayer 对 ISO 的 302+Range 兼容差，单独走直链/代理策略。
 _STREAM_REDIRECT_BLOCKLIST_UA = re.compile(
     r"$^",
 )
+_HOSPLAYER_UA = re.compile(r"HosPlayer", re.IGNORECASE)
+_DISC_IMAGE_CONTAINERS = frozenset({"iso", "img"})
 
 # 已知的视频容器扩展名（用于从真实源文件名回填 Container 信息，
 # 让 VidHub/SenPlayer 等客户端正确识别 ISO 原盘并以磁盘镜像方式播放）。
@@ -255,6 +257,19 @@ async def resolve_source_container_async(
 
 def _should_skip_stream_redirect(user_agent: str) -> bool:
     return bool(_STREAM_REDIRECT_BLOCKLIST_UA.search(user_agent or ""))
+
+
+def _is_hosplayer(user_agent: str) -> bool:
+    return bool(_HOSPLAYER_UA.search(user_agent or ""))
+
+
+def _is_disc_image_container(container: str) -> bool:
+    return str(container or "").strip().lower() in _DISC_IMAGE_CONTAINERS
+
+
+def _should_force_proxy_stream(user_agent: str, container: str) -> bool:
+    """HosPlayer 播放 ISO 时跟随 302+Range 表现差（约 5MB/s 卡顿）。"""
+    return _is_hosplayer(user_agent) and _is_disc_image_container(container)
 
 
 def _play_context_cache_key(item_id: str, media_source_id: str | None) -> str:
@@ -532,6 +547,7 @@ def _apply_direct_play_rewrite(
     item_id: str,
     fallback_api_key: str = "",
     container: str = "",
+    direct_stream_url: str = "",
 ) -> None:
     """把单个 MediaSource 改写成强制 DirectPlay + 代理 302 的形式。"""
     media_source_id = str(source.get("Id") or f"mediasource_{item_id}").strip()
@@ -543,8 +559,8 @@ def _apply_direct_play_rewrite(
         extra["api_key"] = fallback_api_key
 
     # 对齐 MediaWarp：不改 Path（避免 Emby/客户端用 Lavf 去探网关），
-    # 只改 DirectStreamUrl 为 /Videos/{id}/stream.{container}，由代理再 302。
-    # 回填真实 Container（尤其 iso），VidHub/SenPlayer 等按容器选择解封装方式。
+    # 默认 DirectStreamUrl 为 /Videos/{id}/stream.{container}，由代理再 302。
+    # ISO 可直接写入 115 CDN 绝对地址，避免 HosPlayer 等对每次 Range 跟 302。
     source["SupportsDirectPlay"] = True
     source["SupportsDirectStream"] = True
     source["SupportsTranscoding"] = False
@@ -553,14 +569,40 @@ def _apply_direct_play_rewrite(
     source["TranscodingContainer"] = None
     if container:
         source["Container"] = container
-    source["DirectStreamUrl"] = build_emby_style_direct_stream_url(
-        item_id=str(item_id),
-        media_source_id=media_source_id,
-        original_direct_url=original_direct,
-        extra_query=extra,
-        container=container,
-    )
+    absolute = str(direct_stream_url or "").strip()
+    if absolute.startswith("http://") or absolute.startswith("https://"):
+        source["Protocol"] = "Http"
+        source["DirectStreamUrl"] = absolute
+    else:
+        source["DirectStreamUrl"] = build_emby_style_direct_stream_url(
+            item_id=str(item_id),
+            media_source_id=media_source_id,
+            original_direct_url=original_direct,
+            extra_query=extra,
+            container=container,
+        )
     source.pop("TranscodingInfo", None)
+
+
+async def _resolve_cdn_direct_stream_url(
+    play_url: str, *, user_agent: str
+) -> str:
+    """解析可直接写入 PlaybackInfo 的 115 CDN 绝对地址。"""
+    if not play_url:
+        return ""
+    try:
+        final_url, play_mode = await _resolve_final_redirect_info(
+            play_url, user_agent=user_agent
+        )
+    except Exception:
+        logger.debug("resolve CDN direct url failed", exc_info=True)
+        return ""
+    if play_mode != "redirect":
+        return ""
+    text = str(final_url or "").strip()
+    if text.startswith("http://") or text.startswith("https://"):
+        return text
+    return ""
 
 
 def rewrite_playback_info_for_strm(
@@ -602,6 +644,7 @@ async def rewrite_playback_info_for_strm_async(
     item_id: str,
     fallback_api_key: str = "",
     item_path: str = "",
+    user_agent: str = "",
 ) -> bool:
     """异步版 PlaybackInfo 改写，可回查 STRM 索引库确定真实容器（ISO 等）。"""
     sources = payload.get("MediaSources")
@@ -620,17 +663,25 @@ async def rewrite_playback_info_for_strm_async(
         container = await resolve_source_container_async(
             source, play_url=play_url
         )
-        if container == "iso":
-            logger.info(
-                "Rewriting ISO source for direct play item=%s container=%s",
-                item_id,
-                container,
+        direct_stream_url = ""
+        # ISO/IMG：PlaybackInfo 直接下发 CDN 绝对地址，客户端 Range 不再经 Emby 302。
+        # 对 HosPlayer 尤其关键，可显著提升吞吐、减少缓冲。
+        if _is_disc_image_container(container):
+            direct_stream_url = await _resolve_cdn_direct_stream_url(
+                play_url, user_agent=user_agent
             )
+            if direct_stream_url:
+                logger.info(
+                    "ISO PlaybackInfo uses absolute CDN url item=%s ua=%s",
+                    item_id,
+                    (user_agent or "")[:80],
+                )
         _apply_direct_play_rewrite(
             source,
             item_id=str(item_id),
             fallback_api_key=fallback_api_key,
             container=container,
+            direct_stream_url=direct_stream_url,
         )
         changed = True
 
@@ -741,8 +792,34 @@ async def emby_stream_redirect(
         if not play_url:
             raise HTTPException(status_code=404, detail="not_strm")
 
-        # ISO/MKV 统一走缓存后的单跳 302：客户端直连 115 CDN，才能跑满带宽。
-        # 此前 ISO 强制经服务端代理，速度被 NAS→115 下载带宽卡住。
+        container = str(context.get("container") or "").strip().lower()
+        if _should_force_proxy_stream(ua, container):
+            from app.services.strm_service import strm_service
+
+            token = strm_service._extract_token_from_url(play_url)
+            if request.method == "GET":
+                await _log_playback_start(
+                    request=request,
+                    context=context,
+                    play_mode="proxy",
+                    path=request.url.path,
+                )
+            logger.info(
+                "Emby stream proxy for HosPlayer disc item=%s container=%s ua=%s",
+                item_id,
+                container,
+                ua[:80],
+            )
+            return await strm_service.resolve_play_response_with_headers(
+                token=token,
+                method=request.method,
+                request_headers=_filter_request_headers(request),
+                client_ip=get_client_ip(request),
+                request_path=request.url.path,
+                force_proxy=True,
+            )
+
+        # 其余客户端：缓存后的单跳 302，客户端直连 115 CDN。
         final_url, play_mode = await _resolve_final_redirect_info(
             play_url, user_agent=ua
         )
@@ -856,6 +933,7 @@ async def emby_playbackinfo_proxy(item_id: str, request: Request) -> Response:
             item_id=str(item_id),
             fallback_api_key=api_key,
             item_path=item_path,
+            user_agent=request.headers.get("user-agent") or "",
         )
         if changed:
             logger.info(
