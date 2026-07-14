@@ -32,6 +32,7 @@ class ExploreActionQueueService:
         self._subscribe_worker_task: asyncio.Task | None = None
         self._save_worker_task: asyncio.Task | None = None
         self._task_ttl_seconds = 60 * 60 * 3
+        self._save_archive_deferred = False
 
     @staticmethod
     def _now_iso() -> str:
@@ -475,6 +476,36 @@ class ExploreActionQueueService:
                 return None
             return self._save_queue.pop(0)
 
+    async def _mark_save_archive_needed(self) -> None:
+        async with self._lock:
+            self._save_archive_deferred = True
+
+    async def _flush_deferred_archive_if_idle(self) -> None:
+        should_flush = False
+        async with self._lock:
+            if not self._save_archive_deferred:
+                return
+            if self._save_queue:
+                return
+            has_running_save = any(
+                task.get("queue_type") == "save" and task.get("status") == "running"
+                for task in self._tasks.values()
+            )
+            if has_running_save:
+                return
+            self._save_archive_deferred = False
+            should_flush = True
+
+        if not should_flush:
+            return
+
+        try:
+            await media_postprocess_service.trigger_archive_after_transfer(
+                trigger="explore_transfer"
+            )
+        except Exception:
+            logger.exception("探索转存队列空闲后触发归档失败")
+
     async def _subscribe_worker(self) -> None:
         while True:
             try:
@@ -585,6 +616,8 @@ class ExploreActionQueueService:
                             message=f"转存任务执行失败: {str(exc)}",
                             extra={"error": str(exc)},
                         )
+                finally:
+                    await self._flush_deferred_archive_if_idle()
             except Exception as exc:
                 logger.exception("save worker loop error: %s", exc)
                 await asyncio.sleep(0.5)
@@ -903,9 +936,7 @@ class ExploreActionQueueService:
                         )
                         continue
 
-                    await media_postprocess_service.trigger_archive_after_transfer(
-                        trigger="explore_transfer"
-                    )
+                    await self._mark_save_archive_needed()
                     file_count = (
                         result.get("file_count") if isinstance(result, dict) else None
                     )
@@ -943,9 +974,7 @@ class ExploreActionQueueService:
                             url=offline_url,
                             wp_path_id=offline_folder_id,
                         )
-                        await media_postprocess_service.trigger_archive_after_transfer(
-                            trigger="explore_transfer"
-                        )
+                        await self._mark_save_archive_needed()
                         return {
                             "tmdb_id": tmdb_id,
                             "media_type": media_type,

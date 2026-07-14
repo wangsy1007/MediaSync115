@@ -168,6 +168,8 @@ class ArchiveService:
         self._last_scan_trigger: str = ""
         self._last_scan_summary: dict[str, Any] | None = None
         self._last_scan_error: str = ""
+        self._pending_rescan = False
+        self._pending_rescan_trigger: str = ""
 
     def _get_pan115(self) -> Pan115Service:
         if self._pan115 is None:
@@ -294,10 +296,13 @@ class ArchiveService:
     async def start_scan(self, trigger: str = "manual") -> dict[str, Any]:
         self._cleanup_finished_scan_task()
         if self.is_scan_running() or self._scan_lock.locked():
+            self._pending_rescan = True
+            self._pending_rescan_trigger = str(trigger or "manual")
             return {
                 "started": False,
                 "running": True,
-                "message": "归档扫描已在执行中，请稍后刷新查看进度",
+                "queued": True,
+                "message": "归档扫描已在执行中，将在当前扫描完成后自动再次执行",
                 "runtime": self.get_runtime_status(),
             }
 
@@ -339,6 +344,21 @@ class ArchiveService:
             self._last_scan_summary = None
             self._last_scan_error = self._format_scan_error(exc)
             logger.exception("Archive background scan failed")
+
+        pending_trigger = ""
+        if self._pending_rescan:
+            self._pending_rescan = False
+            pending_trigger = str(self._pending_rescan_trigger or "deferred").strip()
+            self._pending_rescan_trigger = ""
+        if pending_trigger:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(
+                    self.start_scan(trigger=pending_trigger),
+                    name=f"archive-scan-{pending_trigger}",
+                )
+            except RuntimeError:
+                logger.warning("归档补扫调度失败：事件循环不可用")
 
     @staticmethod
     def _format_scan_error(exc: Exception) -> str:
