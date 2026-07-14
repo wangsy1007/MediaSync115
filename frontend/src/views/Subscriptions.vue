@@ -545,6 +545,14 @@ const refreshMissingRow = async (row) => {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+const buildRunningTaskMessage = (payload = {}) => {
+  const runningChannels = Array.isArray(payload?.running_channels) ? payload.running_channels : []
+  if (runningChannels.length > 0) {
+    return `订阅任务进行中（${runningChannels.join('、')}）`
+  }
+  return String(payload?.message || '订阅任务进行中，请稍后再试')
+}
+
 const pollSubscriptionTask = async (taskId) => {
   const maxChecks = 180
   for (let i = 0; i < maxChecks; i++) {
@@ -560,17 +568,28 @@ const pollSubscriptionTask = async (taskId) => {
 }
 
 const handleRunSubscriptionNow = async () => {
-  if (runningSubscriptionTask.value) return
+  if (runningSubscriptionTask.value) {
+    ElMessage.warning(runningTaskMessage.value || '订阅任务进行中，请稍后再试')
+    return
+  }
+
+  try {
+    const { data: statusData } = await subscriptionApi.getRunStatus('all')
+    if (statusData?.running) {
+      ElMessage.warning(buildRunningTaskMessage(statusData?.task || {}))
+      return
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '查询订阅任务状态失败')
+    return
+  }
+
   runningSubscriptionTask.value = true
   runningTaskMessage.value = '任务已提交，等待执行...'
   try {
     const { data } = await subscriptionApi.runAllChannelsCheckBackground(true)
     if (data?.already_running) {
-      const runningChannels = Array.isArray(data?.running_channels) ? data.running_channels : []
-      const message = runningChannels.length > 0
-        ? `订阅任务进行中（${runningChannels.join('、')}）`
-        : (data?.message || '订阅任务进行中，请稍后再试')
-      ElMessage.warning(message)
+      ElMessage.warning(buildRunningTaskMessage(data))
       return
     }
 

@@ -33,3 +33,27 @@ class TestSubscriptionRunTaskServiceStart:
         assert result.get("status") == "queued"
         assert not asyncio.iscoroutine(result)
         assert not hasattr(result, "done")
+
+    @pytest.mark.asyncio
+    async def test_start_all_rejects_when_all_task_already_running(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = SubscriptionRunTaskService()
+
+        async def noop_run_task(
+            task_id: str, channel: str, force_auto_download: bool
+        ) -> None:
+            return None
+
+        monkeypatch.setattr(service, "_run_task", noop_run_task)
+        monkeypatch.setattr(
+            "app.services.subscription_run_task_service.operation_log_service.log_background_event",
+            lambda *args, **kwargs: asyncio.sleep(0),
+        )
+
+        first = await service.start("all", force_auto_download=True)
+        second = await service.start("all", force_auto_download=True)
+
+        assert first.get("already_running") is not True
+        assert second.get("already_running") is True
+        assert second.get("task_id") == first.get("task_id")

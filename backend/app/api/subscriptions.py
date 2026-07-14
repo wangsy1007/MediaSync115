@@ -1350,6 +1350,17 @@ async def run_subscription_check(
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.get("/actions/run/status")
+@router.get("/system/run/status")
+async def get_subscription_run_status(
+    channel: str = Query("all", description="订阅渠道"),
+):
+    try:
+        return await subscription_run_task_service.get_running_status(channel)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/actions/run/background")
 @router.post("/system/run/background")
 async def start_subscription_check_background(payload: SubscriptionRunRequest):

@@ -4875,19 +4875,32 @@ const pollSubscriptionTask = async (taskId) => {
 }
 
 const handleRunAllChannels = async () => {
-  if (runningAllChannels.value || runningSubscriptionChannel.value) return
+  if (runningAllChannels.value || runningSubscriptionChannel.value) {
+    ElMessage.warning(runningTaskMessage.value || '订阅任务进行中，请稍后再试')
+    return
+  }
   runningAllChannels.value = true
   runningTaskMessage.value = '任务已提交，等待执行...'
   try {
+    const { data: statusData } = await subscriptionApi.getRunStatus('all')
+    if (statusData?.running) {
+      ElMessage.warning(statusData?.task?.message || '订阅任务进行中，请稍后再试')
+      runningAllChannels.value = false
+      runningTaskMessage.value = ''
+      return
+    }
+
     const { data } = await subscriptionApi.runAllChannelsCheckBackground(true)
     if (data?.already_running) {
       const runningChannels = data?.running_channels || []
-      if (runningChannels.length > 0) {
-        ElMessage.info(`以下渠道正在运行中: ${runningChannels.join(', ')}`)
-        runningAllChannels.value = false
-        runningTaskMessage.value = ''
-        return
-      }
+      ElMessage.warning(
+        runningChannels.length > 0
+          ? `订阅任务进行中（${runningChannels.join('、')}）`
+          : (data?.message || '订阅任务进行中，请稍后再试')
+      )
+      runningAllChannels.value = false
+      runningTaskMessage.value = ''
+      return
     }
     runningTaskId.value = data?.task_id || ''
     if (!runningTaskId.value) {

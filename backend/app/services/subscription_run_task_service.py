@@ -24,38 +24,36 @@ class SubscriptionRunTaskService:
     ) -> dict[str, Any]:
         normalized_channel = self._normalize_channel(channel)
         async with self._lock:
-            # 当执行全部渠道时，检查是否有任何渠道正在运行
             if normalized_channel == "all":
+                existing_all = self._get_active_running_task_locked("all")
+                if existing_all:
+                    return existing_all
+
                 running_channels = [
                     ch
                     for ch in ALL_CHANNELS
-                    if self._running_by_channel.get(ch)
-                    and self._running_by_channel[ch] in self._tasks
+                    if self._get_active_running_task_locked(ch)
                 ]
                 if running_channels:
-                    existing = {
+                    return {
                         "task_id": "",
                         "channel": "all",
-                        "status": "queued",
-                        "message": f"以下渠道正在运行中: {', '.join(running_channels)}",
+                        "status": "running",
+                        "message": f"订阅任务进行中（{', '.join(running_channels)}）",
                         "already_running": True,
                         "running_channels": running_channels,
                     }
-                    return existing
             else:
-                all_task_id = self._running_by_channel.get("all")
-                if all_task_id and all_task_id in self._tasks:
-                    existing = dict(self._tasks[all_task_id])
-                    existing["already_running"] = True
-                    existing["message"] = str(
-                        existing.get("message") or "全部渠道任务正在运行中"
+                existing_all = self._get_active_running_task_locked("all")
+                if existing_all:
+                    existing_all["message"] = str(
+                        existing_all.get("message") or "全部渠道订阅任务正在执行中"
                     )
-                    return existing
-                existing_task_id = self._running_by_channel.get(normalized_channel)
-                if existing_task_id and existing_task_id in self._tasks:
-                    existing = dict(self._tasks[existing_task_id])
-                    existing["already_running"] = True
-                    return existing
+                    return existing_all
+
+                existing_channel = self._get_active_running_task_locked(normalized_channel)
+                if existing_channel:
+                    return existing_channel
 
             task_id = uuid4().hex
             now = beijing_now().isoformat()
@@ -105,13 +103,34 @@ class SubscriptionRunTaskService:
                 return None
             return dict(task)
 
+    async def get_running_status(self, channel: str = "all") -> dict[str, Any]:
+        normalized_channel = self._normalize_channel(channel)
+        task = await self.get_running_channel(normalized_channel)
+        if task and self._is_active_task_status(str(task.get("status") or "")):
+            return {"running": True, "task": task}
+        return {"running": False, "task": None}
+
+    def _get_active_running_task_locked(self, channel: str) -> dict[str, Any] | None:
+        task_id = self._running_by_channel.get(channel)
+        if not task_id or task_id not in self._tasks:
+            return None
+        task = dict(self._tasks[task_id])
+        if not self._is_active_task_status(str(task.get("status") or "")):
+            return None
+        task["already_running"] = True
+        if not str(task.get("message") or "").strip():
+            task["message"] = "订阅任务正在执行中"
+        return task
+
+    @staticmethod
+    def _is_active_task_status(status: str) -> bool:
+        return status in {"queued", "running"}
+
     async def get_running_channel(self, channel: str) -> dict[str, Any] | None:
         async with self._lock:
             for ch in (["all"] if channel != "all" else []) + [channel]:
-                task_id = self._running_by_channel.get(ch)
-                if task_id and task_id in self._tasks:
-                    task = dict(self._tasks[task_id])
-                    task["already_running"] = True
+                task = self._get_active_running_task_locked(ch)
+                if task:
                     task["running_via"] = "background_task"
                     return task
             return None
