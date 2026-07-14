@@ -21,15 +21,18 @@ async def test_flush_deferred_archive_waits_until_save_queue_idle(monkeypatch) -
         service._save_archive_deferred = True
         service._save_queue = ["pending-task"]
 
-    await service._flush_deferred_archive_if_idle()
+    await service._flush_deferred_when_idle()
     trigger_mock.assert_not_called()
     assert service._save_archive_deferred is True
 
     async with service._lock:
         service._save_queue = []
 
-    await service._flush_deferred_archive_if_idle()
-    trigger_mock.assert_awaited_once_with(trigger="explore_transfer")
+    await service._flush_deferred_when_idle()
+    trigger_mock.assert_awaited_once_with(
+        trigger="explore_transfer",
+        respect_save_queue=False,
+    )
     assert service._save_archive_deferred is False
 
 

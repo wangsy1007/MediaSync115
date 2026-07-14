@@ -89,15 +89,32 @@ class OfflineMonitorService:
             scan_result = {"triggered": False, "reason": archive_skip_reason}
         else:
             from app.services.archive_service import archive_service
+            from app.services.explore_action_queue_service import (
+                explore_action_queue_service,
+            )
 
             if archive_service.is_scan_running():
                 scan_result = {"triggered": False, "reason": "归档扫描正在执行中"}
+            elif await explore_action_queue_service.is_save_queue_busy():
+                deferred = await explore_action_queue_service.defer_until_save_queue_idle(
+                    "offline_monitor:archive_scan",
+                    lambda: archive_service.start_scan(
+                        trigger="offline_completed",
+                        respect_save_queue=False,
+                    ),
+                )
+                scan_result = {
+                    "triggered": False,
+                    "deferred": deferred,
+                    "reason": "save_queue_busy",
+                }
             else:
                 logger.info(
                     "检测到 %d 个离线任务新完成，触发归档扫描", len(newly_completed)
                 )
                 scan_result = await archive_service.start_scan(
-                    trigger="offline_completed"
+                    trigger="offline_completed",
+                    respect_save_queue=False,
                 )
 
         cleanup_result = None

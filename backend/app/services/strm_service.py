@@ -222,7 +222,34 @@ class StrmService:
         trigger: str = "manual",
         mode: str = "incremental",
         scopes: list[dict[str, Any]] | None = None,
+        *,
+        respect_save_queue: bool = True,
     ) -> dict[str, Any]:
+        if respect_save_queue and str(trigger or "").strip().lower() != "manual":
+            from app.services.explore_action_queue_service import (
+                explore_action_queue_service,
+            )
+
+            deferred = await explore_action_queue_service.defer_until_save_queue_idle(
+                f"strm_generate:{trigger}:{mode}",
+                lambda: self.start_generate_library(
+                    trigger=trigger,
+                    mode=mode,
+                    scopes=scopes,
+                    respect_save_queue=False,
+                ),
+            )
+            if deferred:
+                return {
+                    "success": True,
+                    "started": False,
+                    "queued": True,
+                    "deferred": True,
+                    "mode": self._validate_mode(mode),
+                    "trigger": str(trigger or "manual"),
+                    "message": "转存队列执行中，STRM 生成已延迟至队列空闲",
+                }
+
         mode = self._validate_mode(mode)
         normalized_scopes = self._normalize_scopes(scopes)
         if self._is_generate_running():
@@ -271,7 +298,32 @@ class StrmService:
         trigger: str = "manual",
         mode: str = "incremental",
         scopes: list[dict[str, Any]] | None = None,
+        *,
+        respect_save_queue: bool = True,
     ) -> dict[str, Any]:
+        if respect_save_queue and str(trigger or "").strip().lower() != "manual":
+            from app.services.explore_action_queue_service import (
+                explore_action_queue_service,
+            )
+
+            deferred = await explore_action_queue_service.defer_until_save_queue_idle(
+                f"strm_generate_sync:{trigger}:{mode}",
+                lambda: self.generate_library(
+                    trigger=trigger,
+                    mode=mode,
+                    scopes=scopes,
+                    respect_save_queue=False,
+                ),
+            )
+            if deferred:
+                return {
+                    "success": True,
+                    "deferred": True,
+                    "mode": self._validate_mode(mode),
+                    "trigger": str(trigger or "manual"),
+                    "message": "转存队列执行中，STRM 生成已延迟至队列空闲",
+                }
+
         mode = self._validate_mode(mode)
         running_task = self._generate_task
         if (

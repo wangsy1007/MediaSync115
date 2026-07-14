@@ -81,26 +81,77 @@ class JobRegistry:
         }
 
     async def _archive_scan(self, **kwargs) -> dict[str, Any]:
-        return await archive_service.start_scan(trigger="scheduler")
+        from app.services.transfer_queue_guard import defer_if_save_queue_busy
+
+        deferred, result = await defer_if_save_queue_busy(
+            "scheduler:archive_scan",
+            lambda: archive_service.start_scan(
+                trigger="scheduler",
+                respect_save_queue=False,
+            ),
+        )
+        if deferred:
+            return {
+                "success": True,
+                "deferred": True,
+                "message": "转存队列执行中，归档扫描已延迟至队列空闲",
+            }
+        return result
 
     async def _offline_monitor(self, **kwargs) -> dict[str, Any]:
-        return await offline_monitor_service.check_and_trigger()
+        from app.services.transfer_queue_guard import defer_if_save_queue_busy
+
+        deferred, result = await defer_if_save_queue_busy(
+            "scheduler:offline_monitor",
+            offline_monitor_service.check_and_trigger,
+        )
+        if deferred:
+            return {
+                "success": True,
+                "deferred": True,
+                "message": "转存队列执行中，离线监控已延迟至队列空闲",
+            }
+        return result
 
     async def _generate_strm_incremental(self, **kwargs) -> dict[str, Any]:
         from app.services.strm_service import strm_service
+        from app.services.transfer_queue_guard import defer_if_save_queue_busy
 
-        return await strm_service.generate_library(
-            trigger="scheduler",
-            mode="incremental",
+        deferred, result = await defer_if_save_queue_busy(
+            "scheduler:strm_incremental",
+            lambda: strm_service.generate_library(
+                trigger="scheduler",
+                mode="incremental",
+                respect_save_queue=False,
+            ),
         )
+        if deferred:
+            return {
+                "success": True,
+                "deferred": True,
+                "message": "转存队列执行中，STRM 生成已延迟至队列空闲",
+            }
+        return result
 
     async def _generate_strm_full(self, **kwargs) -> dict[str, Any]:
         from app.services.strm_service import strm_service
+        from app.services.transfer_queue_guard import defer_if_save_queue_busy
 
-        return await strm_service.generate_library(
-            trigger="scheduler",
-            mode="full",
+        deferred, result = await defer_if_save_queue_busy(
+            "scheduler:strm_full",
+            lambda: strm_service.generate_library(
+                trigger="scheduler",
+                mode="full",
+                respect_save_queue=False,
+            ),
         )
+        if deferred:
+            return {
+                "success": True,
+                "deferred": True,
+                "message": "转存队列执行中，STRM 全量生成已延迟至队列空闲",
+            }
+        return result
 
     async def _hdhive_checkin(self, **kwargs) -> dict[str, Any]:
         gamble = runtime_settings_service.get_hdhive_auto_checkin_mode() == "gamble"
@@ -151,6 +202,7 @@ class JobRegistry:
 
     async def _check_subscription_channel(self, channel: str) -> dict[str, Any]:
         from app.services.subscription_run_task_service import subscription_run_task_service
+        from app.services.transfer_queue_guard import defer_if_save_queue_busy
 
         running_task = await subscription_run_task_service.get_running_channel(channel)
         if running_task:
@@ -160,20 +212,34 @@ class JobRegistry:
                 "already_running": True,
                 "running_task": running_task,
             }
-        async with self._subscription_lock:
-            if channel in self._running_channels:
-                return {
-                    "success": False,
-                    "message": f"channel {channel} is already running via scheduler",
-                    "already_running": True,
-                }
-            self._running_channels[channel] = "running"
-        try:
-            async with async_session_maker() as db:
-                return await subscription_service.run_channel_check(db, channel)
-        finally:
+
+        async def _run_channel() -> dict[str, Any]:
             async with self._subscription_lock:
-                self._running_channels.pop(channel, None)
+                if channel in self._running_channels:
+                    return {
+                        "success": False,
+                        "message": f"channel {channel} is already running via scheduler",
+                        "already_running": True,
+                    }
+                self._running_channels[channel] = "running"
+            try:
+                async with async_session_maker() as db:
+                    return await subscription_service.run_channel_check(db, channel)
+            finally:
+                async with self._subscription_lock:
+                    self._running_channels.pop(channel, None)
+
+        deferred, result = await defer_if_save_queue_busy(
+            f"scheduler:subscription_check:{channel}",
+            _run_channel,
+        )
+        if deferred:
+            return {
+                "success": True,
+                "deferred": True,
+                "message": "转存队列执行中，订阅检查已延迟至队列空闲",
+            }
+        return result
 
     async def _check_subscription(self, **kwargs) -> dict[str, Any]:
         return await self._check_subscription_channel("all")

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import time
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -33,6 +34,7 @@ class ExploreActionQueueService:
         self._save_worker_task: asyncio.Task | None = None
         self._task_ttl_seconds = 60 * 60 * 3
         self._save_archive_deferred = False
+        self._deferred_idle_actions: dict[str, Callable[[], Awaitable[Any]]] = {}
 
     @staticmethod
     def _now_iso() -> str:
@@ -476,32 +478,70 @@ class ExploreActionQueueService:
                 return None
             return self._save_queue.pop(0)
 
+    def _is_save_queue_busy_locked(self) -> bool:
+        if self._save_queue:
+            return True
+        return any(
+            task.get("queue_type") == "save" and task.get("status") == "running"
+            for task in self._tasks.values()
+        )
+
+    async def is_save_queue_busy(self) -> bool:
+        async with self._lock:
+            await self._prune_locked()
+            return self._is_save_queue_busy_locked()
+
+    async def defer_until_save_queue_idle(
+        self,
+        action_key: str,
+        action: Callable[[], Awaitable[Any]],
+    ) -> bool:
+        """转存队列繁忙时将 action 延迟到队列空闲后执行。"""
+        normalized_key = str(action_key or "").strip()
+        if not normalized_key:
+            normalized_key = f"deferred:{uuid4().hex[:8]}"
+
+        async with self._lock:
+            await self._prune_locked()
+            if not self._is_save_queue_busy_locked():
+                return False
+            self._deferred_idle_actions[normalized_key] = action
+            self._save_archive_deferred = True
+            return True
+
     async def _mark_save_archive_needed(self) -> None:
         async with self._lock:
             self._save_archive_deferred = True
 
-    async def _flush_deferred_archive_if_idle(self) -> None:
-        should_flush = False
+    async def _flush_deferred_when_idle(self) -> None:
+        should_flush_archive = False
+        deferred_actions: dict[str, Callable[[], Awaitable[Any]]] = {}
         async with self._lock:
-            if not self._save_archive_deferred:
+            if not self._save_archive_deferred and not self._deferred_idle_actions:
                 return
-            if self._save_queue:
+            if self._is_save_queue_busy_locked():
                 return
-            has_running_save = any(
-                task.get("queue_type") == "save" and task.get("status") == "running"
-                for task in self._tasks.values()
-            )
-            if has_running_save:
-                return
-            self._save_archive_deferred = False
-            should_flush = True
 
-        if not should_flush:
+            deferred_actions = dict(self._deferred_idle_actions)
+            self._deferred_idle_actions.clear()
+            should_flush_archive = self._save_archive_deferred
+            self._save_archive_deferred = False
+
+        for action_key, action in deferred_actions.items():
+            try:
+                await action()
+            except Exception:
+                logger.exception(
+                    "转存队列空闲后执行延迟任务失败: %s", action_key
+                )
+
+        if not should_flush_archive:
             return
 
         try:
             await media_postprocess_service.trigger_archive_after_transfer(
-                trigger="explore_transfer"
+                trigger="explore_transfer",
+                respect_save_queue=False,
             )
         except Exception:
             logger.exception("探索转存队列空闲后触发归档失败")
@@ -617,7 +657,7 @@ class ExploreActionQueueService:
                             extra={"error": str(exc)},
                         )
                 finally:
-                    await self._flush_deferred_archive_if_idle()
+                    await self._flush_deferred_when_idle()
             except Exception as exc:
                 logger.exception("save worker loop error: %s", exc)
                 await asyncio.sleep(0.5)

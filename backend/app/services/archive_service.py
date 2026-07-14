@@ -293,7 +293,34 @@ class ArchiveService:
             "runtime": self.get_runtime_status(),
         }
 
-    async def start_scan(self, trigger: str = "manual") -> dict[str, Any]:
+    async def start_scan(
+        self,
+        trigger: str = "manual",
+        *,
+        respect_save_queue: bool = True,
+    ) -> dict[str, Any]:
+        if respect_save_queue and str(trigger or "").strip().lower() != "manual":
+            from app.services.explore_action_queue_service import (
+                explore_action_queue_service,
+            )
+
+            deferred = await explore_action_queue_service.defer_until_save_queue_idle(
+                f"archive_scan:{trigger}",
+                lambda: self.start_scan(
+                    trigger=trigger,
+                    respect_save_queue=False,
+                ),
+            )
+            if deferred:
+                return {
+                    "started": False,
+                    "running": False,
+                    "queued": True,
+                    "deferred": True,
+                    "message": "转存队列执行中，归档扫描已延迟至队列空闲",
+                    "runtime": self.get_runtime_status(),
+                }
+
         self._cleanup_finished_scan_task()
         if self.is_scan_running() or self._scan_lock.locked():
             self._pending_rescan = True

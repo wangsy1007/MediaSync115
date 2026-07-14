@@ -45,7 +45,10 @@ class MediaPostprocessService:
         return scopes or None
 
     async def trigger_archive_after_transfer(
-        self, trigger: str = "transfer"
+        self,
+        trigger: str = "transfer",
+        *,
+        respect_save_queue: bool = True,
     ) -> dict[str, Any]:
         if not runtime_settings_service.get_archive_enabled():
             return {"triggered": False, "reason": "archive_disabled"}
@@ -54,10 +57,32 @@ class MediaPostprocessService:
         if not runtime_settings_service.get_archive_watch_cid():
             return {"triggered": False, "reason": "archive_watch_cid_missing"}
 
+        if respect_save_queue:
+            from app.services.explore_action_queue_service import (
+                explore_action_queue_service,
+            )
+
+            deferred = await explore_action_queue_service.defer_until_save_queue_idle(
+                f"archive:{trigger}",
+                lambda: self.trigger_archive_after_transfer(
+                    trigger=trigger,
+                    respect_save_queue=False,
+                ),
+            )
+            if deferred:
+                return {
+                    "triggered": False,
+                    "deferred": True,
+                    "reason": "save_queue_busy",
+                }
+
         try:
             from app.services.archive_service import archive_service
 
-            result = await archive_service.start_scan(trigger=trigger)
+            result = await archive_service.start_scan(
+                trigger=trigger,
+                respect_save_queue=respect_save_queue,
+            )
             return {"triggered": True, "result": result}
         except Exception as exc:
             logger.warning("Failed to trigger archive scan after transfer: %s", exc)
@@ -81,6 +106,32 @@ class MediaPostprocessService:
         if processed_count <= 0:
             return {"triggered": False, "reason": "no_processed_items"}
 
+        from app.services.explore_action_queue_service import (
+            explore_action_queue_service,
+        )
+
+        deferred = await explore_action_queue_service.defer_until_save_queue_idle(
+            f"strm:{trigger}",
+            lambda: self._trigger_strm_after_archive_now(
+                payload,
+                trigger=trigger,
+            ),
+        )
+        if deferred:
+            return {
+                "triggered": False,
+                "deferred": True,
+                "reason": "save_queue_busy",
+            }
+
+        return await self._trigger_strm_after_archive_now(payload, trigger=trigger)
+
+    async def _trigger_strm_after_archive_now(
+        self,
+        payload: dict[str, Any],
+        *,
+        trigger: str = "archive_completed",
+    ) -> dict[str, Any]:
         try:
             from app.services.strm_service import strm_service
 
@@ -89,6 +140,7 @@ class MediaPostprocessService:
                 trigger=trigger,
                 mode="incremental",
                 scopes=scopes,
+                respect_save_queue=False,
             )
             logger.info(
                 "Triggered STRM after archive: trigger=%s success=%s skipped=%s scopes=%s",

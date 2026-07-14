@@ -20,7 +20,9 @@ class TestMediaPostprocessService:
 
         called: dict[str, str] = {}
 
-        async def fake_start_scan(trigger: str = "manual") -> dict:
+        async def fake_start_scan(
+            trigger: str = "manual", **kwargs: object
+        ) -> dict:
             called["trigger"] = trigger
             return {"started": True}
 
@@ -140,6 +142,7 @@ class TestMediaPostprocessService:
                     "relative_prefix": "电影/华语电影/测试电影 (2026)",
                 }
             ],
+            "respect_save_queue": False,
         }
 
     @pytest.mark.asyncio
