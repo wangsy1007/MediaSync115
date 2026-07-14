@@ -62,6 +62,8 @@ class StrmService:
         self._lock = asyncio.Lock()
         self._download_url_cache_lock = asyncio.Lock()
         self._download_url_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._proxy_client: httpx.AsyncClient | None = None
+        self._proxy_client_lock = asyncio.Lock()
         self._generate_task: asyncio.Task[dict[str, Any]] | None = None
         self._last_generate_started_at: str = ""
         self._last_generate_finished_at: str = ""
@@ -1474,6 +1476,22 @@ class StrmService:
 
         return results
 
+    async def _get_proxy_client(self) -> httpx.AsyncClient:
+        """复用到 115 CDN 的长连接，避免每次 Range 重新握手。"""
+        async with self._proxy_client_lock:
+            if self._proxy_client is None or self._proxy_client.is_closed:
+                self._proxy_client = httpx.AsyncClient(
+                    follow_redirects=True,
+                    timeout=None,
+                    limits=httpx.Limits(
+                        max_connections=64,
+                        max_keepalive_connections=32,
+                        keepalive_expiry=120.0,
+                    ),
+                    http2=False,
+                )
+            return self._proxy_client
+
     async def _build_proxy_response(
         self,
         method: str,
@@ -1495,9 +1513,16 @@ class StrmService:
             )
             if forwarded_value:
                 proxy_request_headers[key] = forwarded_value
+        # 透传播放器 UA，保持与申请直链时绑定的 UA 一致。
+        incoming_ua = (
+            request_headers.get("user-agent")
+            or request_headers.get("User-Agent")
+            or ""
+        )
         if "user-agent" not in {k.lower() for k in proxy_request_headers}:
-            proxy_request_headers["User-Agent"] = ""
-        client = httpx.AsyncClient(follow_redirects=True, timeout=None)
+            proxy_request_headers["User-Agent"] = incoming_ua
+
+        client = await self._get_proxy_client()
         try:
             upstream = await client.send(
                 httpx.Request(
@@ -1508,7 +1533,6 @@ class StrmService:
                 stream=True,
             )
         except Exception:
-            await client.aclose()
             raise
 
         response_headers = self._build_proxy_headers(upstream.headers, filename)
@@ -1518,7 +1542,6 @@ class StrmService:
 
         if method.upper() == "HEAD":
             await upstream.aclose()
-            await client.aclose()
             return Response(
                 status_code=upstream.status_code,
                 headers=response_headers,
@@ -1526,12 +1549,16 @@ class StrmService:
             )
 
         return StreamingResponse(
-            upstream.aiter_bytes(),
+            upstream.aiter_bytes(chunk_size=1024 * 256),
             status_code=upstream.status_code,
             headers=response_headers,
             media_type=media_type,
-            background=BackgroundTask(self._close_proxy_resources, upstream, client),
+            background=BackgroundTask(self._close_proxy_upstream, upstream),
         )
+
+    @staticmethod
+    async def _close_proxy_upstream(upstream: httpx.Response) -> None:
+        await upstream.aclose()
 
     @staticmethod
     async def _close_proxy_resources(

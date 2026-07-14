@@ -8,8 +8,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse
@@ -26,6 +28,16 @@ from app.utils.request_utils import get_client_ip
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/emby", tags=["Emby代理"])
+
+# ISO 原盘会发起大量小 Range；每次都查 Emby/换链会严重拖慢首播与寻址。
+_PLAY_CONTEXT_CACHE_TTL_SECONDS = 300.0
+_PLAY_CONTEXT_CACHE_MAX_ITEMS = 256
+_play_context_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_play_context_cache_lock = asyncio.Lock()
+_CDN_REDIRECT_CACHE_TTL_SECONDS = 120.0
+_CDN_REDIRECT_CACHE_MAX_ITEMS = 256
+_cdn_redirect_cache: dict[str, tuple[float, str, str]] = {}
+_cdn_redirect_cache_lock = asyncio.Lock()
 
 _EMBY_PATH_PREFIXES = (
     "/media/strm",
@@ -245,9 +257,103 @@ def _should_skip_stream_redirect(user_agent: str) -> bool:
     return bool(_STREAM_REDIRECT_BLOCKLIST_UA.search(user_agent or ""))
 
 
-def _should_proxy_disc_stream(container: str) -> bool:
-    """ISO/IMG 原盘会频繁 Range 寻址，302 每次换链会导致严重限速。"""
-    return str(container or "").strip().lower() in {"iso", "img"}
+def _play_context_cache_key(item_id: str, media_source_id: str | None) -> str:
+    return f"{_normalize_item_id(item_id)}\0{str(media_source_id or '').strip()}"
+
+
+async def _get_cached_play_context(
+    item_id: str, *, media_source_id: str | None = None
+) -> dict[str, Any] | None:
+    key = _play_context_cache_key(item_id, media_source_id)
+    now = time.monotonic()
+    async with _play_context_cache_lock:
+        cached = _play_context_cache.get(key)
+        if not cached:
+            return None
+        expires_at, payload = cached
+        if expires_at <= now:
+            _play_context_cache.pop(key, None)
+            return None
+        return dict(payload)
+
+
+async def _set_cached_play_context(
+    item_id: str,
+    *,
+    media_source_id: str | None,
+    context: dict[str, Any],
+) -> None:
+    if not context.get("play_url"):
+        return
+    key = _play_context_cache_key(item_id, media_source_id)
+    now = time.monotonic()
+    async with _play_context_cache_lock:
+        if len(_play_context_cache) >= _PLAY_CONTEXT_CACHE_MAX_ITEMS:
+            oldest_key = min(_play_context_cache.items(), key=lambda item: item[1][0])[0]
+            _play_context_cache.pop(oldest_key, None)
+        _play_context_cache[key] = (
+            now + _PLAY_CONTEXT_CACHE_TTL_SECONDS,
+            dict(context),
+        )
+
+
+async def resolve_stream_play_context_cached(
+    item_id: str, *, media_source_id: str | None = None
+) -> dict[str, Any]:
+    """带缓存的播放上下文解析，避免 ISO 频繁 Range 反复打 Emby。"""
+    cached = await _get_cached_play_context(
+        item_id, media_source_id=media_source_id
+    )
+    if cached is not None:
+        return cached
+    context = await resolve_stream_play_context(
+        item_id, media_source_id=media_source_id
+    )
+    await _set_cached_play_context(
+        item_id, media_source_id=media_source_id, context=context
+    )
+    return context
+
+
+def _cdn_redirect_cache_key(play_url: str, user_agent: str) -> str:
+    return f"{play_url}\0{user_agent or ''}"
+
+
+async def _get_cached_cdn_redirect(
+    play_url: str, *, user_agent: str
+) -> tuple[str, str] | None:
+    key = _cdn_redirect_cache_key(play_url, user_agent)
+    now = time.monotonic()
+    async with _cdn_redirect_cache_lock:
+        cached = _cdn_redirect_cache.get(key)
+        if not cached:
+            return None
+        expires_at, final_url, play_mode = cached
+        if expires_at <= now:
+            _cdn_redirect_cache.pop(key, None)
+            return None
+        return final_url, play_mode
+
+
+async def _set_cached_cdn_redirect(
+    play_url: str, *, user_agent: str, final_url: str, play_mode: str
+) -> None:
+    if not final_url or _is_strm_play_url(final_url):
+        # 需要代理的链接不缓存为 302 目标，避免把网关地址当成 CDN。
+        return
+    key = _cdn_redirect_cache_key(play_url, user_agent)
+    now = time.monotonic()
+    async with _cdn_redirect_cache_lock:
+        if len(_cdn_redirect_cache) >= _CDN_REDIRECT_CACHE_MAX_ITEMS:
+            oldest_key = min(_cdn_redirect_cache.items(), key=lambda item: item[1][0])[
+                0
+            ]
+            _cdn_redirect_cache.pop(oldest_key, None)
+        _cdn_redirect_cache[key] = (
+            now + _CDN_REDIRECT_CACHE_TTL_SECONDS,
+            final_url,
+            play_mode,
+        )
 
 
 def _extract_api_pairs_from_direct_url(direct_url: str) -> dict[str, str]:
@@ -568,8 +674,17 @@ async def _resolve_final_redirect_info(
     play_url: str, *, user_agent: str
 ) -> tuple[str, str]:
     """返回 (最终跳转地址, play_mode)。"""
+    cached = await _get_cached_cdn_redirect(play_url, user_agent=user_agent)
+    if cached is not None:
+        return cached
     final_url = await _resolve_final_redirect_url(play_url, user_agent=user_agent)
     play_mode = "proxy" if _is_strm_play_url(final_url) else "redirect"
+    await _set_cached_cdn_redirect(
+        play_url,
+        user_agent=user_agent,
+        final_url=final_url,
+        play_mode=play_mode,
+    )
     return final_url, play_mode
 
 
@@ -619,40 +734,15 @@ async def emby_stream_redirect(
 
     media_source_id = MediaSourceId or mediaSourceId
     try:
-        context = await resolve_stream_play_context(
+        context = await resolve_stream_play_context_cached(
             item_id, media_source_id=media_source_id
         )
         play_url = str(context.get("play_url") or "")
         if not play_url:
             raise HTTPException(status_code=404, detail="not_strm")
 
-        container = str(context.get("container") or "").strip().lower()
-        if _should_proxy_disc_stream(container):
-            from app.services.strm_service import strm_service
-
-            token = strm_service._extract_token_from_url(play_url)
-            if request.method == "GET":
-                await _log_playback_start(
-                    request=request,
-                    context=context,
-                    play_mode="proxy",
-                    path=request.url.path,
-                )
-            logger.info(
-                "Emby stream proxy (disc image) item=%s container=%s ua=%s",
-                item_id,
-                container,
-                ua[:80],
-            )
-            return await strm_service.resolve_play_response_with_headers(
-                token=token,
-                method=request.method,
-                request_headers=_filter_request_headers(request),
-                client_ip=get_client_ip(request),
-                request_path=request.url.path,
-                force_proxy=True,
-            )
-
+        # ISO/MKV 统一走缓存后的单跳 302：客户端直连 115 CDN，才能跑满带宽。
+        # 此前 ISO 强制经服务端代理，速度被 NAS→115 下载带宽卡住。
         final_url, play_mode = await _resolve_final_redirect_info(
             play_url, user_agent=ua
         )
@@ -670,12 +760,18 @@ async def emby_stream_redirect(
             path=request.url.path,
         )
 
-    logger.info(
-        "Emby stream redirect item=%s -> %s ua=%s",
+    container = str(context.get("container") or "").strip().lower()
+    # ISO 寻址频繁，降级为 debug，避免同步写日志拖慢 302。
+    log_fn = logger.debug if container in {"iso", "img"} else logger.info
+    log_fn(
+        "Emby stream redirect item=%s container=%s mode=%s -> %s ua=%s",
         item_id,
+        container or "-",
+        play_mode,
         final_url[:160],
         ua[:80],
     )
+    # 与 MediaWarp / 既有 MKV 路径保持一致，使用 302。
     return RedirectResponse(url=final_url, status_code=302)
 
 

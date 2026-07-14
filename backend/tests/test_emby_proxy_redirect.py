@@ -7,7 +7,6 @@ import app.api.emby_proxy as emby_proxy_module
 from app.api.emby_proxy import (
     _map_emby_strm_path,
     _pick_media_source,
-    _should_proxy_disc_stream,
     _should_skip_stream_redirect,
     build_emby_style_direct_stream_url,
     resolve_local_strm_play_url,
@@ -189,17 +188,8 @@ class TestEmbyStreamRedirect:
         assert _should_skip_stream_redirect("Infuse/7.0") is False
         assert _should_skip_stream_redirect("") is False
 
-    def test_disc_image_uses_proxy_stream(self) -> None:
-        assert _should_proxy_disc_stream("iso") is True
-        assert _should_proxy_disc_stream("ISO") is True
-        assert _should_proxy_disc_stream("img") is True
-        assert _should_proxy_disc_stream("mkv") is False
-        assert _should_proxy_disc_stream("") is False
-
     @pytest.mark.asyncio
-    async def test_endpoint_proxies_iso_instead_of_302(self, monkeypatch) -> None:
-        proxied: dict[str, str] = {}
-
+    async def test_endpoint_redirects_iso_with_cached_cdn(self, monkeypatch) -> None:
         async def fake_context(item_id: str, *, media_source_id=None):
             return {
                 "play_url": "http://172.16.100.2:8099/api/strm/play/abc.token",
@@ -210,25 +200,19 @@ class TestEmbyStreamRedirect:
                 "container": "iso",
             }
 
-        class FakeResponse:
-            status_code = 206
-
-        class FakeStrm:
-            @staticmethod
-            def _extract_token_from_url(url: str) -> str:
-                return "abc.token"
-
-            @staticmethod
-            async def resolve_play_response_with_headers(**kwargs):
-                proxied.update(kwargs)
-                return FakeResponse()
+        async def fake_redirect(play_url: str, *, user_agent: str):
+            assert "SenPlayer" in user_agent
+            return "https://cdn.115.com/movie.iso", "redirect"
 
         monkeypatch.setattr(
-            emby_proxy_module, "resolve_stream_play_context", fake_context
+            emby_proxy_module,
+            "resolve_stream_play_context_cached",
+            fake_context,
         )
         monkeypatch.setattr(
-            "app.services.strm_service.strm_service",
-            FakeStrm(),
+            emby_proxy_module,
+            "_resolve_final_redirect_info",
+            fake_redirect,
         )
         from fastapi import Request
 
@@ -247,10 +231,8 @@ class TestEmbyStreamRedirect:
         }
         request = Request(scope)
         response = await emby_proxy_module.emby_stream_redirect("12", request)
-        assert response.status_code == 206
-        assert proxied["token"] == "abc.token"
-        assert proxied["force_proxy"] is True
-        assert proxied["method"] == "GET"
+        assert response.status_code == 302
+        assert response.headers["location"] == "https://cdn.115.com/movie.iso"
 
     @pytest.mark.asyncio
     async def test_endpoint_returns_404_for_non_strm(self, monkeypatch) -> None:
