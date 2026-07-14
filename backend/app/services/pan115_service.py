@@ -563,8 +563,23 @@ class Pan115Service:
         Returns:
             重命名结果
         """
-        result = await self._async_call("fs_rename", {"fid": fid, "name": name})
-        return check_response(result)
+        normalized_fid = str(fid or "").strip()
+        normalized_name = str(name or "").strip()
+        if not normalized_fid or not normalized_name:
+            raise ValueError("重命名参数无效")
+
+        last_error: Exception | None = None
+        for method_name in ("fs_rename", "fs_rename_app"):
+            try:
+                result = await self._async_call(method_name, (normalized_fid, normalized_name))
+                return check_response(result)
+            except Exception as exc:
+                last_error = exc
+                if self._is_method_not_allowed_error(str(exc)):
+                    continue
+                raise
+
+        raise last_error or Exception("重命名文件失败")
 
     async def get_file_info(self, fid: str) -> Dict[str, Any]:
         """

@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, select
 
 from app.core.database import async_session_maker
 from app.models.archive import ArchiveStatus, ArchiveTask
+from app.models.models import DownloadRecord, Subscription
 from app.services.media_postprocess_service import media_postprocess_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pan115_service import Pan115Service
@@ -735,9 +736,18 @@ class ArchiveService:
         )
 
         try:
-            genre_name = str(matched.get("genre_name") or "其他")
             region_name = str(matched.get("region_name") or MOVIE_REGION_DEFAULT)
-            title = str(matched.get("title") or parsed["query_title"])
+            transfer_context = await self._lookup_transfer_context(
+                str(item.get("cid") or ""),
+                fid,
+                str(item.get("relative_path") or ""),
+            )
+            display_title = self._resolve_archive_display_title(
+                parsed,
+                matched,
+                transfer_context=transfer_context,
+            )
+            title = display_title
             year = str(matched.get("year") or parsed.get("year") or "")
             naming = self._get_archive_naming()
             title_folder = self._build_title_folder(
@@ -748,6 +758,7 @@ class ArchiveService:
                 matched=matched,
                 parsed=parsed,
                 source_filename=filename,
+                display_title=display_title,
             )
 
             subdirs = self._get_archive_subdirs()
@@ -796,13 +807,16 @@ class ArchiveService:
 
             await pan115.move_file(fid, target_cid)
 
-            new_filename = self._build_target_filename(parsed, matched, filename, naming)
-            try:
-                await pan115.rename_file(fid, new_filename)
-            except Exception:
-                logger.warning(
-                    "重命名 %s -> %s 失败，保留原文件名", filename, new_filename
-                )
+            new_filename = self._build_target_filename(
+                parsed,
+                matched,
+                filename,
+                naming,
+                display_title=display_title,
+            )
+            renamed = await self._rename_archived_file(
+                pan115, fid, filename, new_filename
+            )
 
             if subtitle_items:
                 await self._move_subtitles(
@@ -813,6 +827,7 @@ class ArchiveService:
                     parsed,
                     matched,
                     naming=naming,
+                    display_title=display_title,
                 )
 
             await self._mark_task_success(db_task.id)
@@ -821,8 +836,16 @@ class ArchiveService:
                 module="archive",
                 action="archive.file.success",
                 status="success",
-                message=f"归档完成：{filename} → {target_desc}",
-                extra={"task_id": db_task.id, "target_desc": target_desc},
+                message=(
+                    f"归档完成：{filename} → {target_desc}"
+                    + (f"（重命名为 {new_filename}）" if renamed else "")
+                ),
+                extra={
+                    "task_id": db_task.id,
+                    "target_desc": target_desc,
+                    "renamed": renamed,
+                    "new_filename": new_filename if renamed else "",
+                },
             )
             return {
                 "task_id": db_task.id,
@@ -831,6 +854,8 @@ class ArchiveService:
                 "source_filename": filename,
                 "target_desc": target_desc,
                 "target_cid": target_cid,
+                "renamed": renamed,
+                "new_filename": new_filename if renamed else filename,
             }
         except Exception as exc:
             msg = str(exc) or "未知错误"
@@ -880,9 +905,18 @@ class ArchiveService:
             if not matched:
                 raise ValueError("TMDB 未匹配到可用结果")
 
-            genre_name = str(matched.get("genre_name") or "其他")
             region_name = str(matched.get("region_name") or MOVIE_REGION_DEFAULT)
-            title = str(matched.get("title") or parsed["query_title"])
+            transfer_context = await self._lookup_transfer_context(
+                str(item.get("cid") or source_cid or ""),
+                fid,
+                str(item.get("relative_path") or ""),
+            )
+            display_title = self._resolve_archive_display_title(
+                parsed,
+                matched,
+                transfer_context=transfer_context,
+            )
+            title = display_title
             year = str(matched.get("year") or parsed.get("year") or "")
             naming = self._get_archive_naming()
             title_folder = self._build_title_folder(
@@ -893,6 +927,7 @@ class ArchiveService:
                 matched=matched,
                 parsed=parsed,
                 source_filename=filename,
+                display_title=display_title,
             )
 
             subdirs = self._get_archive_subdirs()
@@ -947,19 +982,19 @@ class ArchiveService:
                 extra={"task_id": db_task.id, "matched": matched},
             )
 
-            # --- 参考QMediaSync：移动视频文件 ---
             await pan115.move_file(fid, target_cid)
 
-            # --- 参考QMediaSync：移动后重命名为规范文件名 ---
-            new_filename = self._build_target_filename(parsed, matched, filename, naming)
-            try:
-                await pan115.rename_file(fid, new_filename)
-            except Exception:
-                logger.warning(
-                    "重命名 %s -> %s 失败，保留原文件名", filename, new_filename
-                )
+            new_filename = self._build_target_filename(
+                parsed,
+                matched,
+                filename,
+                naming,
+                display_title=display_title,
+            )
+            renamed = await self._rename_archived_file(
+                pan115, fid, filename, new_filename
+            )
 
-            # --- 参考QMediaSync：关联移动字幕文件 ---
             if subtitle_items:
                 await self._move_subtitles(
                     pan115,
@@ -969,6 +1004,7 @@ class ArchiveService:
                     parsed,
                     matched,
                     naming=naming,
+                    display_title=display_title,
                 )
 
             await self._mark_task_success(db_task.id)
@@ -977,8 +1013,16 @@ class ArchiveService:
                 module="archive",
                 action="archive.file.success",
                 status="success",
-                message=f"归档完成：{filename} → {target_desc}",
-                extra={"task_id": db_task.id, "target_desc": target_desc},
+                message=(
+                    f"归档完成：{filename} → {target_desc}"
+                    + (f"（重命名为 {new_filename}）" if renamed else "")
+                ),
+                extra={
+                    "task_id": db_task.id,
+                    "target_desc": target_desc,
+                    "renamed": renamed,
+                    "new_filename": new_filename if renamed else "",
+                },
             )
             return {
                 "task_id": db_task.id,
@@ -987,6 +1031,8 @@ class ArchiveService:
                 "source_filename": filename,
                 "target_desc": target_desc,
                 "target_cid": target_cid,
+                "renamed": renamed,
+                "new_filename": new_filename if renamed else filename,
             }
         except Exception as exc:
             msg = str(exc) or "未知错误"
@@ -1012,6 +1058,112 @@ class ArchiveService:
     # ================================================================
 
     @staticmethod
+    def _extract_transfer_folder_name(relative_path: str) -> str:
+        path = str(relative_path or "").strip().replace("\\", "/")
+        if "/" not in path:
+            return ""
+        return path.rsplit("/", 1)[0].split("/")[-1].strip()
+
+    def _title_from_transfer_resource_name(self, resource_name: str) -> str:
+        name = str(resource_name or "").strip()
+        if not name:
+            return ""
+        parsed = self.parse_media_filename(
+            name if "." in name else f"{name}.mkv"
+        )
+        return str(parsed.get("query_title") or "").strip()
+
+    async def _lookup_transfer_context(
+        self,
+        parent_cid: str,
+        fid: str,
+        relative_path: str,
+    ) -> dict[str, str]:
+        resource_name = ""
+        subscription_title = ""
+        lookup_ids = [value for value in (parent_cid, fid) if str(value or "").strip()]
+        if lookup_ids:
+            async with async_session_maker() as db:
+                result = await db.execute(
+                    select(DownloadRecord.resource_name, Subscription.title)
+                    .join(
+                        Subscription,
+                        DownloadRecord.subscription_id == Subscription.id,
+                        isouter=True,
+                    )
+                    .where(DownloadRecord.file_id.in_(lookup_ids))
+                    .order_by(
+                        DownloadRecord.completed_at.desc().nullslast(),
+                        DownloadRecord.created_at.desc(),
+                    )
+                    .limit(1)
+                )
+                row = result.first()
+                if row:
+                    resource_name = str(row.resource_name or "").strip()
+                    subscription_title = str(row.title or "").strip()
+
+        folder_name = self._extract_transfer_folder_name(relative_path)
+        if not resource_name and folder_name:
+            resource_name = folder_name
+
+        return {
+            "resource_name": resource_name,
+            "subscription_title": subscription_title,
+        }
+
+    def _resolve_archive_display_title(
+        self,
+        parsed: dict[str, Any],
+        matched: dict[str, Any],
+        *,
+        transfer_context: dict[str, str] | None = None,
+    ) -> str:
+        context = transfer_context or {}
+        media_type = str(parsed.get("media_type") or "movie")
+        tmdb_title = str(matched.get("title") or "").strip()
+        parsed_title = str(parsed.get("query_title") or "").strip()
+
+        transfer_title = self._title_from_transfer_resource_name(
+            str(context.get("resource_name") or "")
+        )
+        subscription_title = str(context.get("subscription_title") or "").strip()
+
+        if media_type == "movie":
+            for candidate in (transfer_title, subscription_title, tmdb_title, parsed_title):
+                if len(candidate) >= 2:
+                    return candidate
+            return tmdb_title or parsed_title
+
+        for candidate in (tmdb_title, transfer_title, subscription_title, parsed_title):
+            if len(candidate) >= 2:
+                return candidate
+        return tmdb_title or parsed_title
+
+    async def _rename_archived_file(
+        self,
+        pan115: Pan115Service,
+        fid: str,
+        old_name: str,
+        new_name: str,
+    ) -> bool:
+        normalized_old = str(old_name or "").strip()
+        normalized_new = str(new_name or "").strip()
+        if not normalized_new or normalized_new == normalized_old:
+            return False
+        try:
+            await pan115.rename_file(fid, normalized_new)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "重命名 %s -> %s 失败，保留原文件名：%s",
+                normalized_old,
+                normalized_new,
+                exc,
+            )
+            return False
+
+    @staticmethod
     def _build_title_folder(
         media_type: str,
         title: str,
@@ -1021,14 +1173,16 @@ class ArchiveService:
         matched: dict[str, Any] | None = None,
         parsed: dict[str, Any] | None = None,
         source_filename: str = "",
+        display_title: str = "",
     ) -> str:
         template_key = "tv_folder" if media_type == "tv" else "movie_folder"
         matched = matched or {}
         parsed = parsed or {}
+        resolved_title = str(display_title or title or "").strip()
         return render_archive_name(
             naming,
             template_key,
-            title=title,
+            title=resolved_title,
             year=year,
             tmdb_id=matched.get("tmdb_id"),
             media_type=str(parsed.get("media_type") or media_type),
@@ -1042,8 +1196,15 @@ class ArchiveService:
         matched: dict[str, Any],
         original_filename: str,
         naming: dict[str, str] | None = None,
+        *,
+        display_title: str = "",
     ) -> str:
-        title = str(matched.get("title") or parsed.get("query_title") or "")
+        title = str(
+            display_title
+            or matched.get("title")
+            or parsed.get("query_title")
+            or ""
+        )
         year = str(matched.get("year") or parsed.get("year") or "")
         ext = str(parsed.get("extension") or "")
         if not ext and original_filename:
@@ -1079,6 +1240,8 @@ class ArchiveService:
         parsed: dict[str, Any],
         matched: dict[str, Any],
         naming: dict[str, str] | None = None,
+        *,
+        display_title: str = "",
     ) -> None:
         video_base = re.sub(r"\.[^.]+$", "", video_item["name"]).lower()
         video_cid = video_item.get("cid", "")
@@ -1099,12 +1262,15 @@ class ArchiveService:
                 if sub_ext:
                     sub_parsed["extension"] = sub_ext
                 new_sub_name = self._build_target_filename(
-                    sub_parsed, matched, sub["name"], naming
+                    sub_parsed,
+                    matched,
+                    sub["name"],
+                    naming,
+                    display_title=display_title,
                 )
-                try:
-                    await pan115.rename_file(sub["fid"], new_sub_name)
-                except Exception:
-                    logger.warning("字幕重命名 %s 失败", sub["name"])
+                await self._rename_archived_file(
+                    pan115, sub["fid"], sub["name"], new_sub_name
+                )
             except Exception:
                 logger.warning("字幕移动 %s 失败", sub["name"])
 

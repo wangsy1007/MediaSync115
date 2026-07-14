@@ -191,6 +191,40 @@ class TestArchiveService:
         )
         assert filename == "黑客帝国.1999.4K HDR10 HEVC.mkv"
 
+    def test_resolve_archive_display_title_prefers_transfer_name_for_movie(self) -> None:
+        parsed = {
+            "media_type": "movie",
+            "query_title": "The Wandering Earth II",
+        }
+        matched = {"title": "流浪地球2", "year": "2023"}
+        title = archive_service._resolve_archive_display_title(
+            parsed,
+            matched,
+            transfer_context={
+                "resource_name": "流浪地球2.2023.2160p.WEB-DL.mkv",
+                "subscription_title": "流浪地球2",
+            },
+        )
+        assert title == "流浪地球2"
+
+    def test_title_from_transfer_resource_name(self) -> None:
+        title = archive_service._title_from_transfer_resource_name(
+            "The.Batman.2022.2160p.UHD.BluRay.x265.HDR.mkv"
+        )
+        assert title == "The Batman"
+
+    def test_build_target_filename_uses_display_title(self) -> None:
+        parsed = {"media_type": "movie", "query_title": "Matrix", "extension": ".mkv"}
+        matched = {"title": "黑客帝国", "year": "1999"}
+        filename = archive_service._build_target_filename(
+            parsed,
+            matched,
+            "old.mkv",
+            None,
+            display_title="流浪地球2",
+        )
+        assert filename == "流浪地球2 (1999).mkv"
+
     @pytest.mark.asyncio
     async def test_retry_success_triggers_scoped_strm(self, monkeypatch) -> None:
         """测试重试成功后携带归档成果触发 STRM"""
