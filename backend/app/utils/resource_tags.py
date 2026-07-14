@@ -73,6 +73,58 @@ ALL_EXCLUDE_LABELS = [label for label, _ in EXCLUDE_PATTERNS]
 ALL_LANGUAGE_LABELS = [label for label, _ in LANGUAGE_PATTERNS]
 ALL_SUBTITLE_LABELS = [label for label, _ in SUBTITLE_PATTERNS]
 
+# ISO/IMG 原盘文件（订阅转存默认跳过，避免播放卡顿）
+ISO_DISC_FILE_EXT_PATTERN = re.compile(r"\.(?:iso|img)\b", re.IGNORECASE)
+ISO_DISC_BDMV_PATTERN = re.compile(r"\bBDMV\b", re.IGNORECASE)
+ISO_DISC_VIDEO_TS_PATTERN = re.compile(r"\bVIDEO_TS\b", re.IGNORECASE)
+
+
+def is_iso_disc_filename(filename: str) -> bool:
+    """判断文件名是否为 ISO/IMG 原盘镜像。"""
+    value = str(filename or "").strip().lower()
+    if not value:
+        return False
+    return value.endswith((".iso", ".img"))
+
+
+def is_iso_disc_resource(resource: dict[str, Any]) -> bool:
+    """判断搜索/订阅资源是否指向 ISO/IMG 原盘或 BDMV 结构。"""
+    for key in (
+        "resource_name",
+        "title",
+        "name",
+        "overview",
+        "resource_url",
+        "url",
+        "link",
+        "matched_media_title",
+    ):
+        val = resource.get(key)
+        if not isinstance(val, str) or not val.strip():
+            continue
+        text = val.strip()
+        if ISO_DISC_FILE_EXT_PATTERN.search(text):
+            return True
+        if ISO_DISC_BDMV_PATTERN.search(text) or ISO_DISC_VIDEO_TS_PATTERN.search(text):
+            return True
+    return False
+
+
+def filter_iso_disc_resources(
+    resources: list[dict[str, Any]], *, enabled: bool = True
+) -> tuple[list[dict[str, Any]], int]:
+    """过滤 ISO/IMG 原盘资源，返回 (保留列表, 排除数量)。"""
+    if not enabled:
+        return list(resources), 0
+    kept: list[dict[str, Any]] = []
+    excluded = 0
+    for item in resources:
+        if is_iso_disc_resource(item):
+            excluded += 1
+        else:
+            kept.append(item)
+    return kept, excluded
+
 
 def _collect_text(resource: dict[str, Any]) -> str:
     """Build a searchable text blob from all relevant resource fields."""

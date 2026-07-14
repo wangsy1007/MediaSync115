@@ -48,7 +48,12 @@ from app.services.subscription_cleanup_policy import (
     normalize_tv_follow_mode,
 )
 from app.services.tv_missing_service import tv_missing_service
-from app.utils.resource_tags import sort_by_preference, filter_and_sort_by_quality
+from app.utils.resource_tags import (
+    filter_and_sort_by_quality,
+    filter_iso_disc_resources,
+    is_iso_disc_resource,
+    sort_by_preference,
+)
 from app.utils.name_parser import name_parser
 
 logger = logging.getLogger(__name__)
@@ -1748,6 +1753,28 @@ class SubscriptionService:
                         attempt["count"] = 0
                         attempt["error"] = "资源经画质/归属校验后均不可用"
 
+        primary_resources, iso_excluded = filter_iso_disc_resources(
+            primary_resources,
+            enabled=runtime_settings_service.get_subscription_exclude_iso(),
+        )
+        if iso_excluded > 0:
+            traces.append(
+                {
+                    "step": "iso_disc_filtered",
+                    "status": "info",
+                    "message": f"已跳过 {iso_excluded} 条 ISO/IMG 原盘资源",
+                }
+            )
+            if not primary_resources:
+                for attempt in source_attempts:
+                    if (
+                        attempt.get("status") == "success"
+                        and int(attempt.get("count") or 0) > 0
+                    ):
+                        attempt["status"] = "empty"
+                        attempt["count"] = 0
+                        attempt["error"] = "资源经 ISO 原盘过滤后均不可用"
+
         return (
             primary_resources,
             traces,
@@ -3120,6 +3147,28 @@ class SubscriptionService:
                 share_link, receive_code = self._split_share_link_and_receive_code(
                     record.resource_url
                 )
+                if is_iso_disc_resource(
+                    {
+                        "resource_name": record.resource_name,
+                        "title": record.resource_name,
+                        "resource_url": record.resource_url,
+                    }
+                ) and runtime_settings_service.get_subscription_exclude_iso():
+                    record.status = MediaStatus.FAILED
+                    record.error_message = "ISO/IMG 原盘资源已跳过（可在订阅任务设置中关闭）"
+                    await self._create_step_log(
+                        db,
+                        run_id=run_id,
+                        channel=channel,
+                        subscription_id=sub.id,
+                        subscription_title=sub.title,
+                        step="auto_transfer_item_skipped_iso",
+                        status="info",
+                        message=f"跳过 ISO/IMG 原盘：{record.resource_name}",
+                        payload={"source": source, "record_id": record.id},
+                    )
+                    continue
+
                 record.status = MediaStatus.TRANSFERRING
                 if tv_missing_enabled and is_tv_subscription:
                     share_code = pan_service._extract_share_code(share_link)
@@ -3129,6 +3178,7 @@ class SubscriptionService:
                     all_files = await pan_service.get_share_all_files_recursive(
                         share_code, receive_code
                     )
+                    all_files = pan_service._filter_iso_disc_share_files(all_files)
                     matched_candidates: dict[tuple[int, int], list[dict[str, Any]]] = {}
                     parsed_count = 0
                     unparsed_video_count = 0

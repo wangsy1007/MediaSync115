@@ -121,6 +121,7 @@ class RuntimeSettingsRequest(BaseModel):
     detail_visible_tabs: Optional[list[str]] = None
     license_key: Optional[str] = None
     subscription_offline_transfer_enabled: Optional[bool] = None
+    subscription_exclude_iso: Optional[bool] = None
     chart_subscription_enabled: Optional[bool] = None
     chart_subscription_sources: Optional[list] = None
     chart_subscription_limit: Optional[int] = None
@@ -151,6 +152,7 @@ _SUBSCRIPTION_SCHEDULER_SETTING_KEYS = frozenset(
         "subscription_hdhive_unlock_threshold_inclusive",
         "subscription_hdhive_prefer_free",
         "subscription_offline_transfer_enabled",
+        "subscription_exclude_iso",
     }
 )
 _CHART_SUBSCRIPTION_SETTING_KEYS = frozenset(

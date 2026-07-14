@@ -1630,6 +1630,21 @@ class Pan115Service:
                 )
         return max(video_files, key=cls._score_video_file)
 
+    @staticmethod
+    def _filter_iso_disc_share_files(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """订阅转存开启「跳过 ISO 原盘」时，从分享文件列表中剔除 ISO/IMG。"""
+        from app.services.runtime_settings_service import runtime_settings_service
+        from app.utils.resource_tags import is_iso_disc_filename
+
+        if not runtime_settings_service.get_subscription_exclude_iso():
+            return files
+        return [
+            item
+            for item in files
+            if isinstance(item, dict)
+            and not is_iso_disc_filename(str(item.get("name") or ""))
+        ]
+
     @classmethod
     def _select_files_for_best_quality_transfer(
         cls, files: list[dict[str, Any]],
@@ -2471,6 +2486,7 @@ class Pan115Service:
 
         # 递归获取分享中的所有文件（包括子文件夹中的文件）
         all_files = await self.get_share_all_files_recursive(share_code, receive_code)
+        all_files = self._filter_iso_disc_share_files(all_files)
 
         if not all_files:
             raise ValueError("分享中没有可转存的文件")
@@ -2534,6 +2550,7 @@ class Pan115Service:
         """将分享里的所有文件直接转存到目标目录，不创建影视外层文件夹。"""
         share_code, receive_code = self._resolve_share_payload(share_url, receive_code)
         all_files = await self.get_share_all_files_recursive(share_code, receive_code)
+        all_files = self._filter_iso_disc_share_files(all_files)
         if not all_files:
             raise ValueError("分享中没有可转存的文件")
 

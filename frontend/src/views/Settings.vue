@@ -1257,6 +1257,12 @@
             </el-form-item>
 
             <el-divider content-position="left">离线转存</el-divider>
+            <el-form-item label="不获取 ISO 原盘">
+              <el-switch v-model="schedulerForm.excludeIso" />
+              <el-text size="small" type="info" style="margin-left: 8px">
+                开启后，订阅搜索与转存将跳过 .iso / .img 原盘及 BDMV 资源，优先获取可 302 直链播放的封装格式
+              </el-text>
+            </el-form-item>
             <el-form-item label="启用离线转存">
               <el-switch v-model="schedulerForm.offlineTransferEnabled" />
               <el-text size="small" type="info" style="margin-left: 8px">
@@ -2022,6 +2028,7 @@ const tmdbForm = ref({
 
 const schedulerForm = ref({
   offlineTransferEnabled: false,
+  excludeIso: true,
   enabled: false,
   intervalHours: 24,
   hdhiveUnlock: {
@@ -4603,6 +4610,7 @@ const fetchRuntimeSettings = async () => {
     }
 
     schedulerForm.value.offlineTransferEnabled = !!data.subscription_offline_transfer_enabled
+    schedulerForm.value.excludeIso = data.subscription_exclude_iso !== false
     schedulerForm.value.enabled = !!data.subscription_enabled
     schedulerForm.value.intervalHours = Number(data.subscription_interval_hours || 24)
     schedulerForm.value.hdhiveUnlock.enabled = !!data.subscription_hdhive_auto_unlock_enabled
@@ -4798,6 +4806,7 @@ const handleSaveScheduler = async () => {
     const normalizedEnabled = buildResourceEnabledPayload()
     await settingsApi.updateRuntime({
       subscription_offline_transfer_enabled: schedulerForm.value.offlineTransferEnabled,
+      subscription_exclude_iso: schedulerForm.value.excludeIso !== false,
       subscription_enabled: schedulerForm.value.enabled,
       subscription_interval_hours: Number(schedulerForm.value.intervalHours || 24),
       subscription_resource_priority: normalizedPriority,

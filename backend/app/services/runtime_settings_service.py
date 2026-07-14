@@ -170,6 +170,7 @@ class RuntimeSettingsService:
             ],
             "license_key": "",
             "subscription_offline_transfer_enabled": False,
+            "subscription_exclude_iso": True,
             "chart_subscription_enabled": False,
             "chart_subscription_sources": [],
             "chart_subscription_limit": 20,
@@ -896,6 +897,12 @@ class RuntimeSettingsService:
     def get_subscription_offline_transfer_enabled(self) -> bool:
         return bool(self._data.get("subscription_offline_transfer_enabled", False))
 
+    def get_subscription_exclude_iso(self) -> bool:
+        """订阅转存时跳过 ISO/IMG 原盘资源（默认开启）。"""
+        if "subscription_exclude_iso" not in self._data:
+            return True
+        return bool(self._data.get("subscription_exclude_iso"))
+
     def get_resource_preferred_resolutions(self) -> list[str]:
         val = self._data.get("resource_preferred_resolutions")
         return list(val) if isinstance(val, list) else []
@@ -1545,6 +1552,7 @@ class RuntimeSettingsService:
             "detail_visible_tabs": self._data.get("detail_visible_tabs") or [],
             "license_key": str(self._data.get("license_key") or ""),
             "subscription_offline_transfer_enabled": self.get_subscription_offline_transfer_enabled(),
+            "subscription_exclude_iso": self.get_subscription_exclude_iso(),
             "chart_subscription_enabled": bool(
                 self._data.get("chart_subscription_enabled", False)
             ),
