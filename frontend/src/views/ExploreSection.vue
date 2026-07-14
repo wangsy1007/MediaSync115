@@ -90,12 +90,17 @@
       @configured="handleTmdbConfigured"
     />
 
+    <div v-else-if="loadError && !loading" class="page-error">
+      <span>{{ loadError }}</span>
+      <el-button type="primary" link @click="fetchSection({ refresh: true })">重试</el-button>
+    </div>
+
     <el-empty v-else-if="!loading" description="暂无榜单数据" />
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, triggerRef, watch } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, reactive, ref, shallowRef, triggerRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { searchApi, subscriptionApi } from '@/api'
@@ -110,6 +115,10 @@ import {
   setCachedExploreSectionBatch,
   setExploreSectionBatchInflight
 } from '@/utils/exploreSectionBatchCache'
+import {
+  findCachedExploreSectionFirstBatch,
+  resolveExploreSectionSource
+} from '@/utils/exploreSectionSource'
 import { createExploreLibraryBadgeSyncer } from '@/utils/exploreLibraryBadgeSync'
 import { buildExploreQueuePayload } from '@/utils/exploreQueuePayload'
 const resolveExploreSpeedMode = () => {
@@ -136,6 +145,7 @@ const normalizeExploreSource = (rawSource) => {
 const exploreSource = computed(() => normalizeExploreSource(route.params.source))
 
 const loading = ref(false)
+const loadError = ref('')
 const tmdbConfigured = ref(true)
 const loadingMore = ref(false)
 const allItems = shallowRef([])
@@ -447,6 +457,45 @@ const clearPrefetchTimer = () => {
   }
 }
 
+const getEffectiveSectionSource = () => {
+  const sectionKey = String(route.params.key || '').trim()
+  const routeSource = normalizeExploreSource(route.params.source)
+  if (!sectionKey) return routeSource
+  const expectedSource = resolveExploreSectionSource(sectionKey, routeSource)
+  if (expectedSource !== routeSource) {
+    router.replace({
+      name: 'ExploreSection',
+      params: {
+        source: expectedSource,
+        key: sectionKey
+      }
+    })
+  }
+  return expectedSource
+}
+
+const hydrateFromCachedFirstBatch = (sectionSource, sectionKey) => {
+  const cached = findCachedExploreSectionFirstBatch(
+    sectionSource,
+    sectionKey,
+    getCachedExploreSectionBatch
+  )
+  if (!cached) return false
+
+  mergeEmbyStatusMap(cached?.emby_status_map || {})
+  mergeFeiniuStatusMap(cached?.feiniu_status_map || {})
+  const { batchItems, payloadStart, payloadCount } = updateSectionMetaFromPayload(cached, 0)
+  scheduleLibraryBadgeSync(batchItems)
+  nextOffset.value = Math.max(nextOffset.value, payloadStart + payloadCount)
+  prefetchCursor = Math.max(prefetchCursor, nextOffset.value)
+  fetchedOnce.value = true
+  const appended = appendUniqueItems(batchItems)
+  if (appended > 0) {
+    displayCount.value = allItems.value.length
+  }
+  return appended > 0
+}
+
 const requestSectionBatch = async (sectionSource, sectionKey, start, { refresh = false } = {}) => {
   const count = API_BATCH_SIZE
   if (!refresh) {
@@ -457,7 +506,9 @@ const requestSectionBatch = async (sectionSource, sectionKey, start, { refresh =
   const inflight = getExploreSectionBatchInflight(sectionSource, sectionKey, start, count)
   if (inflight) return inflight
 
-  const task = searchApi.getExploreSection(sectionSource, sectionKey, count, refresh, start)
+  const task = searchApi.getExploreSection(sectionSource, sectionKey, count, refresh, start, {
+    silentError: true
+  })
     .then(({ data }) => {
       const payload = {
         ...(data.section || {}),
@@ -787,7 +838,7 @@ const fetchNextBatch = async ({ refresh = false, silent = false } = {}) => {
   if (!sectionKey) return 0
   if (fetchedOnce.value && !hasMoreRemote.value) return 0
   const requestStart = nextOffset.value
-  const sectionSource = exploreSource.value
+  const sectionSource = getEffectiveSectionSource()
   prefetchedOffsets.delete(requestStart)
 
   if (!silent) loadingMore.value = true
@@ -802,6 +853,11 @@ const fetchNextBatch = async ({ refresh = false, silent = false } = {}) => {
     prefetchCursor = Math.max(prefetchCursor, nextOffset.value)
     fetchedOnce.value = true
     return appendUniqueItems(batchItems)
+  } catch (error) {
+    if (!silent) {
+      loadError.value = error.response?.data?.detail || error.message || '获取榜单失败'
+    }
+    throw error
   } finally {
     if (!silent) loadingMore.value = false
   }
@@ -845,7 +901,7 @@ const ensurePrefetchBuffer = async () => {
   }
   if (!hasMoreRemote.value) return
   const sectionKey = route.params.key
-  const sectionSource = exploreSource.value
+  const sectionSource = getEffectiveSectionSource()
   if (!sectionKey) return
 
   prefetchCursor = Math.max(prefetchCursor, nextOffset.value)
@@ -947,32 +1003,44 @@ const handleTmdbConfigured = async () => {
   await fetchSection()
 }
 
-const fetchSection = async () => {
+const fetchSection = async ({ refresh = false } = {}) => {
   const sectionKey = route.params.key
   if (!sectionKey) return
   activeSectionToken += 1
   loading.value = true
+  loadError.value = ''
   resetSectionState()
   try {
+    const sectionSource = getEffectiveSectionSource()
     const configured = await checkTmdbConfigured()
     if (!configured) {
       return
     }
-    // 订阅状态后台刷新，不阻塞首屏
     refreshSubscribedMap()
-    const appended = await fetchNextBatch({ refresh: false, silent: false })
+
+    if (!refresh && hydrateFromCachedFirstBatch(sectionSource, sectionKey)) {
+      applySubscribedFlags()
+      schedulePrefetch()
+      await nextTick()
+      setupLoadObserver()
+      return
+    }
+
+    const appended = await fetchNextBatch({ refresh, silent: false })
     if (appended > 0) {
       displayCount.value = allItems.value.length
     }
     prefetchCursor = Math.max(prefetchCursor, nextOffset.value)
     schedulePrefetch()
     await nextTick()
-    // 确保首批条目的角标状态被正确应用（emby/feiniu status map 已在 fetchNextBatch 中 merge）
     applySubscribedFlags()
     setupLoadObserver()
   } catch (error) {
-    resetSectionState()
-    ElMessage.error(error.response?.data?.detail || '获取榜单失败')
+    if (!allItems.value.length) {
+      resetSectionState()
+      loadError.value = error.response?.data?.detail || error.message || '获取榜单失败'
+      ElMessage.error(loadError.value)
+    }
   } finally {
     loading.value = false
     schedulePrefetch()
@@ -980,10 +1048,6 @@ const fetchSection = async () => {
 }
 
 watch(() => route.params.key, () => {
-  fetchSection()
-})
-
-watch(() => route.params.source, () => {
   fetchSection()
 })
 
@@ -1012,6 +1076,13 @@ watch(loadAnchorRef, () => {
 onMounted(() => {
   startExploreQueuePolling()
   fetchSection()
+})
+
+onActivated(() => {
+  if (!route.params.key) return
+  if (!loading.value && !allItems.value.length && !loadError.value) {
+    fetchSection()
+  }
 })
 
 onBeforeUnmount(() => {
@@ -1206,6 +1277,16 @@ onBeforeUnmount(() => {
 
   .load-anchor.done {
     color: var(--ms-text-muted);
+  }
+
+  .page-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 48px 16px;
+    color: var(--ms-text-muted);
+    font-size: 14px;
   }
 }
 

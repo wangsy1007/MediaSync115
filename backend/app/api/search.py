@@ -1427,6 +1427,17 @@ def _find_maoyan_source(section_key: str):
     )
 
 
+def _resolve_explore_section_source(section_key: str) -> str | None:
+    """根据 section key 推断数据源，避免客户端传错 source 导致 404。"""
+    if _find_tmdb_source(section_key):
+        return "tmdb"
+    if _find_douban_source(section_key):
+        return "douban"
+    if _find_maoyan_source(section_key):
+        return "maoyan"
+    return None
+
+
 def _normalize_explore_source(source: str) -> str:
     normalized = str(source or "douban").strip().lower()
     if normalized in {"douban", "tmdb", "maoyan"}:
@@ -2094,7 +2105,14 @@ async def get_explore_section(
     ),
     refresh: bool = Query(False, description="Force refresh cache"),
 ):
+    resolved_source = _resolve_explore_section_source(section_key)
+    if not resolved_source:
+        raise HTTPException(
+            status_code=404, detail=f"Unknown section key: {section_key}"
+        )
     normalized_source = _normalize_explore_source(source)
+    if normalized_source != resolved_source:
+        normalized_source = resolved_source
 
     if normalized_source == "maoyan":
         section = _find_maoyan_source(section_key)
@@ -2149,10 +2167,7 @@ async def get_explore_section(
 
     if normalized_source == "tmdb":
         section = _find_tmdb_source(section_key)
-        if not section:
-            raise HTTPException(
-                status_code=404, detail=f"Unknown section key: {section_key}"
-            )
+        assert section is not None
 
         try:
             payload = await fetch_tmdb_section(section, limit, refresh, start=start)
@@ -2193,10 +2208,7 @@ async def get_explore_section(
         }
 
     section = _find_douban_source(section_key)
-    if not section:
-        raise HTTPException(
-            status_code=404, detail=f"Unknown section key: {section_key}"
-        )
+    assert section is not None
 
     library_prime_limit = _douban_explore_sync_prime_limit(limit, start)
     try:

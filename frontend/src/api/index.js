@@ -162,8 +162,12 @@ export const searchApi = {
     api.get('/search/explore/meta', { params: { source } }),
   getExploreSections: (source = 'douban', limit = 24, refresh = false) =>
     api.get('/search/explore/sections', { params: { source, limit, refresh } }),
-  getExploreSection: (source = 'douban', sectionKey, limit = 30, refresh = false, start = 0) =>
-    api.get(`/search/explore/section/${sectionKey}`, { params: { source, limit, refresh, start } }),
+  getExploreSection: (source = 'douban', sectionKey, limit = 30, refresh = false, start = 0, config = {}) =>
+    api.get(`/search/explore/section/${sectionKey}`, {
+      params: { source, limit, refresh, start },
+      timeout: 60000,
+      ...config
+    }),
   getEmbyStatusMap: (items = []) => api.post('/search/emby/status-map', { items }),
   getFeiniuStatusMap: (items = []) => api.post('/search/feiniu/status-map', { items }),
   resolveExploreItem: (payload) => api.post('/search/explore/resolve', payload),

@@ -5,6 +5,7 @@ import {
   readAuthSessionHint,
   writeAuthSessionHint
 } from '@/utils/authSessionHint'
+import { resolveExploreSectionSource } from '@/utils/exploreSectionSource'
 
 const routes = [
   {
@@ -28,7 +29,11 @@ const routes = [
   },
   {
     path: '/explore/section/:key',
-    redirect: to => `/explore/douban/section/${encodeURIComponent(to.params.key)}`
+    redirect: to => {
+      const key = encodeURIComponent(to.params.key)
+      const source = resolveExploreSectionSource(to.params.key)
+      return `/explore/${source}/section/${key}`
+    }
   },
   {
     path: '/explore/:source(douban|tmdb|maoyan)/section/:key',
