@@ -198,6 +198,7 @@ class RuntimeSettingsService:
             "strm_token_secret": "",
             "strm_proxy_enabled": False,
             "strm_proxy_port": 8099,
+            "strm_early_redirect": True,
             "strm_schedule_enabled": False,
             "strm_incremental_interval_minutes": 360,
             "strm_full_schedule_enabled": False,
@@ -1048,6 +1049,12 @@ class RuntimeSettingsService:
     def get_strm_proxy_port(self) -> int:
         return int(self._data.get("strm_proxy_port") or 8099)
 
+    def get_strm_early_redirect(self) -> bool:
+        """SmartStrm 风格：PlaybackInfo 阶段提前返回 CDN 直链，缩短首播等待。"""
+        if "strm_early_redirect" not in self._data:
+            return True
+        return bool(self._data.get("strm_early_redirect"))
+
     def get_strm_schedule_enabled(self) -> bool:
         return bool(self._data.get("strm_schedule_enabled", False))
 
@@ -1085,6 +1092,7 @@ class RuntimeSettingsService:
             "strm_refresh_feiniu_after_generate": self.get_strm_refresh_feiniu_after_generate(),
             "strm_proxy_enabled": self.get_strm_proxy_enabled(),
             "strm_proxy_port": self.get_strm_proxy_port(),
+            "strm_early_redirect": self.get_strm_early_redirect(),
             "strm_schedule_enabled": self.get_strm_schedule_enabled(),
             "strm_incremental_interval_minutes": self.get_strm_incremental_interval_minutes(),
             "strm_full_schedule_enabled": self.get_strm_full_schedule_enabled(),
@@ -1143,6 +1151,11 @@ class RuntimeSettingsService:
             self._data["strm_proxy_enabled"] = bool(payload["strm_proxy_enabled"])
         if "strm_proxy_port" in payload and payload["strm_proxy_port"] is not None:
             self._data["strm_proxy_port"] = int(payload["strm_proxy_port"] or 8099)
+        if (
+            "strm_early_redirect" in payload
+            and payload["strm_early_redirect"] is not None
+        ):
+            self._data["strm_early_redirect"] = bool(payload["strm_early_redirect"])
         if "strm_schedule_enabled" in payload and payload["strm_schedule_enabled"] is not None:
             self._data["strm_schedule_enabled"] = bool(payload["strm_schedule_enabled"])
         if (
@@ -1565,6 +1578,7 @@ class RuntimeSettingsService:
             "strm_refresh_feiniu_after_generate": self.get_strm_refresh_feiniu_after_generate(),
             "strm_proxy_enabled": self.get_strm_proxy_enabled(),
             "strm_proxy_port": self.get_strm_proxy_port(),
+            "strm_early_redirect": self.get_strm_early_redirect(),
             "strm_schedule_enabled": self.get_strm_schedule_enabled(),
             "strm_incremental_interval_minutes": self.get_strm_incremental_interval_minutes(),
             "strm_full_schedule_enabled": self.get_strm_full_schedule_enabled(),

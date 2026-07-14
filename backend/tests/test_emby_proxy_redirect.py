@@ -431,8 +431,8 @@ def _build_stream_request(
     return Request(scope)
 
 
-class TestIsoLocalProxy:
-    """ISO/IMG 原盘强制走本地 Range 反代（绕开 f=1 直链 UA 死结）。"""
+class TestIsoSmartStrmRedirect:
+    """ISO/IMG 原盘对齐 SmartStrm：与 mkv 同链路 302，proxy 模式才走本地反代。"""
 
     def _iso_context(self, container: str = "iso"):
         async def fake_context(item_id: str, *, media_source_id=None):
@@ -459,61 +459,33 @@ class TestIsoLocalProxy:
         assert f("https://cdn.115cdn.net/x/movie.iso?t=1") == ""
 
     @pytest.mark.asyncio
-    async def test_iso_endpoint_307_to_local_proxy(self, monkeypatch) -> None:
-        async def fake_fetch(pick_code, *, user_agent="", **kwargs):
-            return {"download_url": "https://cdnx.115cdn.net/a/movie.iso?t=1&f=1"}
-
+    async def test_iso_redirect_mode_307_to_cdn(self, monkeypatch) -> None:
+        """SmartStrm 风格：ISO 默认 302 到 CDN，不走本地反代。"""
+        monkeypatch.setattr(
+            emby_proxy_module.runtime_settings_service,
+            "get_strm_redirect_mode",
+            lambda: "redirect",
+        )
         monkeypatch.setattr(
             emby_proxy_module,
             "resolve_stream_play_context_cached",
             self._iso_context("iso"),
         )
-        import app.services.strm_service as strm_module
 
-        monkeypatch.setattr(
-            strm_module.strm_service, "_fetch_pick_code_download_info", fake_fetch
-        )
+        async def fake_final(play_url: str, headers=None, *, player_ua=""):
+            return "https://cdn.115.com/movie.iso?f=1"
+
+        monkeypatch.setattr(emby_proxy_module, "get_final_redirect_link", fake_final)
         response = await emby_proxy_module.emby_stream_redirect(
             "12", _build_stream_request()
         )
         assert response.status_code == 307
-        assert response.headers["location"].startswith("/api/proxy-115?url=")
-        # CDN 直链被编码进 url 参数
-        assert "cdnx.115cdn.net" in response.headers["location"]
+        assert response.headers["location"] == "https://cdn.115.com/movie.iso?f=1"
 
     @pytest.mark.asyncio
-    async def test_iso_uses_fixed_ua_not_player_ua(self, monkeypatch) -> None:
-        """核心防回归：申请 ISO 直链必须用固定 UA，不用播放器 UA。"""
+    async def test_iso_uses_player_ua_for_cdn_redirect(self, monkeypatch) -> None:
+        """302 直链时申请 115 链接应绑定播放器 UA。"""
         seen = {}
-
-        async def fake_fetch(pick_code, *, user_agent="", **kwargs):
-            seen["ua"] = user_agent
-            return {"download_url": "https://cdnx.115cdn.net/a/movie.iso?f=1"}
-
-        monkeypatch.setattr(
-            emby_proxy_module,
-            "resolve_stream_play_context_cached",
-            self._iso_context("iso"),
-        )
-        import app.services.strm_service as strm_module
-
-        monkeypatch.setattr(
-            strm_module.strm_service, "_fetch_pick_code_download_info", fake_fetch
-        )
-        # 播放器带会被 CDN 403 的 UA
-        await emby_proxy_module.emby_stream_redirect(
-            "12",
-            _build_stream_request(user_agent=b"AppleCoreMedia/1.0 (iPhone)"),
-        )
-        from app.api.pan115_play import PROXY_115_DEFAULT_UA
-
-        assert seen["ua"] == PROXY_115_DEFAULT_UA
-
-    @pytest.mark.asyncio
-    async def test_iso_ignores_strm_redirect_mode(self, monkeypatch) -> None:
-        """ISO 无条件反代，不受全局 strm_redirect_mode 影响。"""
-        async def fake_fetch(pick_code, *, user_agent="", **kwargs):
-            return {"download_url": "https://cdnx.115cdn.net/a/movie.iso?f=1"}
 
         monkeypatch.setattr(
             emby_proxy_module.runtime_settings_service,
@@ -525,51 +497,30 @@ class TestIsoLocalProxy:
             "resolve_stream_play_context_cached",
             self._iso_context("iso"),
         )
-        import app.services.strm_service as strm_module
-
-        monkeypatch.setattr(
-            strm_module.strm_service, "_fetch_pick_code_download_info", fake_fetch
-        )
-        response = await emby_proxy_module.emby_stream_redirect(
-            "12", _build_stream_request()
-        )
-        assert response.status_code == 307
-        assert response.headers["location"].startswith("/api/proxy-115?url=")
-
-    @pytest.mark.asyncio
-    async def test_iso_resolve_failure_falls_back_to_cdn_redirect(
-        self, monkeypatch
-    ) -> None:
-        """ISO 申请直链失败 → 回退直跳，不 502。"""
-        async def fake_fetch(pick_code, *, user_agent="", **kwargs):
-            raise RuntimeError("115 unreachable")
 
         async def fake_final(play_url: str, headers=None, *, player_ua=""):
-            return "https://cdn.115.com/fallback.iso"
+            seen["ua"] = player_ua
+            return "https://cdn.115.com/movie.iso?f=1"
 
-        monkeypatch.setattr(
-            emby_proxy_module,
-            "resolve_stream_play_context_cached",
-            self._iso_context("iso"),
-        )
         monkeypatch.setattr(emby_proxy_module, "get_final_redirect_link", fake_final)
-        import app.services.strm_service as strm_module
-
-        monkeypatch.setattr(
-            strm_module.strm_service, "_fetch_pick_code_download_info", fake_fetch
+        await emby_proxy_module.emby_stream_redirect(
+            "12",
+            _build_stream_request(user_agent=b"AppleCoreMedia/1.0 (iPhone)"),
         )
-        response = await emby_proxy_module.emby_stream_redirect(
-            "12", _build_stream_request()
-        )
-        assert response.status_code == 307
-        assert response.headers["location"] == "https://cdn.115.com/fallback.iso"
+        assert seen["ua"] == "AppleCoreMedia/1.0 (iPhone)"
 
     @pytest.mark.asyncio
-    async def test_iso_head_returns_307_to_local_proxy(self, monkeypatch) -> None:
+    async def test_iso_proxy_mode_307_to_local_proxy(self, monkeypatch) -> None:
+        """播放模式为 proxy 时 ISO 才走本地反代。"""
         async def fake_fetch(pick_code, *, user_agent="", **kwargs):
             return {"download_url": "https://cdnx.115cdn.net/a/movie.iso?f=1"}
 
         monkeypatch.setattr(
+            emby_proxy_module.runtime_settings_service,
+            "get_strm_redirect_mode",
+            lambda: "proxy",
+        )
+        monkeypatch.setattr(
             emby_proxy_module,
             "resolve_stream_play_context_cached",
             self._iso_context("iso"),
@@ -580,10 +531,64 @@ class TestIsoLocalProxy:
             strm_module.strm_service, "_fetch_pick_code_download_info", fake_fetch
         )
         response = await emby_proxy_module.emby_stream_redirect(
-            "12", _build_stream_request(method="HEAD")
+            "12", _build_stream_request()
         )
         assert response.status_code == 307
         assert response.headers["location"].startswith("/api/proxy-115?url=")
+
+    @pytest.mark.asyncio
+    async def test_iso_proxy_mode_uses_fixed_ua(self, monkeypatch) -> None:
+        seen = {}
+
+        async def fake_fetch(pick_code, *, user_agent="", **kwargs):
+            seen["ua"] = user_agent
+            return {"download_url": "https://cdnx.115cdn.net/a/movie.iso?f=1"}
+
+        monkeypatch.setattr(
+            emby_proxy_module.runtime_settings_service,
+            "get_strm_redirect_mode",
+            lambda: "proxy",
+        )
+        monkeypatch.setattr(
+            emby_proxy_module,
+            "resolve_stream_play_context_cached",
+            self._iso_context("iso"),
+        )
+        import app.services.strm_service as strm_module
+
+        monkeypatch.setattr(
+            strm_module.strm_service, "_fetch_pick_code_download_info", fake_fetch
+        )
+        await emby_proxy_module.emby_stream_redirect(
+            "12",
+            _build_stream_request(user_agent=b"AppleCoreMedia/1.0 (iPhone)"),
+        )
+        from app.api.pan115_play import PROXY_115_DEFAULT_UA
+
+        assert seen["ua"] == PROXY_115_DEFAULT_UA
+
+    @pytest.mark.asyncio
+    async def test_iso_head_returns_307_to_cdn(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            emby_proxy_module.runtime_settings_service,
+            "get_strm_redirect_mode",
+            lambda: "redirect",
+        )
+        monkeypatch.setattr(
+            emby_proxy_module,
+            "resolve_stream_play_context_cached",
+            self._iso_context("iso"),
+        )
+
+        async def fake_final(play_url: str, headers=None, *, player_ua=""):
+            return "https://cdn.115.com/movie.iso?f=1"
+
+        monkeypatch.setattr(emby_proxy_module, "get_final_redirect_link", fake_final)
+        response = await emby_proxy_module.emby_stream_redirect(
+            "12", _build_stream_request(method="HEAD")
+        )
+        assert response.status_code == 307
+        assert response.headers["location"] == "https://cdn.115.com/movie.iso?f=1"
 
     @pytest.mark.asyncio
     async def test_non_iso_does_not_use_fixed_ua_proxy(self, monkeypatch) -> None:
@@ -597,6 +602,11 @@ class TestIsoLocalProxy:
         async def fake_final(play_url: str, headers=None, *, player_ua=""):
             return "https://cdn.115.com/movie.mkv"
 
+        monkeypatch.setattr(
+            emby_proxy_module.runtime_settings_service,
+            "get_strm_redirect_mode",
+            lambda: "redirect",
+        )
         monkeypatch.setattr(
             emby_proxy_module,
             "resolve_stream_play_context_cached",
@@ -613,7 +623,7 @@ class TestIsoLocalProxy:
         )
         assert response.status_code == 307
         assert response.headers["location"] == "https://cdn.115.com/movie.mkv"
-        assert called["fetch"] is False  # 非 ISO 不以固定 UA 申请直链
+        assert called["fetch"] is False
 
     @pytest.mark.asyncio
     async def test_iso_no_pickcode_falls_back(self, monkeypatch) -> None:
@@ -632,6 +642,11 @@ class TestIsoLocalProxy:
             return "https://cdn.115.com/nopick.iso"
 
         monkeypatch.setattr(
+            emby_proxy_module.runtime_settings_service,
+            "get_strm_redirect_mode",
+            lambda: "redirect",
+        )
+        monkeypatch.setattr(
             emby_proxy_module, "resolve_stream_play_context_cached", fake_context
         )
         monkeypatch.setattr(emby_proxy_module, "get_final_redirect_link", fake_final)
@@ -640,3 +655,49 @@ class TestIsoLocalProxy:
         )
         assert response.status_code == 307
         assert response.headers["location"] == "https://cdn.115.com/nopick.iso"
+
+    @pytest.mark.asyncio
+    async def test_early_redirect_sets_cdn_in_playbackinfo(self, monkeypatch) -> None:
+        from app.api.emby_proxy import rewrite_playback_info_for_strm_async
+
+        monkeypatch.setattr(
+            emby_proxy_module.runtime_settings_service,
+            "get_strm_early_redirect",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            emby_proxy_module.runtime_settings_service,
+            "get_strm_redirect_mode",
+            lambda: "redirect",
+        )
+
+        async def fake_mode(play_url: str, user_agent: str) -> str:
+            return "redirect"
+
+        async def fake_cdn(play_url: str, *, user_agent: str) -> str:
+            return "https://cdn.115.com/early.iso?f=1"
+
+        monkeypatch.setattr(
+            emby_proxy_module, "_resolve_effective_redirect_mode", fake_mode
+        )
+        monkeypatch.setattr(emby_proxy_module, "_try_early_cdn_direct_url", fake_cdn)
+
+        payload = {
+            "MediaSources": [
+                {
+                    "Id": "mediasource_11",
+                    "Path": "http://172.16.100.2:8099/api/115/url/video.iso?pickcode=abc",
+                    "SupportsDirectPlay": False,
+                    "SupportsTranscoding": True,
+                }
+            ]
+        }
+        changed = await rewrite_playback_info_for_strm_async(
+            payload,
+            item_id="11",
+            user_agent="VidHub/1.0",
+        )
+        assert changed is True
+        assert payload["MediaSources"][0]["DirectStreamUrl"] == (
+            "https://cdn.115.com/early.iso?f=1"
+        )

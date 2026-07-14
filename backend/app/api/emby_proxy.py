@@ -1,8 +1,8 @@
-"""Emby 代理端口上的 STRM 直链跳转（对齐 qmediasync emby302）。
+"""Emby 代理端口上的 STRM 直链跳转（对齐 SmartStrm / qmediasync emby302）。
 
-1. 改写 PlaybackInfo：强制 DirectPlay，DirectStreamUrl=/Videos/{id}/stream?Static=true
-2. 拦截 /Videos/*/stream：跟随 STRM/115/url 重定向拿到最终 CDN，307 给客户端
-3. 最终若为 /api/proxy-115（本地代理）则回源 Emby
+1. 改写 PlaybackInfo：强制 DirectPlay；可选提前解析 CDN 直链（SmartStrm 首播优化）
+2. 拦截 /Videos/*/stream：ISO 与普通视频统一 302 到 115 CDN（或按配置走 proxy-115）
+3. 最终若为 /api/proxy-115 且当前为直链模式则回源 Emby
 """
 
 from __future__ import annotations
@@ -540,7 +540,6 @@ async def rewrite_playback_info_for_strm_async(
     item_path: str = "",
     user_agent: str = "",
 ) -> bool:
-    _ = user_agent
     sources = payload.get("MediaSources")
     if not isinstance(sources, list):
         return False
@@ -559,6 +558,20 @@ async def rewrite_playback_info_for_strm_async(
             fallback_api_key=fallback_api_key,
             container=container,
         )
+        early_cdn = await _try_early_cdn_direct_url(
+            play_url, user_agent=user_agent or ""
+        )
+        if early_cdn:
+            source["DirectStreamUrl"] = early_cdn
+            source["SupportsDirectPlay"] = True
+            source["SupportsDirectStream"] = True
+            source["SupportsTranscoding"] = False
+            logger.info(
+                "Early CDN DirectStreamUrl item=%s container=%s -> %s",
+                item_id,
+                container or "?",
+                early_cdn[:120],
+            )
         changed = True
     return changed
 
@@ -680,15 +693,33 @@ def _extract_pickcode_from_play_url(play_url: str) -> str:
         return ""
 
 
-async def _resolve_iso_local_proxy_url(play_url: str) -> str:
-    """为 ISO 原盘构造本地反代 URL（对齐 qmediasync /proxy-115）。
+async def _resolve_effective_redirect_mode(
+    play_url: str, user_agent: str
+) -> str:
+    """解析 STRM 实际播放模式：redirect（302 直链）或 proxy（本地反代）。"""
+    configured = runtime_settings_service.get_strm_redirect_mode()
+    if configured in {"redirect", "proxy"}:
+        return configured
 
-    ISO 直连 CDN 时 f=1 直链严格绑定 UA，而播放器（VidHub 等）直连 CDN 用的是
-    内部媒体引擎 UA（AppleCoreMedia），与申请直链的 UA 不一致 → CDN 403/退出；
-    即便对上也被 us 限速。故 ISO 改走本地反代：服务端用固定 UA 申请直链并回源，
-    播放器只连本服务、不参与 CDN 的 UA 校验。申请直链的 UA 必须与 proxy_115_cdn
-    回源的 UA 严格一致（均为 PROXY_115_DEFAULT_UA），形成闭环。
-    """
+    pick_code = _extract_pickcode_from_play_url(play_url)
+    if not pick_code:
+        return "redirect"
+
+    try:
+        from app.services.strm_service import strm_service
+
+        info = await strm_service._fetch_pick_code_download_info(
+            pick_code, user_agent=user_agent or ""
+        )
+        direct_requirement = str(info.get("direct_requirement") or "").strip()
+        return "proxy" if direct_requirement == "3" else "redirect"
+    except Exception:
+        logger.debug("解析 STRM 播放模式失败，默认 302 直链", exc_info=True)
+        return "redirect"
+
+
+async def _resolve_local_proxy_url(play_url: str) -> str:
+    """构造本地 Range 反代 URL（对齐 SmartStrm proxy 模式 / qmediasync /proxy-115）。"""
     pick_code = _extract_pickcode_from_play_url(play_url)
     if not pick_code:
         return ""
@@ -704,6 +735,62 @@ async def _resolve_iso_local_proxy_url(play_url: str) -> str:
     if not download_url:
         return ""
     return f"/api/proxy-115?url={quote(download_url, safe='')}"
+
+
+async def _resolve_stream_final_url(
+    play_url: str,
+    request: Request,
+) -> tuple[str, str]:
+    """统一解析 stream 最终跳转地址。返回 (final_url, play_mode)。"""
+    ua = request.headers.get("user-agent") or ""
+    mode = await _resolve_effective_redirect_mode(play_url, ua)
+
+    if mode == "proxy":
+        try:
+            proxy_url = await _resolve_local_proxy_url(play_url)
+        except Exception:
+            logger.warning("本地反代申请直链失败，回退 302 直链", exc_info=True)
+            proxy_url = ""
+        if proxy_url:
+            return proxy_url, "proxy"
+
+    final_url = await get_final_redirect_link(
+        play_url,
+        _filter_request_headers(request),
+        player_ua=ua,
+    )
+    if _is_local_proxy_url(final_url):
+        logger.info(
+            "Emby stream fallback origin (local proxy in redirect mode) url=%s",
+            final_url[:120],
+        )
+        raise HTTPException(status_code=404, detail="local_proxy_origin")
+    return final_url, "redirect"
+
+
+async def _try_early_cdn_direct_url(
+    play_url: str,
+    *,
+    user_agent: str,
+) -> str:
+    """SmartStrm 首播优化：PlaybackInfo 阶段预解析 CDN 直链。"""
+    if not runtime_settings_service.get_strm_early_redirect():
+        return ""
+    mode = await _resolve_effective_redirect_mode(play_url, user_agent)
+    if mode != "redirect":
+        return ""
+    try:
+        final_url = await get_final_redirect_link(
+            play_url,
+            {},
+            player_ua=user_agent,
+        )
+    except Exception:
+        logger.debug("提前解析 CDN 直链失败", exc_info=True)
+        return ""
+    if not final_url or _is_local_proxy_url(final_url) or not _is_remote_http(final_url):
+        return ""
+    return final_url
 
 
 async def _log_playback_start(
@@ -754,43 +841,9 @@ async def emby_stream_redirect(
         if not play_url:
             raise HTTPException(status_code=404, detail="not_strm")
 
-        # 远程 Path / STRM HTTP：服务端跟随拿到最终链
+        # 远程 Path / STRM HTTP：SmartStrm 风格统一 302（ISO 与 mkv 同链路）
         if _is_remote_http(play_url):
-            final_url = None
-            # ISO/IMG 原盘无条件走本地 Range 反代：绕开 f=1 直链的 UA 死结
-            # （播放器直连 CDN 的 UA 不可控，会 403/退出；反代由服务端固定 UA 回源）
-            container = str(context.get("container") or "").strip().lower()
-            if container in {"iso", "img"}:
-                try:
-                    proxy_url = await _resolve_iso_local_proxy_url(play_url)
-                except Exception:
-                    logger.warning(
-                        "ISO 本地反代申请直链失败，回退直跳 item=%s",
-                        item_id,
-                        exc_info=True,
-                    )
-                    proxy_url = ""
-                if proxy_url:
-                    final_url = proxy_url
-                    play_mode = "proxy"
-            if final_url is None:
-                # 非 ISO，或 ISO 申请失败 → 原直跳路径
-                # 显式锁定播放器真实 UA：申请 115 直链绑定的 UA 必须与播放器
-                # 307 后直连 CDN 的 UA 一致，否则 f=1 校验失败被限速。
-                final_url = await get_final_redirect_link(
-                    play_url,
-                    _filter_request_headers(request),
-                    player_ua=ua,
-                )
-                if _is_local_proxy_url(final_url):
-                    # 对齐 qmediasync：含 proxy-115 → 回源 Emby（走 NAS）
-                    logger.info(
-                        "Emby stream fallback origin (local proxy) item=%s url=%s",
-                        item_id,
-                        final_url[:120],
-                    )
-                    raise HTTPException(status_code=404, detail="local_proxy_origin")
-                play_mode = "redirect"
+            final_url, play_mode = await _resolve_stream_final_url(play_url, request)
         else:
             raise HTTPException(status_code=404, detail="not_remote_strm")
     except HTTPException:

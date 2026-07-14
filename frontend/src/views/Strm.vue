@@ -131,6 +131,11 @@
             <el-input-number v-model="config.strm_proxy_port" :min="1024" :max="65535" :step="1" style="width: 160px" />
             <div class="form-hint">默认为 8099。Emby 客户端请连接此端口的代理地址。</div>
           </el-form-item>
+
+          <el-form-item v-if="config.strm_proxy_enabled" label="优化首播速度">
+            <el-switch v-model="config.strm_early_redirect" />
+            <div class="form-hint">SmartStrm 风格：PlaybackInfo 阶段提前返回 115 CDN 直链，缩短 ISO/原盘起播等待（实验性，部分客户端可能不兼容）。</div>
+          </el-form-item>
         </div>
 
         <div class="config-actions">
@@ -278,6 +283,7 @@ const config = reactive({
   strm_refresh_feiniu_after_generate: false,
   strm_proxy_enabled: false,
   strm_proxy_port: 8099,
+  strm_early_redirect: true,
   strm_schedule_enabled: false,
   strm_incremental_interval_minutes: 360,
   strm_full_schedule_enabled: false,
@@ -395,6 +401,7 @@ const applyConfig = (data) => {
   config.strm_refresh_feiniu_after_generate = !!data.strm_refresh_feiniu_after_generate
   config.strm_proxy_enabled = !!data.strm_proxy_enabled
   config.strm_proxy_port = Number(data.strm_proxy_port) || 8099
+  config.strm_early_redirect = data.strm_early_redirect !== false
   config.strm_schedule_enabled = !!data.strm_schedule_enabled
   config.strm_incremental_interval_minutes = Number(data.strm_incremental_interval_minutes) || 360
   config.strm_full_schedule_enabled = !!data.strm_full_schedule_enabled
@@ -458,6 +465,7 @@ const saveConfig = async () => {
       strm_refresh_feiniu_after_generate: config.strm_refresh_feiniu_after_generate,
       strm_proxy_enabled: config.strm_proxy_enabled,
       strm_proxy_port: config.strm_proxy_port,
+      strm_early_redirect: config.strm_early_redirect,
       strm_schedule_enabled: config.strm_schedule_enabled,
       strm_incremental_interval_minutes: config.strm_incremental_interval_minutes,
       strm_full_schedule_enabled: config.strm_full_schedule_enabled,

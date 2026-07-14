@@ -25,6 +25,7 @@ class StrmConfigRequest(BaseModel):
     strm_refresh_feiniu_after_generate: Optional[bool] = None
     strm_proxy_enabled: Optional[bool] = None
     strm_proxy_port: Optional[int] = None
+    strm_early_redirect: Optional[bool] = None
     strm_schedule_enabled: Optional[bool] = None
     strm_incremental_interval_minutes: Optional[int] = None
     strm_full_schedule_enabled: Optional[bool] = None
