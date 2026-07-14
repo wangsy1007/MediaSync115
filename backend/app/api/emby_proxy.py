@@ -44,7 +44,9 @@ _EMBY_PATH_PREFIXES = (
     "/app/strm",
 )
 
-_STREAM_REDIRECT_BLOCKLIST_UA = re.compile(r"$^")
+# 永不匹配的黑名单占位（r"$^" 会在空 UA 上零宽匹配成功，误判为需跳过 → 空 UA
+# 的 ISO 播放被 404 回源真实 Emby 触发转码卡顿，故用 (?!) 保证永不匹配）
+_STREAM_REDIRECT_BLOCKLIST_UA = re.compile(r"(?!)")
 
 _KNOWN_VIDEO_CONTAINERS = frozenset(
     {
@@ -593,30 +595,58 @@ def _with_force_query(url: str) -> str:
     return urlunparse(parsed._replace(query=urlencode(flat)))
 
 
+def _extract_ua_from_headers(request_headers: dict[str, str] | None) -> str:
+    """大小写不敏感地取出播放器 UA。"""
+    for key, value in (request_headers or {}).items():
+        if key.lower() == "user-agent":
+            return str(value or "")
+    return ""
+
+
 async def get_final_redirect_link(
-    origin_link: str, request_headers: dict[str, str] | None = None
+    origin_link: str,
+    request_headers: dict[str, str] | None = None,
+    *,
+    player_ua: str = "",
 ) -> str:
-    """服务端跟随重定向拿到最终 CDN（对齐 qmediasync getFinalRedirectLink）。"""
+    """服务端跟随重定向拿到最终 CDN（对齐 qmediasync getFinalRedirectLink）。
+
+    关键：115 CDN 直链带 f=1 时会绑定申请时的 User-Agent。本函数申请直链所用的
+    UA 必须与 HosPlayer 后续 307 直连 CDN 的真实 UA 一致，否则会被 115 限速。
+    因此显式锁定 player_ua，并将其纳入缓存 key，避免不同播放器串用彼此的直链。
+    """
     origin = str(origin_link or "").strip()
     if not origin:
         return origin
 
+    # 显式播放器 UA 优先；否则从透传 header 中大小写不敏感提取
+    effective_ua = str(player_ua or "").strip() or _extract_ua_from_headers(
+        request_headers
+    )
+
     follow_url = _with_force_query(origin)
-    cache_key = follow_url
+    # 缓存按 (follow_url, UA) 区分：CDN 直链绑定 UA，不同 UA 不可共享同一条直链
+    cache_key = f"{follow_url}\0{effective_ua}"
     now = time.monotonic()
     async with _final_link_cache_lock:
         cached = _final_link_cache.get(cache_key)
         if cached and cached[0] > now:
             return cached[1]
 
+    # 透传 Range/Cookie/Referer；UA 单独强制为 effective_ua，防止 httpx 注入默认 UA
     headers = {}
     for key, value in (request_headers or {}).items():
-        if key.lower() in {"user-agent", "range", "if-range", "cookie", "referer"}:
+        if key.lower() in {"range", "if-range", "cookie", "referer"}:
             headers[key] = value
+    if effective_ua:
+        headers["User-Agent"] = effective_ua
 
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
-            # 用 HEAD；部分 CDN 不支持 HEAD 时回退 GET Range
+        # trust_env=False：不受 Docker 注入的 HTTP_PROXY 影响
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=20.0, trust_env=False
+        ) as client:
+            # 用 HEAD；部分 CDN 不支持 HEAD 时回退 GET Range。两条路径带同一 UA
             try:
                 response = await client.head(follow_url, headers=headers)
                 final_url = str(response.url)
@@ -689,8 +719,12 @@ async def emby_stream_redirect(
 
         # 远程 Path / STRM HTTP：服务端跟随拿到最终链
         if _is_remote_http(play_url):
+            # 显式锁定播放器真实 UA：申请 115 直链绑定的 UA 必须与 HosPlayer
+            # 307 后直连 CDN 的 UA 一致，否则 f=1 校验失败被限速。
             final_url = await get_final_redirect_link(
-                play_url, _filter_request_headers(request)
+                play_url,
+                _filter_request_headers(request),
+                player_ua=ua,
             )
             if _is_local_proxy_url(final_url):
                 # 对齐 qmediasync：含 proxy-115 → 回源 Emby（走 NAS）

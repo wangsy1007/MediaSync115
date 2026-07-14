@@ -184,12 +184,92 @@ class TestEmbyStreamRedirect:
                 return FakeResponse()
 
         monkeypatch.setattr(emby_proxy_module.httpx, "AsyncClient", FakeClient)
+        emby_proxy_module._final_link_cache.clear()
         final = await emby_proxy_module.get_final_redirect_link(
             "http://172.16.100.2:8099/api/115/url/video.iso?pickcode=abc",
             {"User-Agent": "HosPlayer/1.0"},
         )
         assert final == "https://cdn.115.com/movie.iso"
         assert "force=1" in seen["url"]
+
+    @pytest.mark.asyncio
+    async def test_get_final_redirect_link_binds_player_ua(self, monkeypatch) -> None:
+        """申请 115 直链时必须带播放器真实 UA（否则 f=1 绑定错 UA 被限速）。"""
+        seen = {}
+
+        class FakeResponse:
+            status_code = 200
+            url = "https://cdn.115.com/movie.iso"
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                seen["trust_env"] = kwargs.get("trust_env")
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def head(self, url, headers=None):
+                seen["headers"] = headers or {}
+                return FakeResponse()
+
+        monkeypatch.setattr(emby_proxy_module.httpx, "AsyncClient", FakeClient)
+        emby_proxy_module._final_link_cache.clear()
+        # 显式 player_ua 优先，且透传 header 中大小写混合也应被覆盖为该 UA
+        await emby_proxy_module.get_final_redirect_link(
+            "http://172.16.100.2:8099/api/115/url/video.iso?pickcode=abc",
+            {"user-agent": "python-httpx/0.27", "Range": "bytes=0-1"},
+            player_ua="HosPlayer/0.10.3",
+        )
+        assert seen["headers"].get("User-Agent") == "HosPlayer/0.10.3"
+        assert seen["headers"].get("Range") == "bytes=0-1"
+        assert seen["trust_env"] is False
+
+    @pytest.mark.asyncio
+    async def test_final_link_cache_not_shared_across_ua(self, monkeypatch) -> None:
+        """不同播放器 UA 绑定不同直链，缓存不得串用。"""
+        calls = {"n": 0}
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def head(self, url, headers=None):
+                calls["n"] += 1
+                ua = (headers or {}).get("User-Agent", "")
+
+                class _Resp:
+                    status_code = 200
+                    # 直链按 UA 区分，模拟 115 为不同 UA 下发不同绑定直链
+                    url = f"https://cdn.115.com/movie.iso?ua={ua}"
+
+                return _Resp()
+
+        monkeypatch.setattr(emby_proxy_module.httpx, "AsyncClient", FakeClient)
+        emby_proxy_module._final_link_cache.clear()
+        origin = "http://172.16.100.2:8099/api/115/url/video.iso?pickcode=abc"
+
+        first = await emby_proxy_module.get_final_redirect_link(
+            origin, {}, player_ua="HosPlayer/0.10.3"
+        )
+        second = await emby_proxy_module.get_final_redirect_link(
+            origin, {}, player_ua="Infuse/7.0"
+        )
+        # 同一 UA 第二次命中缓存，不再发起请求
+        first_again = await emby_proxy_module.get_final_redirect_link(
+            origin, {}, player_ua="HosPlayer/0.10.3"
+        )
+        assert first != second
+        assert first == first_again
+        assert calls["n"] == 2  # 两个不同 UA 各一次，重复 UA 命中缓存
 
     def test_no_ua_skips_stream_redirect_by_default(self) -> None:
         assert _should_skip_stream_redirect("HosPlayer/0.10.3") is False
@@ -208,7 +288,7 @@ class TestEmbyStreamRedirect:
                 "container": "iso",
             }
 
-        async def fake_final(play_url: str, headers=None):
+        async def fake_final(play_url: str, headers=None, *, player_ua=""):
             return "https://cdn.115.com/movie.iso"
 
         monkeypatch.setattr(
@@ -253,7 +333,7 @@ class TestEmbyStreamRedirect:
                 "container": "mkv",
             }
 
-        async def fake_final(play_url: str, headers=None):
+        async def fake_final(play_url: str, headers=None, *, player_ua=""):
             return "/api/proxy-115?url=https%3A%2F%2Fcdn.115.com%2Fa.mkv"
 
         monkeypatch.setattr(
