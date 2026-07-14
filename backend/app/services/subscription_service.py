@@ -1598,18 +1598,28 @@ class SubscriptionService:
                 attempt_info["status"] = "success"
                 attempt_info["count"] = len(source_resources)
                 if source == "hdhive":
-                    pref_res = self._resolve_subscription_resolutions(sub)
-                    if pref_res:
-                        source_resources = sort_by_preference(
-                            source_resources, pref_res, []
-                        )
-                    quality_filter = self._resolve_subscription_quality_filter(sub)
-                    if any(v for v in quality_filter.values() if v is not None):
-                        source_resources = filter_and_sort_by_quality(
-                            source_resources, **quality_filter
+                    unlock_candidates = await self._prefilter_resources_for_unlock(
+                        sub,
+                        source_resources,
+                        media_context=media_context,
+                    )
+                    if unlock_candidates:
+                        traces.append(
+                            {
+                                "step": "hdhive_unlock_candidates",
+                                "status": "info",
+                                "message": (
+                                    f"HDHive 解锁前预筛后保留 {len(unlock_candidates)} 条候选"
+                                    f"（原始 {len(source_resources)} 条）"
+                                ),
+                                "payload": {
+                                    "raw_count": len(source_resources),
+                                    "candidate_count": len(unlock_candidates),
+                                },
+                            }
                         )
                     source_resources = await self._prepare_hdhive_locked_resources(
-                        source_resources,
+                        unlock_candidates,
                         hdhive_unlock_context or self._build_hdhive_unlock_context(),
                         traces,
                     )
@@ -1774,6 +1784,30 @@ class SubscriptionService:
                         attempt["status"] = "empty"
                         attempt["count"] = 0
                         attempt["error"] = "资源经 ISO 原盘过滤后均不可用"
+
+        primary_resources, unsavable_excluded = self._finalize_savable_resources(
+            primary_resources
+        )
+        if unsavable_excluded > 0 and not primary_resources:
+            traces.append(
+                {
+                    "step": "savable_resources_empty",
+                    "status": "warning",
+                    "message": (
+                        f"命中 {unsavable_excluded} 条资源，但未获取可转存链接"
+                        "（可能 HDHive 需解锁或被过滤）"
+                    ),
+                    "payload": {"unsavable_count": unsavable_excluded},
+                }
+            )
+            for attempt in source_attempts:
+                if (
+                    attempt.get("status") == "success"
+                    and int(attempt.get("count") or 0) > 0
+                ):
+                    attempt["status"] = "empty"
+                    attempt["count"] = 0
+                    attempt["error"] = "资源已命中但未获取可转存链接"
 
         return (
             primary_resources,
@@ -2153,6 +2187,55 @@ class SubscriptionService:
 
         return merged, traces
 
+    async def _prefilter_resources_for_unlock(
+        self,
+        sub: "SubscriptionSnapshot",
+        resources: list[dict[str, Any]],
+        media_context: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        """HDHive 解锁前剔除明显不可转存的候选，避免积分解锁浪费在后续会被过滤的资源上。"""
+        if not resources:
+            return []
+
+        filtered = list(resources)
+        pref_res = self._resolve_subscription_resolutions(sub)
+        if pref_res:
+            filtered = sort_by_preference(filtered, pref_res, [])
+
+        quality_filter = self._resolve_subscription_quality_filter(sub)
+        if any(v for v in quality_filter.values() if v is not None):
+            filtered = filter_and_sort_by_quality(filtered, **quality_filter)
+
+        context = media_context
+        if context is None:
+            context = await self._resolve_subscription_media_context(sub)
+        filtered, _ = await self._filter_resources_for_subscription(
+            sub, filtered, context
+        )
+        filtered, _ = filter_iso_disc_resources(
+            filtered,
+            enabled=runtime_settings_service.get_subscription_exclude_iso(),
+        )
+        return filtered
+
+    @staticmethod
+    def _finalize_savable_resources(
+        resources: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], int]:
+        """仅保留可直接转存（115 分享链或离线链接）的资源。"""
+        if not resources:
+            return [], 0
+
+        savable: list[dict[str, Any]] = []
+        for item in resources:
+            if not isinstance(item, dict):
+                continue
+            if SubscriptionService._extract_resource_url(
+                item
+            ) or SubscriptionService._extract_offline_url(item):
+                savable.append(item)
+        return savable, len(resources) - len(savable)
+
     def _build_hdhive_unlock_context(self) -> dict[str, Any]:
         budget_total = runtime_settings_service.get_subscription_hdhive_unlock_budget_points_per_run()
         return {
@@ -2349,6 +2432,8 @@ class SubscriptionService:
                                 },
                             }
                         )
+                        break
+                    if any(self._extract_resource_url(it) for it in normalized_items):
                         break
                 else:
                     context["consecutive_failed_count"] = (

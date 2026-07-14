@@ -886,6 +886,16 @@ class ExploreActionQueueService:
 
             for resource in primary_resources:
                 share_link = subscription_service._extract_resource_url(resource)
+                if not share_link and not subscription_service._extract_offline_url(resource):
+                    transfer_attempts.append(
+                        {
+                            "source": resource.get("source_service", source),
+                            "status": "transfer_failed",
+                            "error": "资源缺少可转存链接（HDHive 可能需解锁）",
+                        }
+                    )
+                    continue
+
                 if share_link:
                     receive_code = self._extract_receive_code(share_link)
                     try:
