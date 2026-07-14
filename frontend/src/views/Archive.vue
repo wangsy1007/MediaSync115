@@ -7,6 +7,9 @@
       </div>
       <div class="header-actions">
         <el-button :loading="refreshing" @click="refreshAll">刷新</el-button>
+        <el-button v-if="runtime.scan_running" type="warning" :loading="cancelLoading" @click="cancelScan">
+          取消扫描
+        </el-button>
         <el-button type="primary" :loading="scanLoading" @click="runScan">立即扫描</el-button>
       </div>
     </div>
@@ -349,6 +352,7 @@ import { formatBeijingTableCell } from '@/utils/timezone'
 const refreshing = ref(false)
 const saving = ref(false)
 const scanLoading = ref(false)
+const cancelLoading = ref(false)
 const tasksLoading = ref(false)
 const total = ref(0)
 const tasks = ref([])
@@ -599,13 +603,40 @@ const runScan = async () => {
     runtime.last_scan_trigger = data.runtime?.last_scan_trigger || runtime.last_scan_trigger
     runtime.last_scan_summary = data.runtime?.last_scan_summary || null
     runtime.last_scan_error = data.runtime?.last_scan_error || ''
-    ElMessage.success(data.message || '归档扫描已启动')
-    startScanPolling()
+    if (data.started === false) {
+      ElMessage.info(data.message || '归档扫描已在执行中')
+    } else {
+      ElMessage.success(data.message || '归档扫描已启动')
+    }
+    if (runtime.scan_running) {
+      startScanPolling()
+    }
     await loadTasks()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '归档扫描失败')
   } finally {
     scanLoading.value = false
+  }
+}
+
+const cancelScan = async () => {
+  cancelLoading.value = true
+  try {
+    const { data } = await archiveApi.cancelScan()
+    runtime.scan_running = !!data.runtime?.scan_running
+    runtime.last_scan_finished_at = data.runtime?.last_scan_finished_at || runtime.last_scan_finished_at
+    runtime.last_scan_error = data.runtime?.last_scan_error || runtime.last_scan_error
+    stopScanPolling()
+    if (data.cancelled) {
+      ElMessage.warning(data.message || '归档扫描已取消')
+    } else {
+      ElMessage.info(data.message || '当前没有正在执行的归档扫描')
+    }
+    await Promise.all([loadConfig(), loadTasks()])
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '取消归档扫描失败')
+  } finally {
+    cancelLoading.value = false
   }
 }
 
@@ -643,8 +674,8 @@ const retryTask = async (row) => {
 
 const clearFinished = async (includeFailed) => {
   try {
-    await ElMessageBox.confirm(includeFailed ? '确认清理已完成和失败的归档任务吗？' : '确认清理已完成的归档任务吗？', '提示', { type: 'warning' })
-    const { data } = await archiveApi.clearTasks(includeFailed)
+    await ElMessageBox.confirm(includeFailed ? '确认清理已完成、失败和卡住的归档任务吗？' : '确认清理已完成的归档任务吗？', '提示', { type: 'warning' })
+    const { data } = await archiveApi.clearTasks(includeFailed, includeFailed)
     ElMessage.success(`已清理 ${data.removed || 0} 条任务记录`)
     await loadTasks()
   } catch (error) {

@@ -203,6 +203,14 @@ async def run_archive_scan():
         _raise_archive_115_error(exc)
 
 
+@router.post("/scan/cancel")
+async def cancel_archive_scan():
+    try:
+        return await archive_service.cancel_scan()
+    except Exception as exc:
+        _raise_archive_115_error(exc)
+
+
 @router.post("/tasks/{task_id}/retry")
 async def retry_archive_task(task_id: int):
     try:
@@ -214,6 +222,12 @@ async def retry_archive_task(task_id: int):
 
 
 @router.delete("/tasks/clear")
-async def clear_archive_tasks(include_failed: bool = False):
-    removed = await archive_service.clear_tasks(include_failed=include_failed)
+async def clear_archive_tasks(
+    include_failed: bool = False,
+    include_stale_processing: bool = False,
+):
+    removed = await archive_service.clear_tasks(
+        include_failed=include_failed,
+        include_stale_processing=include_stale_processing,
+    )
     return {"success": True, "removed": removed}

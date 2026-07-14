@@ -1,8 +1,10 @@
 from types import SimpleNamespace
 
+import asyncio
 import pytest
 
 import app.services.archive_service as archive_service_module
+from app.models.archive import ArchiveStatus
 from app.services.archive_service import archive_service
 
 
@@ -243,3 +245,73 @@ class TestArchiveService:
             "total": 1,
             "items": [result],
         }
+
+    @pytest.mark.asyncio
+    async def test_recover_stale_state_marks_processing_failed(
+        self, monkeypatch
+    ) -> None:
+        """服务重启后应把 processing 任务标记为失败"""
+
+        class FakeTask:
+            status = ArchiveStatus.PROCESSING
+            error_message = None
+            completed_at = None
+
+        fake_task = FakeTask()
+
+        class FakeResult:
+            def scalars(self):
+                return self
+
+            def all(self):
+                return [fake_task]
+
+        class FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def execute(self, query):
+                return FakeResult()
+
+            async def commit(self):
+                return None
+
+        monkeypatch.setattr(
+            archive_service_module, "async_session_maker", lambda: FakeSession()
+        )
+
+        result = await archive_service.recover_stale_state()
+
+        assert result["recovered_tasks"] == 1
+        assert fake_task.status == ArchiveStatus.FAILED
+        assert "服务重启" in str(fake_task.error_message)
+
+    @pytest.mark.asyncio
+    async def test_run_scan_timeout_marks_processing_failed(
+        self, monkeypatch
+    ) -> None:
+        """扫描超时应释放锁并把 processing 任务标记为失败"""
+
+        async def slow_scan(*args, **kwargs):
+            await asyncio.sleep(0.2)
+            return {"success": 0, "failed": 0, "skipped": 0, "total": 0, "items": []}
+
+        marked: dict[str, int] = {"count": 0}
+
+        async def fake_mark(**kwargs):
+            marked["count"] += 1
+            return 1
+
+        monkeypatch.setattr(archive_service, "ARCHIVE_SCAN_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr(archive_service, "_run_scan_locked", slow_scan)
+        monkeypatch.setattr(
+            archive_service, "_mark_processing_tasks_failed", fake_mark
+        )
+
+        with pytest.raises(TimeoutError):
+            await archive_service.run_scan(trigger="manual")
+
+        assert marked["count"] == 1

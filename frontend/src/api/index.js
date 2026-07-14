@@ -362,8 +362,9 @@ export const archiveApi = {
   listFolders: (cid = '0') => api.get('/archive/folders', { params: { cid } }),
   listTasks: (params) => api.get('/archive/tasks', { params }),
   runScan: () => api.post('/archive/scan', null, { timeout: 300000 }),
+  cancelScan: () => api.post('/archive/scan/cancel'),
   retryTask: (taskId) => api.post(`/archive/tasks/${taskId}/retry`, null, { timeout: 300000 }),
-  clearTasks: (includeFailed = false) => api.delete('/archive/tasks/clear', { params: { include_failed: includeFailed } })
+  clearTasks: (includeFailed = false, includeStaleProcessing = false) => api.delete('/archive/tasks/clear', { params: { include_failed: includeFailed, include_stale_processing: includeStaleProcessing } })
 }
 
 export const strmApi = {

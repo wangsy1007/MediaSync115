@@ -240,6 +240,9 @@ async def lifespan(app: FastAPI):
     await feiniu_sync_scheduler_service.ensure_sync_task()
     await archive_scheduler_service.ensure_scan_task()
     await strm_scheduler_service.ensure_tasks()
+    from app.services.archive_service import archive_service
+
+    await archive_service.recover_stale_state()
     await tg_bot_service.start()
     yield
     await tg_bot_service.stop()
