@@ -3,6 +3,13 @@
     <div class="page-header">
       <h2>我的订阅</h2>
       <div class="header-actions">
+        <el-button
+          type="success"
+          :loading="runningSubscriptionTask"
+          @click="handleRunSubscriptionNow"
+        >
+          立即执行订阅
+        </el-button>
         <el-radio-group v-if="activeTab === 'subscriptions'" v-model="filterType" @change="handleFilterChange">
           <el-radio-button value="all">全部 ({{ countAll }})</el-radio-button>
           <el-radio-button value="movie">电影 ({{ countMovie }})</el-radio-button>
@@ -24,6 +31,15 @@
         </template>
       </div>
     </div>
+
+    <el-alert
+      v-if="runningSubscriptionTask && runningTaskMessage"
+      class="run-task-alert"
+      :title="runningTaskMessage"
+      type="info"
+      :closable="false"
+      show-icon
+    />
 
     <el-tabs v-model="activeTab" class="main-tabs">
       <el-tab-pane label="订阅列表" name="subscriptions">
@@ -210,6 +226,8 @@ const missingRows = ref([])
 const missingLoading = ref(false)
 const missingOnly = ref(true)
 const missingTabLoaded = ref(false)
+const runningSubscriptionTask = ref(false)
+const runningTaskMessage = ref('')
 const router = useRouter()
 const tvOptionsVisible = ref(false)
 const tvOptionsSaving = ref(false)
@@ -525,6 +543,74 @@ const refreshMissingRow = async (row) => {
   }
 }
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const pollSubscriptionTask = async (taskId) => {
+  const maxChecks = 180
+  for (let i = 0; i < maxChecks; i++) {
+    const { data } = await subscriptionApi.getRunTask(taskId)
+    runningTaskMessage.value = data?.message || '订阅任务执行中...'
+    const status = String(data?.status || '')
+    if (['success', 'partial', 'failed'].includes(status)) {
+      return { ok: status !== 'failed', status, task: data }
+    }
+    await wait(2000)
+  }
+  return { ok: false, status: 'timeout', task: { error: '任务执行超时，请稍后在设置页查看日志' } }
+}
+
+const handleRunSubscriptionNow = async () => {
+  if (runningSubscriptionTask.value) return
+  runningSubscriptionTask.value = true
+  runningTaskMessage.value = '任务已提交，等待执行...'
+  try {
+    const { data } = await subscriptionApi.runAllChannelsCheckBackground(true)
+    if (data?.already_running) {
+      const runningChannels = Array.isArray(data?.running_channels) ? data.running_channels : []
+      const message = runningChannels.length > 0
+        ? `订阅任务进行中（${runningChannels.join('、')}）`
+        : (data?.message || '订阅任务进行中，请稍后再试')
+      ElMessage.warning(message)
+      return
+    }
+
+    const taskId = String(data?.task_id || '').trim()
+    if (!taskId) {
+      ElMessage.error('未能获取任务 ID')
+      return
+    }
+
+    const taskResult = await pollSubscriptionTask(taskId)
+    if (taskResult.ok) {
+      const result = taskResult.task?.result || {}
+      const successCount = Number(result.success_count ?? result.auto_saved_count ?? 0)
+      const failedCount = Number(result.failed_count ?? result.auto_failed_count ?? 0)
+      const message = taskResult.task?.message || `订阅任务完成：成功 ${successCount}，失败 ${failedCount}`
+      if (taskResult.status === 'partial') {
+        ElMessage.warning(message)
+      } else if (failedCount === 0) {
+        ElMessage.success(message)
+      } else if (successCount > 0) {
+        ElMessage.warning(message)
+      } else {
+        ElMessage.error(message)
+      }
+      await fetchSubscriptions()
+      if (missingTabLoaded.value) {
+        await fetchTvMissingStatus(false)
+      }
+    } else {
+      const errorMessage = taskResult.task?.error || taskResult.task?.message || '订阅任务执行失败'
+      ElMessage.error(errorMessage)
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '启动订阅任务失败')
+  } finally {
+    runningSubscriptionTask.value = false
+    runningTaskMessage.value = ''
+  }
+}
+
 onMounted(async () => {
   await fetchSubscriptions()
 })
@@ -553,7 +639,13 @@ watch(activeTab, (tab) => {
       display: flex;
       align-items: center;
       gap: 12px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
     }
+  }
+
+  .run-task-alert {
+    margin: -12px 0 16px;
   }
 
   .main-tabs {
