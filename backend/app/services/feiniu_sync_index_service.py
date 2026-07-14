@@ -254,7 +254,31 @@ class FeiniuSyncIndexService:
             "source": "feiniu_sync_index",
         }
 
-    async def sync_index(self, trigger: str = "manual") -> dict[str, Any]:
+    async def sync_index(
+        self,
+        trigger: str = "manual",
+        *,
+        respect_save_queue: bool = True,
+    ) -> dict[str, Any]:
+        if respect_save_queue and str(trigger or "").strip().lower() != "manual":
+            from app.services.explore_action_queue_service import (
+                explore_action_queue_service,
+            )
+
+            deferred = await explore_action_queue_service.defer_until_save_queue_idle(
+                f"feiniu_sync:{trigger}",
+                lambda: self.sync_index(
+                    trigger=trigger,
+                    respect_save_queue=False,
+                ),
+            )
+            if deferred:
+                return {
+                    "success": True,
+                    "deferred": True,
+                    "message": "转存队列执行中，飞牛媒体库同步已延迟至队列空闲",
+                }
+
         try:
             return await self._sync_index(trigger=trigger)
         except OperationalError as exc:
@@ -388,7 +412,33 @@ class FeiniuSyncIndexService:
                     "elapsed_ms": elapsed_ms,
                 }
 
-    async def start_background_sync(self, trigger: str = "manual") -> dict[str, Any]:
+    async def start_background_sync(
+        self,
+        trigger: str = "manual",
+        *,
+        respect_save_queue: bool = True,
+    ) -> dict[str, Any]:
+        if respect_save_queue and str(trigger or "").strip().lower() != "manual":
+            from app.services.explore_action_queue_service import (
+                explore_action_queue_service,
+            )
+
+            deferred = await explore_action_queue_service.defer_until_save_queue_idle(
+                f"feiniu_sync_background:{trigger}",
+                lambda: self.start_background_sync(
+                    trigger=trigger,
+                    respect_save_queue=False,
+                ),
+            )
+            if deferred:
+                return {
+                    "success": True,
+                    "started": False,
+                    "deferred": True,
+                    "message": "转存队列执行中，飞牛媒体库同步已延迟至队列空闲",
+                    "status": await self.get_status(),
+                }
+
         if not runtime_settings_service.has_feiniu_sync_credentials():
             return {
                 "success": False,
@@ -407,7 +457,7 @@ class FeiniuSyncIndexService:
 
         async def _runner() -> None:
             try:
-                await self.sync_index(trigger=trigger)
+                await self.sync_index(trigger=trigger, respect_save_queue=False)
             finally:
                 self._background_task = None
 

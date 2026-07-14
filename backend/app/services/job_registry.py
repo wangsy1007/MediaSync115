@@ -51,10 +51,40 @@ class JobRegistry:
         return {"success": True, "message": "emby refresh triggered"}
 
     async def _sync_emby_index(self, **kwargs) -> dict[str, Any]:
-        return await emby_sync_index_service.sync_index(trigger="scheduler")
+        from app.services.transfer_queue_guard import defer_if_save_queue_busy
+
+        deferred, result = await defer_if_save_queue_busy(
+            "scheduler:sync_emby_index",
+            lambda: emby_sync_index_service.sync_index(
+                trigger="scheduler",
+                respect_save_queue=False,
+            ),
+        )
+        if deferred:
+            return {
+                "success": True,
+                "deferred": True,
+                "message": "转存队列执行中，Emby 媒体库同步已延迟至队列空闲",
+            }
+        return result
 
     async def _sync_feiniu_index(self, **kwargs) -> dict[str, Any]:
-        return await feiniu_sync_index_service.sync_index(trigger="scheduler")
+        from app.services.transfer_queue_guard import defer_if_save_queue_busy
+
+        deferred, result = await defer_if_save_queue_busy(
+            "scheduler:sync_feiniu_index",
+            lambda: feiniu_sync_index_service.sync_index(
+                trigger="scheduler",
+                respect_save_queue=False,
+            ),
+        )
+        if deferred:
+            return {
+                "success": True,
+                "deferred": True,
+                "message": "转存队列执行中，飞牛媒体库同步已延迟至队列空闲",
+            }
+        return result
 
     async def _cleanup_runtime_cache(self, **kwargs) -> dict[str, Any]:
         from app.api import search as search_api
