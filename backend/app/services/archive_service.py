@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 ARCHIVE_SCAN_TIMEOUT_SECONDS = 30 * 60
 # 超过该时长仍处于 processing 的任务视为僵尸任务
 ARCHIVE_STALE_TASK_MINUTES = 30
+# 页面拉取状态/任务列表时，超过该时长仍无更新的 processing 任务自动标记失败
+ARCHIVE_IDLE_PROCESSING_MINUTES = 5
+ARCHIVE_CANCEL_WAIT_SECONDS = 3.0
 
 VIDEO_EXTENSIONS = {
     ".mkv",
@@ -178,6 +181,11 @@ class ArchiveService:
         self._last_scan_error: str = ""
         self._pending_rescan = False
         self._pending_rescan_trigger: str = ""
+        self._cancel_requested = False
+
+    def _raise_if_scan_cancel_requested(self) -> None:
+        if self._cancel_requested:
+            raise asyncio.CancelledError("归档扫描已取消")
 
     def _get_pan115(self) -> Pan115Service:
         if self._pan115 is None:
@@ -214,15 +222,44 @@ class ArchiveService:
             "last_scan_error": self._last_scan_error,
         }
 
-    def is_scan_running(self) -> bool:
-        return bool(
-            self._background_scan_task and not self._background_scan_task.done()
+    async def get_runtime_status_async(self) -> dict[str, Any]:
+        await self.reconcile_idle_processing_tasks()
+        processing_count = await self._count_processing_tasks()
+        status = self.get_runtime_status()
+        status["processing_count"] = processing_count
+        status["scan_active"] = bool(
+            status.get("scan_running") or processing_count > 0
         )
+        return status
+
+    def is_scan_running(self) -> bool:
+        self._cleanup_finished_scan_task()
+        if self._background_scan_task and not self._background_scan_task.done():
+            return True
+        if self._scan_lock.locked():
+            return True
+        return False
 
     def _cleanup_finished_scan_task(self) -> None:
         task = self._background_scan_task
         if task and task.done():
             self._background_scan_task = None
+
+    async def reconcile_idle_processing_tasks(self) -> int:
+        """将长时间无更新的 processing 任务标记为失败，避免页面长期卡住。"""
+        return await self._mark_processing_tasks_failed(
+            reason="任务长时间未完成，已自动标记为失败，可点击重试",
+            max_age_minutes=ARCHIVE_IDLE_PROCESSING_MINUTES,
+        )
+
+    async def _count_processing_tasks(self) -> int:
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(func.count(ArchiveTask.id)).where(
+                    ArchiveTask.status == ArchiveStatus.PROCESSING
+                )
+            )
+            return int(result.scalar() or 0)
 
     async def recover_stale_state(self) -> dict[str, Any]:
         """服务启动或人工恢复时，清理僵尸扫描状态与 processing 任务。"""
@@ -263,42 +300,39 @@ class ArchiveService:
             return len(tasks)
 
     async def cancel_scan(self) -> dict[str, Any]:
+        self._cancel_requested = True
         self._cleanup_finished_scan_task()
         task = self._background_scan_task
-        if not task or task.done():
-            recovered_tasks = await self._mark_processing_tasks_failed(
-                reason="归档扫描已取消",
-                max_age_minutes=ARCHIVE_STALE_TASK_MINUTES,
-            )
-            return {
-                "cancelled": False,
-                "running": False,
-                "recovered_tasks": recovered_tasks,
-                "message": "当前没有正在执行的归档扫描"
-                + (f"，已清理 {recovered_tasks} 条卡住的任务" if recovered_tasks else ""),
-                "runtime": self.get_runtime_status(),
-            }
+        had_active_task = bool(task and not task.done())
 
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("等待归档扫描取消时出错")
+        if had_active_task:
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=ARCHIVE_CANCEL_WAIT_SECONDS)
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError:
+                logger.warning("归档扫描取消等待超时，已强制结束扫描状态")
+            except Exception:
+                logger.exception("等待归档扫描取消时出错")
 
         self._cleanup_finished_scan_task()
         recovered_tasks = await self._mark_processing_tasks_failed(
             reason="归档扫描已取消",
-            max_age_minutes=ARCHIVE_STALE_TASK_MINUTES,
+            max_age_minutes=None,
         )
+        self._last_scan_finished_at = beijing_now()
+        if had_active_task or recovered_tasks:
+            self._last_scan_error = "归档扫描已取消"
+        self._cancel_requested = False
+
         return {
-            "cancelled": True,
-            "running": False,
+            "cancelled": had_active_task or recovered_tasks > 0,
+            "running": self.is_scan_running(),
             "recovered_tasks": recovered_tasks,
             "message": "归档扫描已取消"
             + (f"，已清理 {recovered_tasks} 条卡住的任务" if recovered_tasks else ""),
-            "runtime": self.get_runtime_status(),
+            "runtime": await self.get_runtime_status_async(),
         }
 
     async def start_scan(
@@ -352,6 +386,7 @@ class ArchiveService:
         self._last_scan_summary = None
         self._last_scan_error = ""
 
+        self._cancel_requested = False
         self._background_scan_task = asyncio.create_task(
             self.run_scan(trigger=trigger),
             name=f"archive-scan-{trigger}",
@@ -566,6 +601,7 @@ class ArchiveService:
                 }
 
                 for item in video_items:
+                    self._raise_if_scan_cancel_requested()
                     fid = str(item.get("fid", ""))
                     identify_info = identified_video_map.get(fid)
                     if not identify_info:
@@ -620,6 +656,12 @@ class ArchiveService:
                 )
                 await self._trigger_strm_after_archive(summary, trigger)
                 return summary
+            except asyncio.CancelledError:
+                await self._mark_processing_tasks_failed(
+                    reason="归档扫描已取消",
+                    max_age_minutes=None,
+                )
+                raise
             except Exception as exc:
                 error_message = self._format_scan_error(exc)
                 await operation_log_service.log_background_event(
@@ -1073,6 +1115,9 @@ class ArchiveService:
                 "renamed": renamed,
                 "new_filename": new_filename if renamed else filename,
             }
+        except asyncio.CancelledError:
+            await self._mark_task_failed(db_task.id, "归档扫描已取消")
+            raise
         except Exception as exc:
             msg = str(exc) or "未知错误"
             await self._mark_task_failed(db_task.id, msg)
@@ -1287,6 +1332,9 @@ class ArchiveService:
                 "renamed": renamed,
                 "new_filename": new_filename if renamed else filename,
             }
+        except asyncio.CancelledError:
+            await self._mark_task_failed(db_task.id, "归档扫描已取消")
+            raise
         except Exception as exc:
             msg = str(exc) or "未知错误"
             await self._mark_task_failed(db_task.id, msg)
@@ -2109,6 +2157,24 @@ class ArchiveService:
 
     # ---------- 任务 CRUD ----------
 
+    async def cancel_task(self, task_id: int) -> dict[str, Any]:
+        async with async_session_maker() as db:
+            task = await db.get(ArchiveTask, task_id)
+            if not task:
+                raise ValueError("归档任务不存在")
+            if task.status != ArchiveStatus.PROCESSING:
+                raise ValueError("只能取消处理中的任务")
+            now = beijing_now()
+            task.status = ArchiveStatus.FAILED
+            task.error_message = "任务已手动取消，可点击重试"
+            task.completed_at = now
+            await db.commit()
+        return {
+            "cancelled": True,
+            "task_id": task_id,
+            "runtime": await self.get_runtime_status_async(),
+        }
+
     async def retry_task(self, task_id: int) -> dict[str, Any]:
         async with async_session_maker() as db:
             task = await db.get(ArchiveTask, task_id)
@@ -2182,6 +2248,7 @@ class ArchiveService:
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
+        await self.reconcile_idle_processing_tasks()
         async with async_session_maker() as db:
             base = select(ArchiveTask)
             total_q = select(func.count(ArchiveTask.id))

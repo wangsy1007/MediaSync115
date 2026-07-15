@@ -7,7 +7,7 @@
       </div>
       <div class="header-actions">
         <el-button :loading="refreshing" @click="refreshAll">刷新</el-button>
-        <el-button v-if="runtime.scan_running" type="warning" :loading="cancelLoading" @click="cancelScan">
+        <el-button v-if="scanActive" type="warning" :loading="cancelLoading" @click="cancelScan">
           取消扫描
         </el-button>
         <el-button type="primary" :loading="scanLoading" @click="runScan">立即扫描</el-button>
@@ -202,7 +202,8 @@
         </div>
         <div class="status-item">
           <span class="status-label">扫描任务</span>
-          <el-tag :type="runtime.scan_running ? 'warning' : 'info'">{{ runtime.scan_running ? '执行中' : '空闲' }}</el-tag>
+          <el-tag :type="scanActive ? 'warning' : 'info'">{{ scanActive ? '执行中' : '空闲' }}</el-tag>
+          <span v-if="runtime.processing_count > 0" class="processing-hint">（{{ runtime.processing_count }} 个文件处理中）</span>
         </div>
         <div class="status-item">
           <span class="status-label">最近触发</span>
@@ -265,9 +266,10 @@
           </el-table-column>
           <el-table-column prop="target_path" label="目标路径" min-width="260" show-overflow-tooltip />
           <el-table-column prop="error_message" label="错误原因" min-width="220" show-overflow-tooltip />
-          <el-table-column label="操作" width="100" fixed="right">
+          <el-table-column label="操作" width="140" fixed="right">
             <template #default="{ row }">
               <el-button v-if="row.status === 'failed'" type="primary" text @click="retryTask(row)">重试</el-button>
+              <el-button v-else-if="row.status === 'processing'" type="warning" text @click="cancelTask(row)">取消</el-button>
               <span v-else class="muted-text">-</span>
             </template>
           </el-table-column>
@@ -382,6 +384,8 @@ const subdirTab = ref('movie')
 
 const runtime = reactive({
   scan_running: false,
+  scan_active: false,
+  processing_count: 0,
   last_scan_started_at: '',
   last_scan_finished_at: '',
   last_scan_trigger: '',
@@ -493,10 +497,26 @@ const statusTagType = (v) => ({ success: 'success', failed: 'danger', processing
 const scanSummaryText = computed(() => {
   const summary = runtime.last_scan_summary
   if (!summary || typeof summary !== 'object') {
-    return runtime.scan_running ? '扫描执行中' : '暂无记录'
+    return scanActive.value ? '扫描执行中' : '暂无记录'
   }
   return `总计 ${Number(summary.total || 0)} 个，成功 ${Number(summary.success || 0)} 个，跳过 ${Number(summary.skipped || 0)} 个，失败 ${Number(summary.failed || 0)} 个`
 })
+
+const syncRuntime = (data) => {
+  if (!data || typeof data !== 'object') return
+  runtime.scan_running = !!data.scan_running
+  runtime.scan_active = data.scan_active ?? (!!data.scan_running || Number(data.processing_count || 0) > 0)
+  runtime.processing_count = Number(data.processing_count || 0)
+  runtime.last_scan_started_at = data.last_scan_started_at || runtime.last_scan_started_at
+  runtime.last_scan_finished_at = data.last_scan_finished_at || runtime.last_scan_finished_at
+  runtime.last_scan_trigger = data.last_scan_trigger || runtime.last_scan_trigger
+  runtime.last_scan_summary = data.last_scan_summary ?? runtime.last_scan_summary
+  runtime.last_scan_error = data.last_scan_error ?? runtime.last_scan_error
+}
+
+const scanActive = computed(() => !!(
+  runtime.scan_active || runtime.scan_running || runtime.processing_count > 0
+))
 
 const loadConfig = async () => {
   const { data } = await archiveApi.getConfig()
@@ -526,12 +546,7 @@ const loadConfig = async () => {
       ? subdirOptions.tv_match_types
       : FALLBACK_SUBDIR_OPTIONS.tv_match_types
   })
-  runtime.scan_running = !!data.runtime?.scan_running
-  runtime.last_scan_started_at = data.runtime?.last_scan_started_at || ''
-  runtime.last_scan_finished_at = data.runtime?.last_scan_finished_at || ''
-  runtime.last_scan_trigger = data.runtime?.last_scan_trigger || ''
-  runtime.last_scan_summary = data.runtime?.last_scan_summary || null
-  runtime.last_scan_error = data.runtime?.last_scan_error || ''
+  syncRuntime(data.runtime)
 }
 
 const loadTasks = async () => {
@@ -597,18 +612,13 @@ const runScan = async () => {
   scanLoading.value = true
   try {
     const { data } = await archiveApi.runScan()
-    runtime.scan_running = !!data.runtime?.scan_running
-    runtime.last_scan_started_at = data.runtime?.last_scan_started_at || runtime.last_scan_started_at
-    runtime.last_scan_finished_at = data.runtime?.last_scan_finished_at || runtime.last_scan_finished_at
-    runtime.last_scan_trigger = data.runtime?.last_scan_trigger || runtime.last_scan_trigger
-    runtime.last_scan_summary = data.runtime?.last_scan_summary || null
-    runtime.last_scan_error = data.runtime?.last_scan_error || ''
+    syncRuntime(data.runtime)
     if (data.started === false) {
       ElMessage.info(data.message || '归档扫描已在执行中')
     } else {
       ElMessage.success(data.message || '归档扫描已启动')
     }
-    if (runtime.scan_running) {
+    if (scanActive.value) {
       startScanPolling()
     }
     await loadTasks()
@@ -623,9 +633,7 @@ const cancelScan = async () => {
   cancelLoading.value = true
   try {
     const { data } = await archiveApi.cancelScan()
-    runtime.scan_running = !!data.runtime?.scan_running
-    runtime.last_scan_finished_at = data.runtime?.last_scan_finished_at || runtime.last_scan_finished_at
-    runtime.last_scan_error = data.runtime?.last_scan_error || runtime.last_scan_error
+    syncRuntime(data.runtime)
     stopScanPolling()
     if (data.cancelled) {
       ElMessage.warning(data.message || '归档扫描已取消')
@@ -652,7 +660,7 @@ const startScanPolling = () => {
   scanPollingTimer = window.setInterval(async () => {
     try {
       await Promise.all([loadConfig(), loadTasks()])
-      if (!runtime.scan_running) {
+      if (!scanActive.value) {
         stopScanPolling()
         if (runtime.last_scan_error) {
           ElMessage.warning(runtime.last_scan_error)
@@ -664,6 +672,29 @@ const startScanPolling = () => {
       stopScanPolling()
     }
   }, 3000)
+}
+
+const cancelTask = async (row) => {
+  try {
+    await ElMessageBox.confirm(`确定取消任务「${row.source_filename}」吗？`, '取消任务', {
+      type: 'warning',
+      confirmButtonText: '取消任务',
+      cancelButtonText: '返回'
+    })
+  } catch {
+    return
+  }
+  try {
+    const { data } = await archiveApi.cancelTask(row.id)
+    syncRuntime(data.runtime)
+    ElMessage.success('任务已取消，可点击重试重新归档')
+    await loadTasks()
+    if (!scanActive.value) {
+      stopScanPolling()
+    }
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '取消任务失败')
+  }
 }
 
 const retryTask = async (row) => {
@@ -790,7 +821,7 @@ const confirmPicker = () => {
 onMounted(async () => {
   await Promise.all([loadSubdirOptions(), loadNamingOptions()])
   await refreshAll()
-  if (runtime.scan_running) {
+  if (scanActive.value) {
     startScanPolling()
   }
 })
@@ -965,6 +996,12 @@ onBeforeUnmount(() => {
   .status-item-full {
     grid-column: 1 / -1;
     align-items: flex-start;
+  }
+
+  .processing-hint {
+    margin-left: 8px;
+    color: var(--ms-text-secondary);
+    font-size: 12px;
   }
 
   .status-label {

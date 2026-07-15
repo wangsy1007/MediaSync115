@@ -367,6 +367,7 @@ export const archiveApi = {
   listTasks: (params) => api.get('/archive/tasks', { params }),
   runScan: () => api.post('/archive/scan', null, { timeout: 300000 }),
   cancelScan: () => api.post('/archive/scan/cancel'),
+  cancelTask: (taskId) => api.post(`/archive/tasks/${taskId}/cancel`),
   retryTask: (taskId) => api.post(`/archive/tasks/${taskId}/retry`, null, { timeout: 300000 }),
   clearTasks: (includeFailed = false, includeStaleProcessing = false) => api.delete('/archive/tasks/clear', { params: { include_failed: includeFailed, include_stale_processing: includeStaleProcessing } })
 }

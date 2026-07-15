@@ -79,7 +79,7 @@ async def get_archive_naming_options_api():
 async def get_archive_config():
     return {
         **runtime_settings_service.get_archive_config(),
-        "runtime": archive_service.get_runtime_status(),
+        "runtime": await archive_service.get_runtime_status_async(),
     }
 
 
@@ -207,6 +207,16 @@ async def run_archive_scan():
 async def cancel_archive_scan():
     try:
         return await archive_service.cancel_scan()
+    except Exception as exc:
+        _raise_archive_115_error(exc)
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_archive_task(task_id: int):
+    try:
+        return await archive_service.cancel_task(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         _raise_archive_115_error(exc)
 

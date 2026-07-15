@@ -366,6 +366,55 @@ class TestArchiveService:
 
         assert marked["count"] == 1
 
+    @pytest.mark.asyncio
+    async def test_cancel_scan_marks_all_processing_tasks_failed(
+        self, monkeypatch
+    ) -> None:
+        """无后台扫描任务时，取消仍应清理所有 processing 任务"""
+
+        marked: dict[str, object] = {}
+
+        async def fake_mark(**kwargs):
+            marked.update(kwargs)
+            return 2
+
+        async def fake_runtime():
+            return {"scan_running": False, "processing_count": 0, "scan_active": False}
+
+        monkeypatch.setattr(archive_service, "_background_scan_task", None)
+        monkeypatch.setattr(
+            archive_service, "_mark_processing_tasks_failed", fake_mark
+        )
+        monkeypatch.setattr(
+            archive_service, "get_runtime_status_async", fake_runtime
+        )
+
+        result = await archive_service.cancel_scan()
+
+        assert result["cancelled"] is True
+        assert result["recovered_tasks"] == 2
+        assert marked.get("max_age_minutes") is None
+        assert "已取消" in str(marked.get("reason"))
+
+    @pytest.mark.asyncio
+    async def test_reconcile_idle_processing_tasks_uses_idle_threshold(
+        self, monkeypatch
+    ) -> None:
+        marked: dict[str, object] = {}
+
+        async def fake_mark(**kwargs):
+            marked.update(kwargs)
+            return 1
+
+        monkeypatch.setattr(
+            archive_service, "_mark_processing_tasks_failed", fake_mark
+        )
+
+        count = await archive_service.reconcile_idle_processing_tasks()
+
+        assert count == 1
+        assert marked.get("max_age_minutes") == archive_service_module.ARCHIVE_IDLE_PROCESSING_MINUTES
+
 
 class TestArchiveTvEpisodeDedup:
     def test_dedupe_keeps_collection_for_missing_episodes(self) -> None:
