@@ -1,3 +1,8 @@
+import asyncio
+from unittest.mock import AsyncMock
+
+import pytest
+
 from app.models.strm_index import StrmFileIndex
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.strm_service import StrmService
@@ -11,6 +16,23 @@ class _FakePan:
     @staticmethod
     def _extract_folder_id(item: dict) -> str:
         return str(item.get("fid") or "")
+
+
+class _DeepTreePan(_FakePan):
+    def __init__(self, depth: int = 8) -> None:
+        self.depth = depth
+
+    async def get_file_list(
+        self, cid: str, offset: int = 0, limit: int = 200
+    ) -> dict:
+        if cid == "root":
+            items = [{"fid": "d1", "n": "d1", "ico": "folder"}]
+        elif cid.startswith("d") and int(cid[1:]) < self.depth:
+            level = int(cid[1:]) + 1
+            items = [{"fid": f"d{level}", "n": f"d{level}", "ico": "folder"}]
+        else:
+            items = [{"fid": "video", "n": "movie.mkv", "pc": "pick-code"}]
+        return {"data": items[offset : offset + limit], "count": len(items)}
 
 
 def _indexed(fid: str, path: str, parent_cid: str = "") -> StrmFileIndex:
@@ -137,3 +159,54 @@ def test_config_fingerprint_changes_with_output_dir(monkeypatch) -> None:
         runtime_settings_service, "get_strm_output_dir", lambda: "/tmp/strm-b"
     )
     assert service._config_fingerprint() != first
+
+
+@pytest.mark.asyncio
+async def test_scan_tree_does_not_deadlock_when_depth_exceeds_concurrency() -> None:
+    service = StrmService()
+
+    files, folders = await asyncio.wait_for(
+        service._scan_tree(_DeepTreePan(depth=8), "root", "", ""),
+        timeout=1,
+    )
+
+    assert [item["fid"] for item in files] == ["video"]
+    assert len(folders) == 9
+
+
+@pytest.mark.asyncio
+async def test_cancelled_generate_marks_persistent_state_failed(
+    monkeypatch, tmp_path
+) -> None:
+    service = StrmService()
+    entered = asyncio.Event()
+
+    async def _blocked_generate(**_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(service, "_generate", _blocked_generate)
+    mark_failed = AsyncMock()
+    log_step = AsyncMock()
+    monkeypatch.setattr(service, "_mark_state_failed", mark_failed)
+    monkeypatch.setattr(service, "_log_strm_step", log_step)
+
+    task = asyncio.create_task(
+        service._run_generate_task(
+            trigger="scheduler",
+            output_cid="root",
+            output_dir=tmp_path,
+            mode="incremental",
+            scopes=[],
+        )
+    )
+    await entered.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    mark_failed.assert_awaited_once()
+    assert "取消或执行超时" in str(mark_failed.await_args.kwargs["error"])
+    assert service._last_generate_finished_at
+    assert "取消或执行超时" in service._last_generate_error

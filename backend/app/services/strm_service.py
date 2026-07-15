@@ -522,6 +522,27 @@ class StrmService:
                     extra=summary,
                 )
                 return {"success": True, **summary}
+            except asyncio.CancelledError:
+                cancel_error = RuntimeError("STRM 生成任务被取消或执行超时")
+                self._last_generate_finished_at = self._now_iso()
+                self._last_generate_error = str(cancel_error)
+                await self._mark_state_failed(
+                    output_cid=output_cid,
+                    output_dir=output_dir,
+                    mode=mode,
+                    error=cancel_error,
+                )
+                await self._log_strm_step(
+                    "strm.generate.cancelled",
+                    f"STRM {self._strm_mode_label(mode)}生成被取消或执行超时",
+                    status="failed",
+                    extra={
+                        "trigger": self._last_generate_trigger,
+                        "mode": mode,
+                        "error": str(cancel_error),
+                    },
+                )
+                raise
             except Exception as exc:
                 self._last_generate_finished_at = self._now_iso()
                 self._last_generate_error = str(exc)[:2000]
@@ -1172,7 +1193,11 @@ class StrmService:
         async def _walk(
             folder_cid: str, prefix: str, folder_parent_cid: str
         ) -> None:
-            items = await self._list_folder_items(pan115, folder_cid)
+            # 并发许可只保护单次目录列表请求，不能覆盖对子目录 gather 的等待。
+            # 否则父目录会持有许可等待子目录，而深层子目录又在等待许可，最终
+            # 所有许可都被父任务占满并形成递归死锁。
+            async with scan_sem:
+                items = await self._list_folder_items(pan115, folder_cid)
             folders.append(
                 {
                     "fid": folder_cid,
@@ -1199,8 +1224,7 @@ class StrmService:
                         child_prefix: str = relative_path,
                         child_parent: str = folder_cid,
                     ) -> None:
-                        async with scan_sem:
-                            await _walk(child_id, child_prefix, child_parent)
+                        await _walk(child_id, child_prefix, child_parent)
 
                     child_walks.append(asyncio.create_task(_walk_child()))
                     continue
