@@ -169,6 +169,10 @@ async def lifespan(app: FastAPI):
     await init_db()
     await operation_log_service.prune(days=30)
 
+    from app.services.strm_service import strm_service
+
+    await strm_service.reconcile_stale_running_state()
+
     # 初始化 Kafka 生产者
     kafka_producer.init(settings.KAFKA_BOOTSTRAP_SERVERS)
 

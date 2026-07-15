@@ -53,6 +53,8 @@ VIDEO_EXTENSIONS = {
 MANIFEST_FILENAME = ".mediasync115-strm-manifest.json"
 DOWNLOAD_URL_CACHE_DEFAULT_TTL_SECONDS = 1800.0
 DOWNLOAD_URL_CACHE_MAX_ITEMS = 512
+STRM_WRITE_BATCH_SIZE = 32
+STRM_SCAN_CONCURRENCY = 4
 
 
 class StrmService:
@@ -79,6 +81,45 @@ class StrmService:
             "folder_count": 0,
             "output_cid": "",
         }
+        self._generate_progress: dict[str, Any] = {}
+
+    def _set_generate_progress(self, **fields: Any) -> None:
+        self._generate_progress = {**self._generate_progress, **fields}
+
+    def _clear_generate_progress(self) -> None:
+        self._generate_progress = {}
+
+    async def reconcile_stale_running_state(self) -> bool:
+        """进程内无任务但数据库仍为 running 时，修正为 interrupted。"""
+        if self._is_generate_running() or self._lock.locked():
+            return False
+        output_cid = runtime_settings_service.get_archive_output_cid()
+        if not output_cid:
+            return False
+        try:
+            await ensure_tables_exist("strm_sync_state")
+            async with async_session_maker() as session:
+                state = await session.get(StrmSyncState, output_cid)
+                if state is None or state.last_status != "running":
+                    return False
+                if (
+                    state.last_finished_at
+                    and state.last_started_at
+                    and state.last_finished_at >= state.last_started_at
+                ):
+                    state.last_status = "success"
+                else:
+                    state.last_status = "interrupted"
+                    state.last_error = (
+                        state.last_error
+                        or "STRM 生成任务异常中断，请重新执行生成"
+                    )
+                    state.last_finished_at = beijing_now()
+                await session.commit()
+                return True
+        except Exception:
+            logger.warning("修正 STRM running 状态失败", exc_info=True)
+            return False
 
     def get_runtime_status(self) -> dict[str, Any]:
         generate_running = bool(self._generate_task and not self._generate_task.done())
@@ -98,6 +139,7 @@ class StrmService:
                 self._index_stats.get("last_incremental_at") or ""
             ),
             "last_full_at": str(self._index_stats.get("last_full_at") or ""),
+            "generate_progress": dict(self._generate_progress),
         }
 
     async def get_runtime_status_async(self) -> dict[str, Any]:
@@ -136,6 +178,17 @@ class StrmService:
                 status["last_full_at"] = index_stats["last_full_at"]
                 if not status["last_generate_error"] and state.last_error:
                     status["last_generate_error"] = state.last_error
+                if (
+                    not status["generate_running"]
+                    and state.last_status == "running"
+                ):
+                    if await self.reconcile_stale_running_state():
+                        state = await session.get(StrmSyncState, output_cid)
+                        if state is not None:
+                            index_stats["last_status"] = state.last_status
+                            status["index_stats"] = index_stats
+                            if state.last_error:
+                                status["last_generate_error"] = state.last_error
         except Exception:
             logger.warning("读取 STRM 持久化状态失败", exc_info=True)
         return status
@@ -362,6 +415,8 @@ class StrmService:
             self._last_generate_summary = None
             self._last_generate_trigger = trigger
             self._current_mode = mode
+            self._clear_generate_progress()
+            self._set_generate_progress(phase="preparing", mode=mode)
 
             await operation_log_service.log_background_event(
                 source_type="background_task",
@@ -434,6 +489,88 @@ class StrmService:
                     },
                 )
                 raise
+            finally:
+                self._clear_generate_progress()
+
+    async def _flush_strm_writes(
+        self, dirs_needed: set[Path], pending_writes: list[tuple[Path, str]]
+    ) -> int:
+        for directory in dirs_needed:
+            await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
+        if not pending_writes:
+            return 0
+        batch = list(pending_writes)
+        pending_writes.clear()
+        await asyncio.gather(
+            *(
+                asyncio.to_thread(self._write_text_atomic, path, content)
+                for path, content in batch
+            )
+        )
+        return len(batch)
+
+    async def _write_strm_files(
+        self,
+        *,
+        scanned_files: list[dict[str, str]],
+        existing_by_fid: dict[str, StrmFileIndex],
+        config_fingerprint: str,
+        output_dir: Path,
+    ) -> tuple[int, int]:
+        written_count = 0
+        unchanged_count = 0
+        pending_writes: list[tuple[Path, str]] = []
+        dirs_needed: set[Path] = set()
+        total = len(scanned_files)
+        self._set_generate_progress(
+            phase="writing", total=total, processed=0, written=0, unchanged=0
+        )
+
+        for index, item in enumerate(scanned_files, start=1):
+            item["content_hash"] = self._record_content_hash(item)
+            strm_relative = self._strm_relative_path(item["relative_path"])
+            target_path = output_dir.joinpath(*PurePosixPath(strm_relative).parts)
+            content = self.build_play_url(
+                item["pick_code"], item.get("name") or item.get("relative_path") or ""
+            ) + "\n"
+            old = existing_by_fid.get(item["fid"])
+            if (
+                old is not None
+                and old.relative_path == item["relative_path"]
+                and old.content_hash == item["content_hash"]
+                and old.config_fingerprint == config_fingerprint
+                and await asyncio.to_thread(target_path.is_file)
+            ):
+                unchanged_count += 1
+            else:
+                dirs_needed.add(target_path.parent)
+                pending_writes.append((target_path, content))
+                if len(pending_writes) >= STRM_WRITE_BATCH_SIZE:
+                    written_count += await self._flush_strm_writes(
+                        dirs_needed, pending_writes
+                    )
+                    dirs_needed = set()
+
+            if index % 20 == 0 or index == total:
+                self._set_generate_progress(
+                    phase="writing",
+                    total=total,
+                    processed=index,
+                    written=written_count + len(pending_writes),
+                    unchanged=unchanged_count,
+                )
+
+        if pending_writes or dirs_needed:
+            written_count += await self._flush_strm_writes(dirs_needed, pending_writes)
+
+        self._set_generate_progress(
+            phase="writing",
+            total=total,
+            processed=total,
+            written=written_count,
+            unchanged=unchanged_count,
+        )
+        return written_count, unchanged_count
 
     def _prepare_generate(self) -> tuple[str, Path]:
         output_cid = runtime_settings_service.get_archive_output_cid()
@@ -732,6 +869,7 @@ class StrmService:
             and state.config_fingerprint != config_fingerprint
             and bool(existing_files)
         )
+        self._set_generate_progress(phase="scanning", mode=mode, detail="115 网盘目录")
         scan: dict[str, Any]
         if config_only:
             scan = {
@@ -785,6 +923,12 @@ class StrmService:
                     "source": "full_fallback",
                 }
 
+        self._set_generate_progress(
+            phase="scanning",
+            mode=mode,
+            detail="扫描完成",
+            scanned=len(scan["files"]),
+        )
         scanned_files = scan["files"]
         scanned_by_fid = {item["fid"]: item for item in scanned_files}
         scanned_paths: dict[str, str] = {}
@@ -813,7 +957,6 @@ class StrmService:
         written_count = 0
         unchanged_count = 0
         removed_count = 0
-
         paths_to_remove: set[str] = set()
         for fid in stale_fids:
             old = existing_by_fid.get(fid)
@@ -824,42 +967,14 @@ class StrmService:
             if old and old.relative_path != item["relative_path"]:
                 paths_to_remove.add(self._strm_relative_path(old.relative_path))
 
-        for item in scanned_files:
-            item["content_hash"] = self._record_content_hash(item)
-            strm_relative = self._strm_relative_path(item["relative_path"])
-            target_path = output_dir.joinpath(*PurePosixPath(strm_relative).parts)
-            content = self.build_play_url(
-                item["pick_code"], item.get("name") or item.get("relative_path") or ""
-            ) + "\n"
-            old = existing_by_fid.get(item["fid"])
-            needs_write = (
-                old is None
-                or old.relative_path != item["relative_path"]
-                or old.content_hash != item["content_hash"]
-                or old.config_fingerprint != config_fingerprint
-                or not await asyncio.to_thread(target_path.is_file)
-            )
-            if not needs_write:
-                unchanged_count += 1
-                continue
-            await asyncio.to_thread(target_path.parent.mkdir, parents=True, exist_ok=True)
-            if await asyncio.to_thread(target_path.is_file):
-                try:
-                    if (
-                        await asyncio.to_thread(
-                            target_path.read_text, encoding="utf-8"
-                        )
-                        == content
-                    ):
-                        unchanged_count += 1
-                        continue
-                except Exception:
-                    pass
-            await asyncio.to_thread(
-                self._write_text_atomic, target_path, content
-            )
-            written_count += 1
+        written_count, unchanged_count = await self._write_strm_files(
+            scanned_files=scanned_files,
+            existing_by_fid=existing_by_fid,
+            config_fingerprint=config_fingerprint,
+            output_dir=output_dir,
+        )
 
+        self._set_generate_progress(phase="indexing")
         final_records = {
             item.fid: self._file_model_to_record(item)
             for item in existing_files
@@ -920,6 +1035,7 @@ class StrmService:
     ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
         files: list[dict[str, str]] = []
         folders: list[dict[str, str]] = []
+        scan_sem = asyncio.Semaphore(STRM_SCAN_CONCURRENCY)
 
         async def _walk(
             folder_cid: str, prefix: str, folder_parent_cid: str
@@ -933,6 +1049,7 @@ class StrmService:
                     "snapshot_hash": self._snapshot_hash(items, pan115),
                 }
             )
+            child_walks: list[asyncio.Task[None]] = []
             for item in items:
                 name = self._extract_file_name(item)
                 if not name:
@@ -942,12 +1059,24 @@ class StrmService:
                 )
                 if pan115._is_folder_item(item):
                     child_cid = str(pan115._extract_folder_id(item) or "").strip()
-                    if child_cid:
-                        await _walk(child_cid, relative_path, folder_cid)
+                    if not child_cid:
+                        continue
+
+                    async def _walk_child(
+                        child_id: str = child_cid,
+                        child_prefix: str = relative_path,
+                        child_parent: str = folder_cid,
+                    ) -> None:
+                        async with scan_sem:
+                            await _walk(child_id, child_prefix, child_parent)
+
+                    child_walks.append(asyncio.create_task(_walk_child()))
                     continue
                 record = self._file_item_to_record(item, relative_path, folder_cid)
                 if record:
                     files.append(record)
+            if child_walks:
+                await asyncio.gather(*child_walks)
 
         await _walk(str(cid), self._normalize_prefix(relative_prefix), parent_cid)
         return files, folders
@@ -1434,16 +1563,22 @@ class StrmService:
                         StrmFileIndex.fid.in_(stale_fids),
                     )
                 )
-            for item in scanned_files:
-                model = await session.scalar(
-                    select(StrmFileIndex).where(
-                        StrmFileIndex.output_cid == output_cid,
-                        StrmFileIndex.fid == item["fid"],
+            existing_file_models = {
+                item.fid: item
+                for item in (
+                    await session.scalars(
+                        select(StrmFileIndex).where(
+                            StrmFileIndex.output_cid == output_cid
+                        )
                     )
-                )
+                ).all()
+            }
+            for item in scanned_files:
+                model = existing_file_models.get(item["fid"])
                 if model is None:
                     model = StrmFileIndex(output_cid=output_cid, fid=item["fid"])
                     session.add(model)
+                    existing_file_models[item["fid"]] = model
                 model.pick_code = item["pick_code"]
                 model.relative_path = item["relative_path"]
                 model.parent_cid = item["parent_cid"]
@@ -1452,16 +1587,16 @@ class StrmService:
                 model.content_hash = item["content_hash"]
                 model.config_fingerprint = config_fingerprint
 
-            if complete_prefixes:
-                indexed_folders = list(
-                    (
-                        await session.scalars(
-                            select(StrmFolderIndex).where(
-                                StrmFolderIndex.output_cid == output_cid
-                            )
+            indexed_folders = list(
+                (
+                    await session.scalars(
+                        select(StrmFolderIndex).where(
+                            StrmFolderIndex.output_cid == output_cid
                         )
-                    ).all()
-                )
+                    )
+                ).all()
+            )
+            if complete_prefixes:
                 stale_folder_ids = [
                     item.id
                     for item in indexed_folders
@@ -1477,16 +1612,18 @@ class StrmService:
                         )
                     )
                     await session.flush()
+                    indexed_folders = [
+                        item
+                        for item in indexed_folders
+                        if item.id not in stale_folder_ids
+                    ]
+            existing_folder_models = {item.fid: item for item in indexed_folders}
             for item in scanned_folders:
-                model = await session.scalar(
-                    select(StrmFolderIndex).where(
-                        StrmFolderIndex.output_cid == output_cid,
-                        StrmFolderIndex.fid == item["fid"],
-                    )
-                )
+                model = existing_folder_models.get(item["fid"])
                 if model is None:
                     model = StrmFolderIndex(output_cid=output_cid, fid=item["fid"])
                     session.add(model)
+                    existing_folder_models[item["fid"]] = model
                 model.relative_path = item["relative_path"]
                 model.parent_cid = item["parent_cid"]
                 model.snapshot_hash = item["snapshot_hash"]

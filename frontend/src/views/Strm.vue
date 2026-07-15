@@ -25,7 +25,7 @@
           <span class="card-title">STRM 配置</span>
           <div class="status-tags">
             <el-tag :type="config.strm_enabled ? 'success' : 'info'">{{ config.strm_enabled ? '已启用' : '未启用' }}</el-tag>
-            <el-tag :type="runtime.generate_running ? 'warning' : 'info'">{{ runtime.generate_running ? '生成中' : '空闲' }}</el-tag>
+            <el-tag :type="runtime.generate_running ? 'warning' : 'info'">{{ runtime.generate_running ? generateStatusLabel : '空闲' }}</el-tag>
           </div>
         </div>
       </template>
@@ -163,6 +163,10 @@
         <div class="status-item">
           <span class="status-label">播放模式</span>
           <span class="status-value">{{ redirectModeLabel }}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">生成进度</span>
+          <span class="status-value">{{ generateProgressText }}</span>
         </div>
         <div class="status-item">
           <span class="status-label">当前生成模式</span>
@@ -305,7 +309,48 @@ const runtime = reactive({
   index_file_count: 0,
   index_directory_count: 0,
   last_incremental_at: '',
-  last_full_at: ''
+  last_full_at: '',
+  generate_progress: {},
+  index_stats: {},
+})
+
+const generateProgress = computed(() => runtime.generate_progress || {})
+
+const generateProgressText = computed(() => {
+  if (!runtime.generate_running) {
+    const lastStatus = runtime.index_stats?.last_status
+    if (lastStatus === 'interrupted') return '上次生成异常中断，请重新执行'
+    return '-'
+  }
+  const progress = generateProgress.value
+  const phase = String(progress.phase || '')
+  if (phase === 'scanning') {
+    const scanned = Number(progress.scanned || 0)
+    const detail = String(progress.detail || '115 网盘目录')
+    return scanned > 0 ? `正在扫描 ${detail}，已发现 ${scanned} 个视频` : `正在扫描 ${detail}...`
+  }
+  if (phase === 'writing') {
+    const total = Number(progress.total || 0)
+    const processed = Number(progress.processed || 0)
+    const written = Number(progress.written || 0)
+    const unchanged = Number(progress.unchanged || 0)
+    if (total > 0) {
+      return `写入 STRM ${processed}/${total}，新建 ${written}，跳过 ${unchanged}`
+    }
+    return '正在写入 STRM 文件...'
+  }
+  if (phase === 'indexing') return '正在更新索引...'
+  if (phase === 'preparing') return '准备中...'
+  return '生成中...'
+})
+
+const generateStatusLabel = computed(() => {
+  if (!runtime.generate_running) return '空闲'
+  const phase = String(generateProgress.value.phase || '')
+  if (phase === 'scanning') return '扫描中'
+  if (phase === 'writing') return '写入中'
+  if (phase === 'indexing') return '索引中'
+  return '生成中'
 })
 
 const redirectModeLabel = computed(() => {
@@ -415,6 +460,7 @@ const applyConfig = (data) => {
   const nextRuntime = data.runtime || {}
   Object.assign(runtime, nextRuntime)
   runtime.generate_running = !!nextRuntime.generate_running
+  runtime.generate_progress = nextRuntime.generate_progress || {}
   runtime.last_generate_started_at = nextRuntime.last_generate_started_at || ''
   runtime.last_generate_finished_at = nextRuntime.last_generate_finished_at || ''
   runtime.last_generate_error = nextRuntime.last_generate_error || ''
