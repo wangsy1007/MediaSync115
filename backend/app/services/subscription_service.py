@@ -455,7 +455,9 @@ class SubscriptionService:
                             cleanup_after_auto: dict[str, Any] | None = None
                             retry_records = []
                             if sub.auto_download:
-                                retry_records = await self._load_retryable_records(inner_db, sub_id)
+                                retry_records = await self._load_retryable_records(
+                                    inner_db, sub
+                                )
                             if force_auto_download and duplicate_urls:
                                 duplicate_retry_records = await self._load_force_retry_records(
                                     inner_db,
@@ -2762,7 +2764,11 @@ class SubscriptionService:
                     DownloadRecord.subscription_id == subscription_id
                 )
             )
-        existing_urls = {str(row[0]) for row in existing_result.all() if row and row[0]}
+        existing_urls = {
+            self._resource_url_key(str(row[0]))
+            for row in existing_result.all()
+            if row and row[0]
+        }
 
         offline_enabled = (
             runtime_settings_service.get_subscription_offline_transfer_enabled()
@@ -2781,7 +2787,8 @@ class SubscriptionService:
             if not resource_url:
                 invalid_count += 1
                 continue
-            if resource_url in existing_urls:
+            resource_url_key = self._resource_url_key(resource_url)
+            if resource_url_key in existing_urls:
                 duplicate_count += 1
                 duplicate_urls.add(resource_url)
                 continue
@@ -2795,7 +2802,7 @@ class SubscriptionService:
                 **self._extract_download_record_relevance_fields(item, sub=sub),
             )
             db.add(record)
-            existing_urls.add(resource_url)
+            existing_urls.add(resource_url_key)
             created_records.append(record)
 
         if created_records:
@@ -2813,7 +2820,7 @@ class SubscriptionService:
         }
 
     async def _load_retryable_records(
-        self, db: AsyncSession, subscription_id: int
+        self, db: AsyncSession, sub: "SubscriptionSnapshot"
     ) -> list[DownloadRecord]:
         from app.models.models import MediaStatus
 
@@ -2821,7 +2828,7 @@ class SubscriptionService:
             failed_result = await db.execute(
                 select(DownloadRecord)
                 .where(
-                    DownloadRecord.subscription_id == subscription_id,
+                    DownloadRecord.subscription_id == sub.id,
                     DownloadRecord.status == MediaStatus.FAILED,
                 )
                 .order_by(DownloadRecord.created_at.desc())
@@ -2830,7 +2837,7 @@ class SubscriptionService:
             pending_result = await db.execute(
                 select(DownloadRecord)
                 .where(
-                    DownloadRecord.subscription_id == subscription_id,
+                    DownloadRecord.subscription_id == sub.id,
                     DownloadRecord.status.in_((MediaStatus.PENDING, MediaStatus.MATCHED)),
                 )
                 .order_by(DownloadRecord.created_at.desc())
@@ -2842,6 +2849,8 @@ class SubscriptionService:
 
         retryable: list[DownloadRecord] = []
         for row in failed_rows:
+            if self._has_conflicting_record_identity(row, sub):
+                continue
             is_offline = str(row.resource_type or "") in ("magnet", "ed2k")
             if not is_offline and not self._is_likely_115_share_identifier(
                 row.resource_url
@@ -2852,6 +2861,8 @@ class SubscriptionService:
             retryable.append(row)
 
         for row in pending_rows:
+            if self._has_conflicting_record_identity(row, sub):
+                continue
             is_offline = str(row.resource_type or "") in ("magnet", "ed2k")
             if not is_offline and not self._is_likely_115_share_identifier(
                 row.resource_url
@@ -2974,8 +2985,12 @@ class SubscriptionService:
         channel: str,
         hdhive_unlock_context: dict[str, Any] | None,
         source_order: list[str] | None,
+        attempted_urls: set[str] | None = None,
+        attempted_source_ids: set[str] | None = None,
     ) -> list[DownloadRecord]:
         tried = await self._load_subscription_tried_identifiers(db, sub.id)
+        tried["urls"].update(attempted_urls or set())
+        tried["source_ids"].update(attempted_source_ids or set())
         resources, _, _ = await self._fetch_resources(
             channel,
             sub,
@@ -2984,6 +2999,12 @@ class SubscriptionService:
             exclude_urls=tried["urls"],
             exclude_source_ids=tried["source_ids"],
         )
+        if not resources:
+            return []
+        resources = self._filter_resources_excluding_source_ids(
+            resources, tried["source_ids"]
+        )
+        resources = self._filter_resources_excluding_urls(resources, tried["urls"])
         if not resources:
             return []
         store_stats = await self._store_new_resources(db, sub.id, resources, sub=sub)
@@ -3022,18 +3043,33 @@ class SubscriptionService:
     ) -> list[dict[str, Any]]:
         if not exclude_urls:
             return list(resources)
+        exclude_keys = {cls._resource_url_key(url) for url in exclude_urls if url}
         filtered: list[dict[str, Any]] = []
         for item in resources:
             url = cls._resource_candidate_url(item)
-            if url and url in exclude_urls:
+            if url and cls._resource_url_key(url) in exclude_keys:
                 continue
             filtered.append(item)
         return filtered
 
     @staticmethod
+    def _resource_url_key(url: str) -> str:
+        """生成稳定的资源去重键，忽略 115 域名和提取码写法差异。"""
+        value = SubscriptionService._normalize_share_url(str(url or "")).strip()
+        if not value:
+            return ""
+        share_code = Pan115Service._extract_share_code(value)
+        if share_code:
+            return f"115:{str(share_code).casefold()}"
+        return value.rstrip("/").casefold()
+
+    @staticmethod
     def _merge_auto_save_stats(target: dict[str, Any], source: dict[str, Any]) -> None:
         target["saved"] = int(target.get("saved") or 0) + int(source.get("saved") or 0)
         target["failed"] = int(target.get("failed") or 0) + int(source.get("failed") or 0)
+        target["skipped"] = int(target.get("skipped") or 0) + int(
+            source.get("skipped") or 0
+        )
         target.setdefault("errors", [])
         target["errors"].extend(list(source.get("errors") or []))
         if source.get("subscription_completed"):
@@ -3079,6 +3115,7 @@ class SubscriptionService:
         merged: dict[str, Any] = {
             "saved": 0,
             "failed": 0,
+            "skipped": 0,
             "errors": [],
             "subscription_completed": False,
             "cleanup_step": "",
@@ -3089,6 +3126,16 @@ class SubscriptionService:
         }
         pending_records = list(records or [])
         pending_records = self._dedupe_records_by_url(pending_records)
+        attempted_urls = {
+            str(record.resource_url or "").strip()
+            for record in pending_records
+            if str(record.resource_url or "").strip()
+        }
+        attempted_source_ids = {
+            str(record.resource_source_id or "").strip()
+            for record in pending_records
+            if str(record.resource_source_id or "").strip()
+        }
         if not pending_records and not enable_link_refetch:
             return merged
 
@@ -3105,6 +3152,11 @@ class SubscriptionService:
                     channel=channel,
                     hdhive_unlock_context=hdhive_unlock_context,
                     source_order=source_order,
+                    attempted_urls=attempted_urls,
+                    attempted_source_ids=attempted_source_ids,
+                )
+                pending_records = self._exclude_attempted_records(
+                    pending_records, attempted_urls, attempted_source_ids
                 )
                 if not pending_records:
                     if round_idx > 0:
@@ -3139,6 +3191,16 @@ class SubscriptionService:
                     )
 
             last_attempted_count = len(pending_records)
+            attempted_urls.update(
+                str(record.resource_url or "").strip()
+                for record in pending_records
+                if str(record.resource_url or "").strip()
+            )
+            attempted_source_ids.update(
+                str(record.resource_source_id or "").strip()
+                for record in pending_records
+                if str(record.resource_source_id or "").strip()
+            )
             source_label = (
                 transfer_source if round_idx == 0 else f"{transfer_source}_fallback"
             )
@@ -3213,6 +3275,11 @@ class SubscriptionService:
                 channel=channel,
                 hdhive_unlock_context=hdhive_unlock_context,
                 source_order=source_order,
+                attempted_urls=attempted_urls,
+                attempted_source_ids=attempted_source_ids,
+            )
+            pending_records = self._exclude_attempted_records(
+                pending_records, attempted_urls, attempted_source_ids
             )
             if not pending_records:
                 await self._create_step_log(
@@ -3269,6 +3336,7 @@ class SubscriptionService:
 
         saved = 0
         failed = 0
+        skipped = 0
         errors: list[dict[str, Any]] = []
         records = self._dedupe_records_by_url(list(records or []))
         tv_missing_enabled = False
@@ -3361,7 +3429,7 @@ class SubscriptionService:
             ):
                 record.status = MediaStatus.FAILED
                 record.error_message = "资源与订阅不匹配，已跳过转存"
-                failed += 1
+                skipped += 1
                 await self._create_step_log(
                     db,
                     run_id=run_id,
@@ -3966,6 +4034,7 @@ class SubscriptionService:
         return {
             "saved": saved,
             "failed": failed,
+            "skipped": skipped,
             "errors": errors,
             "subscription_completed": subscription_completed,
             "cleanup_step": cleanup_step,
@@ -4203,13 +4272,37 @@ class SubscriptionService:
         record: DownloadRecord,
         sub: "SubscriptionSnapshot",
     ) -> None:
-        """为历史入库记录补全归属元数据，避免转存阶段重复误判。"""
-        if record.source_tmdb_id is None and sub.tmdb_id is not None:
-            record.source_tmdb_id = sub.tmdb_id
-        if not str(record.matched_media_title or "").strip() and sub.title:
-            record.matched_media_title = str(sub.title).strip()
-        if not record.relevance_verified and record.source_tmdb_id is not None:
+        """仅在已有可靠身份线索时补全历史记录，禁止把串单记录认领给当前订阅。"""
+        source_tmdb_id = record.source_tmdb_id
+        sub_tmdb_id = sub.tmdb_id
+        matched_title = str(record.matched_media_title or "").strip()
+        sub_title = str(sub.title or "").strip()
+
+        if source_tmdb_id is not None and sub_tmdb_id is not None:
+            if int(source_tmdb_id) != int(sub_tmdb_id):
+                return
+            if not matched_title and sub_title:
+                record.matched_media_title = sub_title
             record.relevance_verified = True
+            return
+
+        if matched_title and sub_title and matched_title.casefold() == sub_title.casefold():
+            if source_tmdb_id is None and sub_tmdb_id is not None:
+                record.source_tmdb_id = sub_tmdb_id
+            record.relevance_verified = True
+
+    @staticmethod
+    def _has_conflicting_record_identity(
+        record: DownloadRecord,
+        sub: "SubscriptionSnapshot",
+    ) -> bool:
+        """判断下载记录是否明确属于另一个订阅。"""
+        if record.source_tmdb_id is None or sub.tmdb_id is None:
+            return False
+        try:
+            return int(record.source_tmdb_id) != int(sub.tmdb_id)
+        except (TypeError, ValueError):
+            return False
 
     @staticmethod
     def _dedupe_records_by_url(
@@ -4220,13 +4313,40 @@ class SubscriptionService:
         for record in records:
             if not record:
                 continue
-            url = str(record.resource_url or "").strip()
+            url = SubscriptionService._resource_url_key(record.resource_url or "")
             if url:
                 if url in seen_urls:
                     continue
                 seen_urls.add(url)
             deduped.append(record)
         return deduped
+
+    @classmethod
+    def _exclude_attempted_records(
+        cls,
+        records: list[DownloadRecord],
+        attempted_urls: set[str],
+        attempted_source_ids: set[str],
+    ) -> list[DownloadRecord]:
+        """对来源返回值做最终防线过滤，避免同一链接在回退轮次中重复转存。"""
+        attempted_url_keys = {
+            cls._resource_url_key(url) for url in attempted_urls if str(url or "").strip()
+        }
+        attempted_source_keys = {
+            str(source_id or "").strip()
+            for source_id in attempted_source_ids
+            if str(source_id or "").strip()
+        }
+        filtered: list[DownloadRecord] = []
+        for record in cls._dedupe_records_by_url(list(records or [])):
+            url_key = cls._resource_url_key(record.resource_url or "")
+            source_key = str(record.resource_source_id or "").strip()
+            if url_key and url_key in attempted_url_keys:
+                continue
+            if source_key and source_key in attempted_source_keys:
+                continue
+            filtered.append(record)
+        return filtered
 
     @staticmethod
     def _extract_download_record_relevance_fields(
@@ -4416,6 +4536,13 @@ class SubscriptionService:
         overview, source_tmdb_id, relevance_verified = self._extract_relevance_context(
             item
         )
+
+        if (
+            source_tmdb_id is not None
+            and sub.tmdb_id is not None
+            and int(source_tmdb_id) != int(sub.tmdb_id)
+        ):
+            return False
 
         if relevance_verified:
             if self._is_obvious_collection_resource(label):

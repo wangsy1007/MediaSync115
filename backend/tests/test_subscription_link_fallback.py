@@ -1,7 +1,11 @@
 """
 订阅自动转存链接回退逻辑测试
 """
-from app.models.models import MediaType
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.models.models import DownloadRecord, MediaType
 from app.services.subscription_service import (
     SubscriptionService,
     SubscriptionSnapshot,
@@ -123,8 +127,6 @@ class TestSubscriptionLinkFallback:
         assert fields["relevance_verified"] is True
 
     def test_dedupe_records_by_url(self) -> None:
-        from app.models.models import DownloadRecord
-
         records = [
             DownloadRecord(resource_url="https://115.com/s/a"),
             DownloadRecord(resource_url="https://115.com/s/a"),
@@ -132,6 +134,58 @@ class TestSubscriptionLinkFallback:
         ]
         deduped = SubscriptionService._dedupe_records_by_url(records)
         assert len(deduped) == 2
+
+    def test_dedupe_records_by_share_code(self) -> None:
+        records = [
+            DownloadRecord(resource_url="https://115.com/s/ABC123?password=aaaa"),
+            DownloadRecord(resource_url="https://115cdn.com/s/abc123?pwd=bbbb"),
+        ]
+        deduped = SubscriptionService._dedupe_records_by_url(records)
+        assert len(deduped) == 1
+
+    @pytest.mark.asyncio
+    async def test_fallback_does_not_retry_same_link(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = SubscriptionService()
+        initial = DownloadRecord(
+            resource_url="https://115.com/s/ABC123?password=aaaa",
+            resource_name="资源 A",
+            resource_type="pan115",
+        )
+        duplicate = DownloadRecord(
+            resource_url="https://115cdn.com/s/abc123?pwd=bbbb",
+            resource_name="资源 A（重复）",
+            resource_type="pan115",
+        )
+        auto_save = AsyncMock(
+            return_value={
+                "saved": 0,
+                "failed": 1,
+                "skipped": 0,
+                "errors": [{"error": "链接已过期"}],
+                "subscription_completed": False,
+                "remaining_missing_count": None,
+            }
+        )
+        fetch_next = AsyncMock(return_value=[duplicate])
+        monkeypatch.setattr(service, "_auto_save_resources", auto_save)
+        monkeypatch.setattr(service, "_fetch_and_store_next_records", fetch_next)
+        monkeypatch.setattr(service, "_create_step_log", AsyncMock())
+
+        result = await service._auto_save_records_with_link_fallback(
+            object(),
+            "run-1",
+            "all",
+            _movie_snapshot(),
+            [initial],
+            transfer_source="new",
+        )
+
+        assert auto_save.await_count == 1
+        assert fetch_next.await_count == 1
+        assert result["failed"] == 1
+        assert result["link_fallback_rounds"] == 0
 
     def test_expired_share_link_is_not_retryable(self) -> None:
         assert SubscriptionService._is_expired_share_link_error(

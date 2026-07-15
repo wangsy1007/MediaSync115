@@ -62,42 +62,47 @@ def _movie_snapshot(
 class TestSubscriptionResourceRelevance:
   """NAS 日志中已出现的串台样例应被拦截"""
 
-  def test_rejects_wrong_tg_tv_title(self) -> None:
+  @pytest.mark.asyncio
+  async def test_rejects_wrong_tg_tv_title(self) -> None:
       sub = _tv_snapshot(title="群体")
       context = {"title": "群体", "original_title": "", "year": "2026"}
       item = {
           "title": "📺 电视剧：女帝 (2026) - S01E01-E24(完结)",
           "resource_name": "📺 电视剧：女帝 (2026) - S01E01-E24(完结)",
       }
-      assert not subscription_service._is_resource_relevant_for_subscription(
+      assert not await subscription_service._is_resource_relevant_for_subscription(
           sub, item, context
       )
 
-  def test_rejects_wrong_tg_movie_title(self) -> None:
+  @pytest.mark.asyncio
+  async def test_rejects_wrong_tg_movie_title(self) -> None:
       sub = _movie_snapshot(title="春")
       context = {"title": "春", "original_title": "", "year": "2025"}
       item = {"title": "🎬 电影：青爱 (2025)"}
-      assert not subscription_service._is_resource_relevant_for_subscription(
+      assert not await subscription_service._is_resource_relevant_for_subscription(
           sub, item, context
       )
 
-  def test_accepts_matching_tg_title(self) -> None:
+  @pytest.mark.asyncio
+  async def test_accepts_matching_tg_title(self) -> None:
       sub = _tv_snapshot(title="希望")
       context = {"title": "希望", "original_title": "", "year": "2026"}
       item = {"title": "📺 电视剧：希望 (2026) - S01E09"}
-      assert subscription_service._is_resource_relevant_for_subscription(
+      assert await subscription_service._is_resource_relevant_for_subscription(
           sub, item, context
       )
 
-  def test_accepts_episode_only_hdhive_name(self) -> None:
+  @pytest.mark.asyncio
+  async def test_accepts_episode_only_hdhive_name(self) -> None:
       sub = _tv_snapshot(title="将夜")
       context = {"title": "将夜", "original_title": "Ever Night", "year": "2018"}
       item = {"title": "S01E01-E11 4K WEB-DL HDR HiveWeb"}
-      assert subscription_service._is_resource_relevant_for_subscription(
+      assert await subscription_service._is_resource_relevant_for_subscription(
           sub, item, context
       )
 
-  def test_tmdb_tag_must_match_subscription(self) -> None:
+  @pytest.mark.asyncio
+  async def test_tmdb_tag_must_match_subscription(self) -> None:
       sub = _tv_snapshot(title="莫离", tmdb_id=292696)
       context = {"title": "莫离", "original_title": "", "year": "2026"}
       wrong = {
@@ -106,14 +111,15 @@ class TestSubscriptionResourceRelevance:
       right = {
           "title": "📺 电视剧：莫离 (2026) [tmdbid-292696] S01E01-E24",
       }
-      assert not subscription_service._is_resource_relevant_for_subscription(
+      assert not await subscription_service._is_resource_relevant_for_subscription(
           sub, wrong, context
       )
-      assert subscription_service._is_resource_relevant_for_subscription(
+      assert await subscription_service._is_resource_relevant_for_subscription(
           sub, right, context
       )
 
-  def test_filter_resources_for_subscription(self) -> None:
+  @pytest.mark.asyncio
+  async def test_filter_resources_for_subscription(self) -> None:
       sub = _tv_snapshot(title="故土")
       context = {"title": "故土", "original_title": "", "year": "2026"}
       resources = [
@@ -121,13 +127,14 @@ class TestSubscriptionResourceRelevance:
           {"title": "📺 电视剧：故土 (2026) - S01E15"},
           {"title": "S01E15 4K WEB-DL"},
       ]
-      kept, excluded = SubscriptionService._filter_resources_for_subscription(
+      kept, excluded = await subscription_service._filter_resources_for_subscription(
           sub, resources, context
       )
       assert excluded == 1
       assert len(kept) == 2
 
-  def test_accepts_hdhive_generic_label_with_matched_media_title(self) -> None:
+  @pytest.mark.asyncio
+  async def test_accepts_hdhive_generic_label_with_matched_media_title(self) -> None:
       sub = _movie_snapshot(title="十二生肖", tmdb_id=98567, year="2012")
       context = {"title": "十二生肖", "original_title": "十二生肖", "year": "2012"}
       item = {
@@ -135,11 +142,12 @@ class TestSubscriptionResourceRelevance:
           "matched_media_title": "十二生肖",
           "hdhive_source_tmdb_id": 98567,
       }
-      assert subscription_service._is_resource_relevant_for_subscription(
+      assert await subscription_service._is_resource_relevant_for_subscription(
           sub, item, context
       )
 
-  def test_rejects_hdhive_collection_pack_for_single_movie(self) -> None:
+  @pytest.mark.asyncio
+  async def test_rejects_hdhive_collection_pack_for_single_movie(self) -> None:
       sub = _movie_snapshot(title="十二生肖", tmdb_id=98567, year="2012")
       context = {"title": "十二生肖", "original_title": "十二生肖", "year": "2012"}
       item = {
@@ -147,7 +155,7 @@ class TestSubscriptionResourceRelevance:
           "matched_media_title": "十二生肖",
           "hdhive_source_tmdb_id": 98567,
       }
-      assert not subscription_service._is_resource_relevant_for_subscription(
+      assert not await subscription_service._is_resource_relevant_for_subscription(
           sub, item, context
       )
 
@@ -213,14 +221,9 @@ class TestSubscriptionResourceRelevance:
       )
 
   @pytest.mark.asyncio
-  async def test_accepts_legacy_download_record_after_backfill(self) -> None:
-      """历史记录缺少归属元数据时，转存前应自动补全订阅归属。"""
+  async def test_legacy_download_record_is_not_blindly_claimed_on_backfill(self) -> None:
+      """无归属信息的历史记录不能仅凭 subscription_id 认领为当前订阅。"""
       sub = _movie_snapshot(title="肖申克的救赎", tmdb_id=278, year="1994")
-      context = {
-          "title": "肖申克的救赎",
-          "original_title": "The Shawshank Redemption",
-          "year": "1994",
-      }
       record = DownloadRecord(
           subscription_id=6,
           resource_name="4K蓝光原盘，内封中文字幕，HDR+杜比视界！",
@@ -228,10 +231,30 @@ class TestSubscriptionResourceRelevance:
           resource_type="pan115",
       )
       SubscriptionService._backfill_download_record_relevance(record, sub)
-      assert record.source_tmdb_id == 278
-      assert record.matched_media_title == "肖申克的救赎"
-      assert record.relevance_verified is True
-      assert await subscription_service._is_resource_relevant_for_subscription(
+      assert record.source_tmdb_id is None
+      assert record.matched_media_title is None
+      assert not record.relevance_verified
+
+  @pytest.mark.asyncio
+  async def test_rejects_verified_record_from_reused_subscription_id(self) -> None:
+      sub = _movie_snapshot(title="星际穿越", tmdb_id=157336, year="2014")
+      context = {
+          "title": "星际穿越",
+          "original_title": "Interstellar",
+          "year": "2014",
+      }
+      record = DownloadRecord(
+          subscription_id=sub.id,
+          resource_name="📺 电视剧：雨霖铃 (2026) - S01E30",
+          resource_url="https://115.com/s/old-record",
+          resource_type="pan115",
+          source_tmdb_id=999999,
+          matched_media_title="雨霖铃",
+          relevance_verified=True,
+      )
+      SubscriptionService._backfill_download_record_relevance(record, sub)
+      assert record.source_tmdb_id == 999999
+      assert not await subscription_service._is_resource_relevant_for_subscription(
           sub, record, context
       )
 
