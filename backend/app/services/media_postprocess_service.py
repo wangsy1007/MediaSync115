@@ -155,4 +155,79 @@ class MediaPostprocessService:
             return {"triggered": False, "reason": str(exc)[:300]}
 
 
+    async def trigger_media_library_sync_after_subscription_transfer(
+        self,
+        *,
+        transfer_count: int = 0,
+        respect_save_queue: bool = True,
+    ) -> dict[str, Any]:
+        """订阅转存完成后触发 Emby/飞牛媒体库索引同步。"""
+        if transfer_count <= 0:
+            return {"triggered": False, "reason": "no_transfers"}
+        if not runtime_settings_service.get_subscription_auto_sync_after_transfer():
+            return {
+                "triggered": False,
+                "reason": "subscription_auto_sync_after_transfer_disabled",
+            }
+
+        if respect_save_queue:
+            from app.services.explore_action_queue_service import (
+                explore_action_queue_service,
+            )
+
+            deferred = await explore_action_queue_service.defer_until_save_queue_idle(
+                "media_sync:subscription_transfer",
+                lambda: self.trigger_media_library_sync_after_subscription_transfer(
+                    transfer_count=transfer_count,
+                    respect_save_queue=False,
+                ),
+            )
+            if deferred:
+                return {
+                    "triggered": False,
+                    "deferred": True,
+                    "reason": "save_queue_busy",
+                }
+
+        results: dict[str, Any] = {}
+        started_any = False
+        deferred_any = False
+
+        if runtime_settings_service.get_emby_sync_enabled():
+            from app.services.emby_sync_index_service import emby_sync_index_service
+
+            emby_result = await emby_sync_index_service.start_background_sync(
+                trigger="subscription_transfer",
+                respect_save_queue=False,
+            )
+            results["emby"] = emby_result
+            started_any = started_any or bool(emby_result.get("started"))
+            deferred_any = deferred_any or bool(emby_result.get("deferred"))
+
+        if runtime_settings_service.get_feiniu_sync_enabled():
+            from app.services.feiniu_sync_index_service import feiniu_sync_index_service
+
+            feiniu_result = await feiniu_sync_index_service.start_background_sync(
+                trigger="subscription_transfer",
+                respect_save_queue=False,
+            )
+            results["feiniu"] = feiniu_result
+            started_any = started_any or bool(feiniu_result.get("started"))
+            deferred_any = deferred_any or bool(feiniu_result.get("deferred"))
+
+        if not results:
+            return {
+                "triggered": False,
+                "reason": "no_sync_target_enabled",
+                "results": results,
+            }
+
+        return {
+            "triggered": started_any or deferred_any,
+            "started": started_any,
+            "deferred": deferred_any,
+            "results": results,
+        }
+
+
 media_postprocess_service = MediaPostprocessService()

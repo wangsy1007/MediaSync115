@@ -1269,6 +1269,12 @@
                 启用后，订阅转存除 115 分享链接外，还会使用磁力资源进行离线下载（保存到离线下载目录）
               </el-text>
             </el-form-item>
+            <el-form-item label="转存后同步媒体库">
+              <el-switch v-model="schedulerForm.autoSyncAfterTransfer" />
+              <el-text size="small" type="info" style="margin-left: 8px">
+                订阅任务转存成功后，自动触发已启用的 Emby / 飞牛媒体库索引同步（转存队列空闲后执行）
+              </el-text>
+            </el-form-item>
 
             <el-divider content-position="left">订阅定时任务</el-divider>
             <el-form-item label="启用任务">
@@ -2028,6 +2034,7 @@ const tmdbForm = ref({
 
 const schedulerForm = ref({
   offlineTransferEnabled: false,
+  autoSyncAfterTransfer: true,
   excludeIso: true,
   enabled: false,
   intervalHours: 24,
@@ -4610,6 +4617,7 @@ const fetchRuntimeSettings = async () => {
     }
 
     schedulerForm.value.offlineTransferEnabled = !!data.subscription_offline_transfer_enabled
+    schedulerForm.value.autoSyncAfterTransfer = data.subscription_auto_sync_after_transfer !== false
     schedulerForm.value.excludeIso = data.subscription_exclude_iso !== false
     schedulerForm.value.enabled = !!data.subscription_enabled
     schedulerForm.value.intervalHours = Number(data.subscription_interval_hours || 24)
@@ -4806,6 +4814,7 @@ const handleSaveScheduler = async () => {
     const normalizedEnabled = buildResourceEnabledPayload()
     await settingsApi.updateRuntime({
       subscription_offline_transfer_enabled: schedulerForm.value.offlineTransferEnabled,
+      subscription_auto_sync_after_transfer: schedulerForm.value.autoSyncAfterTransfer !== false,
       subscription_exclude_iso: schedulerForm.value.excludeIso !== false,
       subscription_enabled: schedulerForm.value.enabled,
       subscription_interval_hours: Number(schedulerForm.value.intervalHours || 24),

@@ -875,6 +875,64 @@ class SubscriptionService:
                 await db.commit()
             except Exception:
                 await db.rollback()
+
+        auto_saved_count = int(result.get("auto_saved_count") or 0)
+        if auto_saved_count > 0:
+            sync_result = (
+                await media_postprocess_service.trigger_media_library_sync_after_subscription_transfer(
+                    transfer_count=auto_saved_count,
+                )
+            )
+            result["media_sync"] = sync_result
+            if sync_result.get("triggered") or sync_result.get("deferred"):
+                sync_messages: list[str] = []
+                sync_results = sync_result.get("results")
+                if isinstance(sync_results, dict):
+                    for target, target_result in sync_results.items():
+                        if not isinstance(target_result, dict):
+                            continue
+                        message = str(target_result.get("message") or "").strip()
+                        if message:
+                            sync_messages.append(f"{target}: {message}")
+                sync_message = (
+                    "；".join(sync_messages)
+                    if sync_messages
+                    else (
+                        "转存队列空闲后将自动同步媒体库"
+                        if sync_result.get("deferred")
+                        else "已触发媒体库同步"
+                    )
+                )
+                await self._create_step_log(
+                    db,
+                    run_id=run_id,
+                    channel=normalized_channel,
+                    step="subscription_media_sync",
+                    status="success",
+                    message=sync_message[:500],
+                    payload=sync_result,
+                )
+                await operation_log_service.log_background_event(
+                    source_type="background_task",
+                    module="subscriptions",
+                    action="subscription.media_sync.trigger",
+                    status="success",
+                    message=(
+                        f"订阅转存完成后触发媒体库同步（转存成功 {auto_saved_count} 条）："
+                        f"{sync_message[:200]}"
+                    ),
+                    trace_id=run_id,
+                    extra={
+                        "channel": normalized_channel,
+                        "auto_saved_count": auto_saved_count,
+                        "media_sync": sync_result,
+                    },
+                )
+                try:
+                    await db.commit()
+                except Exception:
+                    await db.rollback()
+
         return result
 
     async def _create_step_log(

@@ -159,3 +159,63 @@ class TestMediaPostprocessService:
         )
 
         assert result == {"triggered": False, "reason": "no_processed_items"}
+
+    @pytest.mark.asyncio
+    async def test_trigger_media_sync_after_subscription_transfer(
+        self, monkeypatch
+    ) -> None:
+        """订阅转存完成后应触发已启用的媒体库同步"""
+        monkeypatch.setattr(
+            runtime_settings_service,
+            "get_subscription_auto_sync_after_transfer",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            runtime_settings_service, "get_emby_sync_enabled", lambda: True
+        )
+        monkeypatch.setattr(
+            runtime_settings_service, "get_feiniu_sync_enabled", lambda: False
+        )
+
+        called: dict[str, str] = {}
+
+        async def fake_start_background_sync(
+            trigger: str = "manual", **kwargs: object
+        ) -> dict:
+            called["trigger"] = trigger
+            return {"success": True, "started": True, "message": "Emby 同步任务已启动"}
+
+        monkeypatch.setattr(
+            "app.services.emby_sync_index_service.emby_sync_index_service.start_background_sync",
+            fake_start_background_sync,
+        )
+
+        result = (
+            await media_postprocess_service.trigger_media_library_sync_after_subscription_transfer(
+                transfer_count=2,
+            )
+        )
+
+        assert result["triggered"] is True
+        assert result["started"] is True
+        assert called["trigger"] == "subscription_transfer"
+
+    @pytest.mark.asyncio
+    async def test_skip_media_sync_when_disabled(self, monkeypatch) -> None:
+        """关闭订阅转存后同步时应跳过"""
+        monkeypatch.setattr(
+            runtime_settings_service,
+            "get_subscription_auto_sync_after_transfer",
+            lambda: False,
+        )
+
+        result = (
+            await media_postprocess_service.trigger_media_library_sync_after_subscription_transfer(
+                transfer_count=1,
+            )
+        )
+
+        assert result == {
+            "triggered": False,
+            "reason": "subscription_auto_sync_after_transfer_disabled",
+        }
