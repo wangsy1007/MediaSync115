@@ -735,8 +735,8 @@ import { extractTags } from '@/utils/resourceTags'
 import { navigateBackFromDetail } from '@/utils/navigation'
 import { copyText } from '@/utils/clipboard'
 import { parseReceiveCodeFromShareLink, resolvePanShareLink } from '@/utils/panShare'
+import { executePan115SaveToFolder } from '@/utils/pan115SaveFlow'
 import {
-  ensureHdhiveShareLink,
   isHdhiveResourceLocked,
   isHdhiveResourceSuspectedInvalid,
   isHdhiveUnlocking,
@@ -1466,12 +1466,12 @@ const handleSaveToPan115 = async (item) => {
     }
 
     const receiveCode = resolvePanReceiveCode(item, shareLink)
-    const { data } = await pan115Api.saveShareToFolder(
-      shareLink,
+    const { data } = await executePan115SaveToFolder({
+      shareUrl: shareLink,
       folderName,
-      defaultFolderId,
+      parentId: defaultFolderId,
       receiveCode,
-    )
+    })
 
     const saveSuccess = data?.success === true
       || data?.state === true
@@ -1660,12 +1660,12 @@ const submitManualPanShare = async () => {
     }
     const receiveCode = String(manualPanForm.value.receiveCode || '').trim() || parseReceiveCodeFromShareLink(shareLink)
     const folderName = String(manualPanForm.value.folderName || '').trim() || buildDefaultTvFolderName()
-    const { data } = await pan115Api.saveShareToFolder(
-      shareLink,
+    const { data } = await executePan115SaveToFolder({
+      shareUrl: shareLink,
       folderName,
-      defaultFolderId,
-      receiveCode
-    )
+      parentId: defaultFolderId,
+      receiveCode,
+    })
     const saveSuccess = data?.success === true
       || data?.state === true
       || data?.result?.success === true

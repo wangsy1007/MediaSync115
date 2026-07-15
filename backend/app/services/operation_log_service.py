@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.core.database import async_session_maker
 from app.models.models import OperationLog
@@ -289,6 +289,43 @@ class OperationLogService:
             message=message,
             extra=extra,
         )
+
+    async def get_latest_pan115_transfer_result(
+        self,
+        folder_name: str,
+        *,
+        since: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        """查询指定文件夹最近一次 115 转存操作日志"""
+
+        cleaned = str(folder_name or "").strip()
+        if not cleaned:
+            return None
+
+        where_clauses = [
+            OperationLog.module == "pan115",
+            OperationLog.action == "transfer.save_to_folder",
+            OperationLog.message.ilike(f"%{cleaned}%"),
+        ]
+        if since is not None:
+            where_clauses.append(OperationLog.created_at >= since)
+
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(OperationLog)
+                .where(*where_clauses)
+                .order_by(OperationLog.created_at.desc(), OperationLog.id.desc())
+                .limit(1)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                return None
+            return {
+                "status": str(row.status or ""),
+                "message": str(row.message or ""),
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "extra": row.extra,
+            }
 
     async def prune(self, days: int = 30) -> int:
         ttl_days = max(1, int(days or 30))

@@ -2,7 +2,7 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { BEIJING_TIMEZONE } from '@/utils/timezone'
 
-const SAVE_OPERATION_TIMEOUT = 180000
+const SAVE_OPERATION_TIMEOUT = 600000
 /** 运行时设置保存（会触发调度器同步），需长于默认 30s */
 export const RUNTIME_SAVE_TIMEOUT_MS = 120000
 const TG_BOT_RESTART_TIMEOUT_MS = 45000
@@ -549,6 +549,13 @@ export const pan115Api = {
       { share_url: shareUrl, folder_name: folderName, parent_id: parentId, receive_code: receiveCode, tmdb_id: tmdbId },
       { timeout: SAVE_OPERATION_TIMEOUT, ...requestConfig },
     ),
+
+  getTransferStatus: (folderName = '', config = {}) =>
+    api.get('/pan115/transfer/status', {
+      params: folderName ? { folder_name: folderName } : {},
+      timeout: 15000,
+      ...config,
+    }),
 
   extractShareFiles: (shareUrl, receiveCode = '') => 
     api.post('/pan115/share/extract-files', { share_url: shareUrl, receive_code: receiveCode }),

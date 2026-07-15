@@ -548,6 +548,26 @@ async def cancel_qr_login(request: Pan115QrCancelRequest):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.get("/transfer/status")
+async def get_pan115_transfer_status(
+    folder_name: str | None = Query(None, description="可选，查询该名称最近一次转存结果"),
+):
+    """返回 115 转存互斥锁状态及可选的最近转存结果"""
+
+    current = await transfer_guard_service.get_current()
+    recent_result = None
+    cleaned_folder = str(folder_name or "").strip()
+    if cleaned_folder:
+        recent_result = await operation_log_service.get_latest_pan115_transfer_result(
+            cleaned_folder
+        )
+    return {
+        "in_progress": current is not None,
+        "current": current,
+        "recent_result": recent_result,
+    }
+
+
 @router.get("/health/risk")
 async def get_pan115_risk_health():
     """检测 115 当前状态，区分凭证问题、临时受限和正常可用。"""

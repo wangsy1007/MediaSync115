@@ -1,6 +1,7 @@
 import { ElLoading, ElMessage } from 'element-plus'
 
 import { pan115Api, searchApi } from '@/api'
+import { executePan115SaveToFolder } from '@/utils/pan115SaveFlow'
 import { resolvePanShareLink, buildShareLinkFromUnlockPayload, sanitizeReceiveCode } from '@/utils/panShare'
 import { openPan115ProgressDialog } from '@/utils/pan115ProgressDialog'
 import { showHdhiveUnlockDialog } from '@/utils/showHdhiveUnlockDialog'
@@ -152,7 +153,14 @@ export const parsePan115SaveResponse = (data) => {
 }
 
 export const normalizePan115TransferError = (error) => {
+  const status = Number(error?.response?.status || 0)
   const detail = String(error?.response?.data?.detail || error?.message || '').trim()
+  if (status === 504 || error?.code === 'ECONNABORTED') {
+    return '转存耗时较长，连接已断开，后台可能仍在处理，请稍候'
+  }
+  if (status === 409 && detail.includes('已有转存任务正在执行')) {
+    return '已有转存任务进行中，请等待完成后再试'
+  }
   if (detail.includes('离线任务列表请求过于频繁')) {
     return '115 接口触发风控，请稍后重试'
   }
@@ -236,14 +244,13 @@ export const runHdhivePan115SaveFlow = async ({
 
     progress.setPhase('transfer', '正在转存到 115 网盘，请稍候...')
     const receiveCode = resolveReceiveCode(row, shareLink)
-    const response = await pan115Api.saveShareToFolder(
-      shareLink,
+    const response = await executePan115SaveToFolder({
+      shareUrl: shareLink,
       folderName,
-      folderId,
+      parentId: folderId,
       receiveCode,
-      null,
-      { silentError: true },
-    )
+      requestConfig: { silentError: true },
+    })
     const parsed = parsePan115SaveResponse(response?.data)
     const message = buildTransferStatusMessage({
       result: parsed,

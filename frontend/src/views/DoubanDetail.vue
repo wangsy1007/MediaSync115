@@ -647,8 +647,8 @@ import { extractTags } from '@/utils/resourceTags'
 import { navigateBackFromDetail } from '@/utils/navigation'
 import { copyText } from '@/utils/clipboard'
 import { parseReceiveCodeFromShareLink, resolvePanShareLink } from '@/utils/panShare'
+import { executePan115SaveToFolder } from '@/utils/pan115SaveFlow'
 import {
-  ensureHdhiveShareLink,
   isHdhiveResourceLocked,
   isHdhiveResourceSuspectedInvalid,
   isHdhiveUnlocking,
@@ -1301,7 +1301,12 @@ const submitManualPanShare = async () => {
     const folderId = await getDefaultTransferFolderId()
     const folderName = String(manualPanForm.value.folderName || '').trim() || buildDefaultDetailFolderName()
     const receiveCode = String(manualPanForm.value.receiveCode || '').trim() || parseReceiveCodeFromShareLink(shareLink)
-    const { data } = await pan115Api.saveShareToFolder(shareLink, folderName, folderId, receiveCode)
+    const { data } = await executePan115SaveToFolder({
+      shareUrl: shareLink,
+      folderName,
+      parentId: folderId,
+      receiveCode,
+    })
     const success = data?.success === true || data?.state === true || data?.result?.success === true || data?.result?.state === true
     if (!success) throw new Error(data?.message || data?.error || data?.result?.error || '转存失败')
     ElMessage.success(data?.message || '转存成功')
@@ -1368,12 +1373,12 @@ const savePan115Resource = async (row) => {
 
     const folderId = await getDefaultTransferFolderId()
     const receiveCode = resolvePanReceiveCode(row, shareLink)
-    const { data } = await pan115Api.saveShareToFolder(
-      shareLink,
+    const { data } = await executePan115SaveToFolder({
+      shareUrl: shareLink,
       folderName,
-      folderId,
+      parentId: folderId,
       receiveCode,
-    )
+    })
     const success = data?.success === true
       || data?.state === true
       || data?.result?.success === true

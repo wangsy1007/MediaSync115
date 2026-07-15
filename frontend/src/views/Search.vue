@@ -241,6 +241,7 @@ import {
 } from '@/utils/searchRouteSync'
 import { ElMessage } from 'element-plus'
 import { searchApi, subscriptionApi, pan115Api, settingsApi, personFollowApi } from '@/api'
+import { executePan115SaveToFolder } from '@/utils/pan115SaveFlow'
 import ExploreSectionRow from '@/components/explore/ExploreSectionRow.vue'
 import TmdbSetupPrompt from '@/components/explore/TmdbSetupPrompt.vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
@@ -1814,12 +1815,12 @@ const handleSave = async (item) => {
       }
       const resourceName = item.name || item.title || lastSearchKeyword.value || 'Pansou Resource'
       const receiveCode = parseReceiveCodeFromShareLink(item.pan115_share_link)
-      const { data } = await pan115Api.saveShareToFolder(
-        item.pan115_share_link,
-        resourceName,
-        folderId,
-        receiveCode
-      )
+      const { data } = await executePan115SaveToFolder({
+        shareUrl: item.pan115_share_link,
+        folderName: resourceName,
+        parentId: folderId,
+        receiveCode,
+      })
       const saveSuccess = data?.success === true
         || data?.state === true
         || data?.result?.success === true
