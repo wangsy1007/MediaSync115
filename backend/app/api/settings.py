@@ -186,6 +186,8 @@ _TG_INDEX_SETTING_KEYS = frozenset(
 )
 _HDHIVE_CHECKIN_SETTING_KEYS = frozenset(
     {
+        "hdhive_cookie",
+        "hdhive_base_url",
         "hdhive_auto_checkin_enabled",
         "hdhive_auto_checkin_mode",
         "hdhive_auto_checkin_method",

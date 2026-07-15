@@ -1,6 +1,8 @@
 import asyncio
 from time import monotonic
 
+import httpx
+
 from app.services.hdhive_service import HDHiveService
 
 
@@ -102,6 +104,106 @@ class TestHDHiveService:
         assert "token=abc" in header
         assert "hdh_sa_token=fresh-token" in header
         assert "stale-token" not in header
+
+    def test_response_cookie_renewal_updates_service_and_persistence_callback(self) -> None:
+        service = HDHiveService(cookie="session=old-session; theme=dark")
+        persisted: list[str] = []
+        service.set_cookie_update_callback(persisted.append)
+
+        async def run_request() -> str:
+            async def handler(request: httpx.Request) -> httpx.Response:
+                return httpx.Response(
+                    200,
+                    text="ok",
+                    headers={"set-cookie": "session=new-session; Path=/; HttpOnly"},
+                    request=request,
+                )
+
+            async with httpx.AsyncClient(
+                transport=httpx.MockTransport(handler),
+                follow_redirects=True,
+            ) as client:
+                return await service._web._fetch_text_using_client(client, "/user/settings")
+
+        assert asyncio.run(run_request()) == "ok"
+        assert "session=new-session" in service.cookie
+        assert "theme=dark" in service.cookie
+        assert persisted == [service.cookie]
+
+    def test_action_token_renewal_does_not_write_runtime_cookie(self) -> None:
+        service = HDHiveService(cookie="session=active; hdh_sa_token=stale-token")
+        persisted: list[str] = []
+        service.set_cookie_update_callback(persisted.append)
+
+        response = httpx.Response(
+            200,
+            headers={"set-cookie": "hdh_sa_token=fresh-token; Path=/; Max-Age=300"},
+            request=httpx.Request("HEAD", "https://hdhive.com/login"),
+        )
+        service._web._apply_response_cookies(response)
+
+        assert "hdh_sa_token=fresh-token" in service.cookie
+        assert "stale-token" not in service.cookie
+        assert persisted == []
+
+    def test_expired_response_cookie_is_removed_and_persisted(self) -> None:
+        service = HDHiveService(cookie="session=active; obsolete=old")
+        persisted: list[str] = []
+        service.set_cookie_update_callback(persisted.append)
+
+        response = httpx.Response(
+            200,
+            headers={"set-cookie": "obsolete=; Path=/; Max-Age=0"},
+            request=httpx.Request("GET", "https://hdhive.com/"),
+        )
+        service._web._apply_response_cookies(response)
+
+        assert service.cookie == "session=active"
+        assert persisted == ["session=active"]
+
+    def test_auth_failure_retries_once_with_renewed_cookie(self) -> None:
+        service = HDHiveService(cookie="session=old-session")
+        request_cookies: list[str] = []
+
+        async def run_request() -> str:
+            async def handler(request: httpx.Request) -> httpx.Response:
+                request_cookies.append(request.headers.get("cookie", ""))
+                if len(request_cookies) == 1:
+                    return httpx.Response(
+                        401,
+                        text="expired",
+                        headers={"set-cookie": "session=new-session; Path=/; HttpOnly"},
+                        request=request,
+                    )
+                return httpx.Response(200, text="renewed", request=request)
+
+            async with httpx.AsyncClient(
+                transport=httpx.MockTransport(handler),
+                follow_redirects=True,
+            ) as client:
+                return await service._web._fetch_text_using_client(client, "/user/settings")
+
+        assert asyncio.run(run_request()) == "renewed"
+        assert request_cookies == ["session=old-session", "session=new-session"]
+
+    def test_renew_cookie_reports_durable_cookie_change(self) -> None:
+        service = HDHiveService(cookie="session=old-session")
+
+        async def fake_get_user_info() -> dict:
+            response = httpx.Response(
+                200,
+                headers={"set-cookie": "session=new-session; Path=/; HttpOnly"},
+                request=httpx.Request("GET", "https://hdhive.com/user/settings"),
+            )
+            service._web._apply_response_cookies(response)
+            return {"username": "alice"}
+
+        service._web.get_user_info = fake_get_user_info  # type: ignore[method-assign]
+
+        result = asyncio.run(service.renew_cookie())
+
+        assert result == {"success": True, "renewed": True, "username": "alice"}
+        assert "session=new-session" in service.cookie
 
     def test_is_action_token_error(self) -> None:
         service = HDHiveService()

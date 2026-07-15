@@ -30,6 +30,7 @@ class JobRegistry:
             "system.offline_monitor": self._offline_monitor,
             "system.generate_strm_incremental": self._generate_strm_incremental,
             "system.generate_strm_full": self._generate_strm_full,
+            "hdhive.cookie_renew": self._hdhive_cookie_renew,
             "hdhive.checkin": self._hdhive_checkin,
             "subscription.check": self._check_subscription,
             "chart_subscription.sync": self._chart_subscription_sync,
@@ -228,6 +229,29 @@ class JobRegistry:
             message=f"HDHive 签到成功（{method_label}）：{result.get('message') or ''}{points_msg}",
             extra={"method": method, "gamble": gamble, "result": result},
         )
+        return result
+
+    async def _hdhive_cookie_renew(self, **kwargs) -> dict[str, Any]:
+        try:
+            result = await hdhive_service.renew_cookie()
+        except Exception as exc:
+            await operation_log_service.log_background_event(
+                source_type="scheduler",
+                module="hdhive",
+                action="hdhive.cookie_renew.failed",
+                status="failed",
+                message=f"HDHive Cookie 自动续期失败：{exc}",
+            )
+            raise
+
+        if bool(result.get("renewed")):
+            await operation_log_service.log_background_event(
+                source_type="scheduler",
+                module="hdhive",
+                action="hdhive.cookie_renew.success",
+                status="success",
+                message="HDHive Cookie 已自动续期并持久化",
+            )
         return result
 
     async def _check_subscription_channel(self, channel: str) -> dict[str, Any]:

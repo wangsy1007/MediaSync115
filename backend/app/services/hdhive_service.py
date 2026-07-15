@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import Callable
 from typing import Any
 
 from app.core.config import settings
@@ -43,7 +45,9 @@ class HDHiveService:
         self._base_url = str(base_url or settings.HDHIVE_BASE_URL or "https://hdhive.com/").strip().rstrip("/")
         self._cookie = str(cookie or settings.HDHIVE_COOKIE or "").strip()
         self._web = HDHiveWebClient(base_url=self._base_url, cookie=self._cookie)
+        self._web.set_cookie_update_callback(self._handle_web_cookie_update)
         self._auth_lock = asyncio.Lock()
+        self._cookie_update_callback: Callable[[str], None] | None = None
 
     def set_base_url(self, base_url: str | None) -> None:
         value = str(base_url or "").strip()
@@ -55,6 +59,27 @@ class HDHiveService:
     def set_cookie(self, cookie: str | None) -> None:
         self._cookie = str(cookie or "").strip()
         self._web.set_cookie(self._cookie)
+
+    def set_cookie_update_callback(
+        self,
+        callback: Callable[[str], None] | None,
+    ) -> None:
+        self._cookie_update_callback = callback
+
+    def _handle_web_cookie_update(self, cookie: str) -> None:
+        previous_cookie = self._cookie
+        self._cookie = str(cookie or "").strip()
+
+        if (
+            self._cookie_update_callback is None
+            or HDHiveWebClient._durable_cookie_pairs(previous_cookie)
+            == HDHiveWebClient._durable_cookie_pairs(self._cookie)
+        ):
+            return
+        try:
+            self._cookie_update_callback(self._cookie)
+        except Exception:
+            logging.getLogger(__name__).exception("HDHive 自动持久化续期 Cookie 失败")
 
     @property
     def cookie(self) -> str:
@@ -77,6 +102,14 @@ class HDHiveService:
         return HDHiveWebClient._extract_next_static_chunk_paths(raw)
 
     @staticmethod
+    def _extract_bracket_payload(raw: str, token: str) -> str:
+        return HDHiveWebClient._extract_bracket_payload(raw, token)
+
+    @staticmethod
+    def _decode_json_candidates(raw: str) -> list[Any]:
+        return HDHiveWebClient._decode_json_candidates(raw)
+
+    @staticmethod
     def _normalize_slug(slug: str) -> str:
         return HDHiveWebClient._normalize_slug(slug)
 
@@ -95,6 +128,22 @@ class HDHiveService:
         """确保 Cookie 有效。不支持账密登录——请在设置中配置有效 Cookie。"""
         if not self._cookie:
             raise ValueError("HDHive 未登录，请在设置中配置有效的 Cookie，或从浏览器手动获取后填入")
+
+    async def renew_cookie(self) -> dict[str, Any]:
+        """访问受保护页面，触发 HDHive 的滑动续期并返回续期结果。"""
+        await self.ensure_authenticated()
+        async with self._auth_lock:
+            before = HDHiveWebClient._durable_cookie_pairs(self._cookie)
+            user = await self._web.get_user_info()
+            after = HDHiveWebClient._durable_cookie_pairs(self._cookie)
+        username = str(user.get("username") or user.get("nickname") or "").strip()
+        if not username:
+            raise ValueError("HDHive Cookie 无效或未登录")
+        return {
+            "success": True,
+            "renewed": after != before,
+            "username": username,
+        }
 
     async def check_connection(self) -> dict[str, Any]:
         if not self._cookie:

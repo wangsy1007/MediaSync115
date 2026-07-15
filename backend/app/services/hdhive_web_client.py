@@ -6,9 +6,11 @@ import json
 import logging
 import re
 import unicodedata
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from time import monotonic
-from typing import Any
-from urllib.parse import quote_plus, unquote, urlencode
+from typing import Any, Callable
+from urllib.parse import quote_plus, unquote, urlencode, urlparse
 
 import httpx
 
@@ -39,6 +41,7 @@ class HDHiveWebClient:
         self._checkin_action_id_cached_at = 0.0
         self._unlock_action_id_ttl_seconds = 1800.0
         self._unlock_action_chunk_batch_size = 4
+        self._cookie_update_callback: Callable[[str], None] | None = None
 
     def set_base_url(self, base_url: str | None) -> None:
         value = str(base_url or "").strip()
@@ -48,6 +51,12 @@ class HDHiveWebClient:
 
     def set_cookie(self, cookie: str | None) -> None:
         self._cookie = str(cookie or "").strip()
+
+    def set_cookie_update_callback(
+        self,
+        callback: Callable[[str], None] | None,
+    ) -> None:
+        self._cookie_update_callback = callback
 
     def _create_client(self, **kwargs) -> httpx.AsyncClient:
         """创建配置了代理的 httpx 客户端"""
@@ -72,12 +81,30 @@ class HDHiveWebClient:
         client: httpx.AsyncClient,
         path: str,
         accept: str | None = None,
+        *,
+        retry_on_cookie_renewal: bool = True,
     ) -> str:
         headers = self._build_fetch_headers(accept)
         url = path if path.startswith("http") else f"{self._base_url}{path}"
         response = await client.get(url, headers=headers)
-        response.raise_for_status()
+        durable_cookie_before = self._durable_cookie_pairs(self._cookie)
+        self._apply_response_cookies(response)
         self._apply_client_cookies(client)
+
+        durable_cookie_renewed = (
+            self._durable_cookie_pairs(self._cookie) != durable_cookie_before
+        )
+        if (
+            retry_on_cookie_renewal
+            and durable_cookie_renewed
+            and self._is_auth_failure_response(response)
+        ):
+            renewed_headers = self._build_fetch_headers(accept)
+            response = await client.get(url, headers=renewed_headers)
+            self._apply_response_cookies(response)
+            self._apply_client_cookies(client)
+
+        response.raise_for_status()
         return response.text
 
     async def _fetch_text(self, path: str, accept: str | None = None) -> str:
@@ -590,6 +617,91 @@ class HDHiveWebClient:
     def _serialize_cookie_pairs(pairs: dict[str, str]) -> str:
         return "; ".join(f"{key}={value}" for key, value in pairs.items() if key and value is not None)
 
+    @classmethod
+    def _durable_cookie_pairs(cls, cookie_header: str | None) -> dict[str, str]:
+        """排除每次请求都会刷新的 Server Action 临时令牌。"""
+        pairs: dict[str, str] = {}
+        for part in str(cookie_header or "").split(";"):
+            item = part.strip()
+            if not item or "=" not in item:
+                continue
+            name, value = item.split("=", 1)
+            key = name.strip()
+            if not key or key.lower() == "hdh_sa_token":
+                continue
+            pairs[key] = value.strip()
+        return pairs
+
+    @staticmethod
+    def _is_auth_failure_response(response: httpx.Response) -> bool:
+        if response.status_code in {401, 403}:
+            return True
+        try:
+            return urlparse(str(response.url)).path.rstrip("/") == "/login"
+        except Exception:
+            return False
+
+    @staticmethod
+    def _set_cookie_is_expired(attributes: str) -> bool:
+        max_age = re.search(r"(?:^|;)\s*max-age\s*=\s*(-?\d+)", attributes, re.I)
+        if max_age:
+            try:
+                if int(max_age.group(1)) <= 0:
+                    return True
+            except ValueError:
+                pass
+
+        expires = re.search(r"(?:^|;)\s*expires\s*=\s*([^;]+)", attributes, re.I)
+        if not expires:
+            return False
+        try:
+            expires_at = parsedate_to_datetime(expires.group(1).strip())
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            return expires_at <= datetime.now(timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+    def _replace_cookie_pairs(self, pairs: dict[str, str]) -> None:
+        updated_cookie = self._serialize_cookie_pairs(pairs)
+        if updated_cookie == self._cookie:
+            return
+        self._cookie = updated_cookie
+        if self._cookie_update_callback is None:
+            return
+        try:
+            self._cookie_update_callback(updated_cookie)
+        except Exception:
+            logging.getLogger(__name__).exception("HDHive 自动保存续期 Cookie 失败")
+
+    def _apply_response_cookies(self, response: httpx.Response) -> None:
+        """合并响应中的 Set-Cookie，并正确处理服务端删除 Cookie。"""
+        current = self._parse_cookie_pairs()
+        changed = False
+        responses = [*response.history, response]
+
+        for current_response in responses:
+            for raw_header in current_response.headers.get_list("set-cookie"):
+                first_part, separator, attributes = str(raw_header or "").partition(";")
+                if "=" not in first_part:
+                    continue
+                name, value = first_part.split("=", 1)
+                key = name.strip()
+                if not key:
+                    continue
+                normalized_value = value.strip().strip('"')
+                if separator and self._set_cookie_is_expired(f";{attributes}"):
+                    if key in current:
+                        current.pop(key, None)
+                        changed = True
+                    continue
+                if current.get(key) != normalized_value:
+                    current[key] = normalized_value
+                    changed = True
+
+        if changed:
+            self._replace_cookie_pairs(current)
+
     def _build_cookie_header(self, client: httpx.AsyncClient, base_cookie: str | None = None) -> str:
         pairs = self._parse_cookie_pairs(base_cookie)
         for name, value in client.cookies.items():
@@ -601,10 +713,12 @@ class HDHiveWebClient:
 
     async def _prefetch_action_token(self, client: httpx.AsyncClient) -> None:
         """刷新 Next.js Server Action 所需的 hdh_sa_token。"""
-        await client.head(
+        response = await client.head(
             f"{self._base_url}/login",
             headers={"user-agent": self._user_agent},
         )
+        self._apply_response_cookies(response)
+        self._apply_client_cookies(client)
 
     @staticmethod
     def _is_action_token_error(parsed: dict[str, Any]) -> bool:
@@ -628,7 +742,7 @@ class HDHiveWebClient:
                 continue
             name, value = item.split("=", 1)
             existing[name.strip()] = value.strip()
-        self._cookie = "; ".join(f"{k}={v}" for k, v in existing.items())
+        self._replace_cookie_pairs(existing)
 
     def _serialize_client_cookies(self, client: httpx.AsyncClient) -> str:
         pairs: list[str] = []
@@ -1208,13 +1322,27 @@ class HDHiveWebClient:
         }
         body = json.dumps(args, ensure_ascii=False)
         response = await client.post(normalized_path, headers=post_headers, content=body)
+        durable_cookie_before = self._durable_cookie_pairs(base_cookie)
+        self._apply_response_cookies(response)
+        self._apply_client_cookies(client)
+
+        if (
+            self._durable_cookie_pairs(self._cookie) != durable_cookie_before
+            and self._is_auth_failure_response(response)
+        ):
+            post_headers["cookie"] = self._build_cookie_header(client, self._cookie)
+            response = await client.post(normalized_path, headers=post_headers, content=body)
+            self._apply_response_cookies(response)
+            self._apply_client_cookies(client)
 
         if response.status_code < 400:
             parsed = self._parse_next_action_response(response.text)
             if self._is_action_token_error(parsed):
                 await self._prefetch_action_token(client)
-                post_headers["cookie"] = self._build_cookie_header(client, base_cookie)
+                post_headers["cookie"] = self._build_cookie_header(client, self._cookie)
                 response = await client.post(normalized_path, headers=post_headers, content=body)
+                self._apply_response_cookies(response)
+                self._apply_client_cookies(client)
         return response
 
     async def _post_next_action(self, page_path: str, action_id: str, args: list[Any]) -> httpx.Response:
@@ -1406,7 +1534,18 @@ class HDHiveWebClient:
 
         client = self._create_client()
         try:
+            durable_cookie_before = self._durable_cookie_pairs(self._cookie)
             response = await client.post(url, headers=headers, json=body)
+            self._apply_response_cookies(response)
+            self._apply_client_cookies(client)
+            if (
+                self._durable_cookie_pairs(self._cookie) != durable_cookie_before
+                and self._is_auth_failure_response(response)
+            ):
+                headers["cookie"] = self._cookie
+                response = await client.post(url, headers=headers, json=body)
+                self._apply_response_cookies(response)
+                self._apply_client_cookies(client)
         finally:
             await client.aclose()
 

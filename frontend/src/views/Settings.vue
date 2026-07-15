@@ -372,7 +372,7 @@
                 placeholder="从浏览器开发者工具手动复制 Cookie 粘贴到此处"
               />
               <el-text size="small" type="info" style="margin-top: 4px">
-                HDHive 不再支持账密登录，请从浏览器手动获取 Cookie 填入
+                首次请从浏览器手动获取 Cookie；此后会自动保存网站换发的续期 Cookie，完整会话失效时需重新获取
               </el-text>
             </el-form-item>
             <el-form-item>

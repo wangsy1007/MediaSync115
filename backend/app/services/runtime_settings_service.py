@@ -420,6 +420,20 @@ class RuntimeSettingsService:
     def get_hdhive_cookie(self) -> str:
         return self._data["hdhive_cookie"]
 
+    def update_hdhive_cookie(self, cookie: str) -> str:
+        """持久化 HDHive 自动续期后的 Cookie。"""
+        cleaned = str(cookie or "").strip()
+        if not cleaned:
+            raise ValueError("HDHive Cookie 不能为空")
+        if cleaned == self.get_hdhive_cookie():
+            return cleaned
+
+        self._persist_env_backed_fields({"hdhive_cookie": cleaned})
+        self._save()
+        settings.HDHIVE_COOKIE = cleaned
+        hdhive_service.set_cookie(cleaned)
+        return cleaned
+
     def get_hdhive_base_url(self) -> str:
         return self._data["hdhive_base_url"]
 
@@ -1609,3 +1623,4 @@ class RuntimeSettingsService:
 
 
 runtime_settings_service = RuntimeSettingsService()
+hdhive_service.set_cookie_update_callback(runtime_settings_service.update_hdhive_cookie)

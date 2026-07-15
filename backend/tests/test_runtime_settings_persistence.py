@@ -36,6 +36,20 @@ def test_runtime_settings_do_not_create_env_file(tmp_path, monkeypatch) -> None:
     assert not (tmp_path / ".env").exists()
 
 
+def test_hdhive_renewed_cookie_is_persisted(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    service = RuntimeSettingsService()
+
+    updated = service.update_hdhive_cookie("session=renewed; cf_clearance=current")
+
+    persisted = json.loads(
+        (tmp_path / "data" / "runtime_settings.json").read_text(encoding="utf-8")
+    )
+    assert updated == "session=renewed; cf_clearance=current"
+    assert persisted["hdhive_cookie"] == updated
+    assert service.get_hdhive_cookie() == updated
+
+
 def test_runtime_file_values_override_env_values_even_when_cleared(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TMDB_API_KEY", "env-only-key")
