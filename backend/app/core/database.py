@@ -47,6 +47,9 @@ DOWNLOAD_RECORD_COLUMN_SQL = {
     "offline_status": "ALTER TABLE download_records ADD COLUMN offline_status VARCHAR(50)",
     "offline_submitted_at": "ALTER TABLE download_records ADD COLUMN offline_submitted_at DATETIME",
     "offline_completed_at": "ALTER TABLE download_records ADD COLUMN offline_completed_at DATETIME",
+    "source_tmdb_id": "ALTER TABLE download_records ADD COLUMN source_tmdb_id INTEGER",
+    "matched_media_title": "ALTER TABLE download_records ADD COLUMN matched_media_title VARCHAR(200)",
+    "relevance_verified": "ALTER TABLE download_records ADD COLUMN relevance_verified BOOLEAN NOT NULL DEFAULT 0",
 }
 
 SUBSCRIPTION_COLUMN_SQL = {

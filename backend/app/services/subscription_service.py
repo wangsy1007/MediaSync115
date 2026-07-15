@@ -2677,6 +2677,7 @@ class SubscriptionService:
                 resource_url=resource_url,
                 resource_type=resource_type,
                 status=MediaStatus.MATCHED,
+                **self._extract_download_record_relevance_fields(item),
             )
             db.add(record)
             existing_urls.add(resource_url)
@@ -4006,6 +4007,47 @@ class SubscriptionService:
         }
 
     @staticmethod
+    def _extract_download_record_relevance_fields(
+        item: dict[str, Any],
+    ) -> dict[str, Any]:
+        """从搜索候选资源提取归属元数据，供转存阶段复用。"""
+        source_tmdb_id = item.get("hdhive_source_tmdb_id")
+        if source_tmdb_id is not None:
+            try:
+                source_tmdb_id = int(source_tmdb_id)
+            except (TypeError, ValueError):
+                source_tmdb_id = None
+
+        matched_media_title = str(
+            item.get("matched_media_title") or item.get("overview") or ""
+        ).strip() or None
+
+        return {
+            "source_tmdb_id": source_tmdb_id,
+            "matched_media_title": matched_media_title,
+            "relevance_verified": True,
+        }
+
+    @staticmethod
+    def _extract_relevance_context(
+        item: dict[str, Any] | DownloadRecord,
+    ) -> tuple[str, int | None, bool]:
+        if isinstance(item, DownloadRecord):
+            overview = str(item.matched_media_title or "").strip()
+            return overview, item.source_tmdb_id, bool(item.relevance_verified)
+
+        overview = str(
+            item.get("overview") or item.get("matched_media_title") or ""
+        ).strip()
+        source_tmdb_id = item.get("hdhive_source_tmdb_id")
+        if source_tmdb_id is not None:
+            try:
+                source_tmdb_id = int(source_tmdb_id)
+            except (TypeError, ValueError):
+                source_tmdb_id = None
+        return overview, source_tmdb_id, bool(item.get("relevance_verified"))
+
+    @staticmethod
     def _resource_label(item: dict[str, Any] | DownloadRecord) -> str:
         if isinstance(item, DownloadRecord):
             return str(item.resource_name or "").strip()
@@ -4140,23 +4182,24 @@ class SubscriptionService:
         if not label:
             return False
 
-        overview = ""
-        if isinstance(item, dict):
-            overview = str(
-                item.get("overview")
-                or item.get("matched_media_title")
-                or ""
-            ).strip()
-            source_tmdb_id = item.get("hdhive_source_tmdb_id")
-            if (
-                source_tmdb_id is not None
-                and sub.tmdb_id is not None
-                and int(source_tmdb_id) == int(sub.tmdb_id)
-            ):
-                if self._is_obvious_collection_resource(label):
-                    return False
-                if overview or not self._resource_has_identifiable_title(label):
-                    return True
+        overview, source_tmdb_id, relevance_verified = self._extract_relevance_context(
+            item
+        )
+
+        if relevance_verified:
+            if self._is_obvious_collection_resource(label):
+                return False
+            return True
+
+        if (
+            source_tmdb_id is not None
+            and sub.tmdb_id is not None
+            and int(source_tmdb_id) == int(sub.tmdb_id)
+        ):
+            if self._is_obvious_collection_resource(label):
+                return False
+            if overview or not self._resource_has_identifiable_title(label):
+                return True
 
         embedded_tmdb_id = self._extract_tmdb_id_from_resource_text(label)
         if embedded_tmdb_id is not None and sub.tmdb_id is not None:

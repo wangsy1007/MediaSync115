@@ -129,6 +129,9 @@ class DownloadRecord(Base):
         SQLEnum(MediaStatus), default=MediaStatus.PENDING
     )
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_tmdb_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    matched_media_title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    relevance_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=beijing_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 

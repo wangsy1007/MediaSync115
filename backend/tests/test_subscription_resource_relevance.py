@@ -1,7 +1,9 @@
 """
 订阅资源归属校验测试（防止自动转存串台）
 """
-from app.models.models import MediaType
+import pytest
+
+from app.models.models import DownloadRecord, MediaType
 from app.services.subscription_service import (
     SubscriptionService,
     SubscriptionSnapshot,
@@ -148,3 +150,76 @@ class TestSubscriptionResourceRelevance:
       assert not subscription_service._is_resource_relevant_for_subscription(
           sub, item, context
       )
+
+  @pytest.mark.asyncio
+  async def test_accepts_download_record_with_hdhive_metadata(self) -> None:
+      """HDHive 通用资源名入库后，转存阶段应能识别 TMDB 归属。"""
+      sub = _movie_snapshot(title="肖申克的救赎", tmdb_id=278, year="1994")
+      context = {
+          "title": "肖申克的救赎",
+          "original_title": "The Shawshank Redemption",
+          "year": "1994",
+      }
+      record = DownloadRecord(
+          subscription_id=6,
+          resource_name="4K蓝光原盘，内封中文字幕，HDR+杜比视界！",
+          resource_url="https://115.com/s/example",
+          resource_type="pan115",
+          source_tmdb_id=278,
+          matched_media_title="肖申克的救赎",
+          relevance_verified=False,
+      )
+      assert await subscription_service._is_resource_relevant_for_subscription(
+          sub, record, context
+      )
+
+  @pytest.mark.asyncio
+  async def test_accepts_relevance_verified_download_record(self) -> None:
+      """已通过搜索阶段归属过滤的资源，转存时不再重复误判。"""
+      sub = _movie_snapshot(title="肖申克的救赎", tmdb_id=278, year="1994")
+      context = {
+          "title": "肖申克的救赎",
+          "original_title": "The Shawshank Redemption",
+          "year": "1994",
+      }
+      record = DownloadRecord(
+          subscription_id=6,
+          resource_name="4K蓝光原盘，内封中文字幕，HDR+杜比视界！",
+          resource_url="https://115.com/s/example2",
+          resource_type="pan115",
+          source_tmdb_id=278,
+          matched_media_title="肖申克的救赎",
+          relevance_verified=True,
+      )
+      assert await subscription_service._is_resource_relevant_for_subscription(
+          sub, record, context
+      )
+
+  @pytest.mark.asyncio
+  async def test_rejects_relevance_verified_collection_pack(self) -> None:
+      sub = _movie_snapshot(title="十二生肖", tmdb_id=98567, year="2012")
+      context = {"title": "十二生肖", "original_title": "十二生肖", "year": "2012"}
+      record = DownloadRecord(
+          subscription_id=2,
+          resource_name="[成龙1992-2016蓝光原盘集2][878.70GB]12生肖 Chinese Zodiac 2012 .iso",
+          resource_url="https://115.com/s/collection",
+          resource_type="pan115",
+          source_tmdb_id=98567,
+          matched_media_title="十二生肖",
+          relevance_verified=True,
+      )
+      assert not await subscription_service._is_resource_relevant_for_subscription(
+          sub, record, context
+      )
+
+  def test_extract_download_record_relevance_fields(self) -> None:
+      fields = SubscriptionService._extract_download_record_relevance_fields(
+          {
+              "title": "4K蓝光原盘，内封中文字幕，HDR+杜比视界！",
+              "matched_media_title": "肖申克的救赎",
+              "hdhive_source_tmdb_id": 278,
+          }
+      )
+      assert fields["source_tmdb_id"] == 278
+      assert fields["matched_media_title"] == "肖申克的救赎"
+      assert fields["relevance_verified"] is True
