@@ -28,6 +28,7 @@ from app.services.archive_naming_config import (
 )
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.tmdb_service import tmdb_service
+from app.utils.name_parser import name_parser
 
 from app.core.timezone_utils import beijing_now
 
@@ -552,6 +553,10 @@ class ArchiveService:
                     await self._trigger_strm_after_archive(summary, trigger)
                     return summary
 
+                # 阶段 2.5：电视剧按集去重（单集优先于合集，同集保留最高画质）
+                tv_skip_map = self._dedupe_tv_identified_items(identified)
+                season_episode_cache: dict[str, set[tuple[int, int]]] = {}
+
                 # 阶段三：串行处理每个文件（涉及 115 移动/重命名，必须走限速队列）
                 folder_cache: dict[tuple[str, ...], str] = {}
                 processed_cids: set[str] = set()
@@ -565,6 +570,13 @@ class ArchiveService:
                     if not identify_info:
                         continue
 
+                    skip_reason = tv_skip_map.get(fid)
+                    if skip_reason:
+                        result = self._build_archive_skip_result(item, skip_reason)
+                        summary["items"].append(result)
+                        summary["skipped"] += 1
+                        continue
+
                     result = await self._process_identified(
                         pan115,
                         item=item,
@@ -573,6 +585,7 @@ class ArchiveService:
                         trigger=trigger,
                         folder_cache=folder_cache,
                         subtitle_items=subtitle_items,
+                        season_episode_cache=season_episode_cache,
                     )
                     summary["items"].append(result)
                     s = str(result.get("status") or "")
@@ -710,6 +723,213 @@ class ArchiveService:
         return items
 
     # ================================================================
+    #  电视剧集数去重
+    # ================================================================
+
+    @staticmethod
+    def _extract_tv_coverage(
+        parsed: dict[str, Any], filename: str
+    ) -> dict[str, int] | None:
+        coverage = name_parser.parse_episode_coverage(str(filename or ""))
+        if coverage:
+            return coverage
+        if str(parsed.get("media_type") or "") != "tv":
+            return None
+        season = parsed.get("season")
+        episode = parsed.get("episode")
+        if season is None or episode is None:
+            return None
+        return {
+            "season": int(season),
+            "episode_start": int(episode),
+            "episode_end": int(episode),
+        }
+
+    @staticmethod
+    def _tv_candidate_rank(entry: dict[str, Any]) -> tuple[Any, ...]:
+        item = entry.get("item") or {}
+        score = Pan115Service._score_video_file(
+            {
+                "name": str(item.get("name") or ""),
+                "size": item.get("size") or 0,
+            }
+        )
+        return (
+            1 if entry.get("is_single") else 0,
+            -int(entry.get("span") or 1),
+            score,
+        )
+
+    def _dedupe_tv_identified_items(
+        self, identified: list[dict[str, Any]]
+    ) -> dict[str, str]:
+        """同一部剧同一集只保留一个候选：单集优先，其次范围更小，再比画质。"""
+        from collections import defaultdict
+
+        episode_candidates: dict[tuple[int, int, int], list[dict[str, Any]]] = (
+            defaultdict(list)
+        )
+        tv_entries: list[dict[str, Any]] = []
+
+        for identify_info in identified:
+            parsed = identify_info.get("parsed") or {}
+            matched = identify_info.get("matched") or {}
+            if str(parsed.get("media_type") or "") != "tv":
+                continue
+            tmdb_id = int(matched.get("tmdb_id") or 0)
+            if tmdb_id <= 0:
+                continue
+
+            item = identify_info.get("item") or {}
+            fid = str(item.get("fid") or "").strip()
+            if not fid:
+                continue
+
+            coverage = self._extract_tv_coverage(parsed, str(item.get("name") or ""))
+            if not coverage:
+                continue
+
+            span = int(coverage["episode_end"]) - int(coverage["episode_start"]) + 1
+            entry = {
+                "fid": fid,
+                "item": item,
+                "coverage": coverage,
+                "span": span,
+                "is_single": span == 1,
+                "tmdb_id": tmdb_id,
+            }
+            tv_entries.append(entry)
+            for season, episode in name_parser.iter_episode_keys(coverage):
+                episode_candidates[(tmdb_id, season, episode)].append(entry)
+
+        skip_map: dict[str, str] = {}
+        if not tv_entries:
+            return skip_map
+
+        episode_winner_fid: dict[tuple[int, int, int], str] = {}
+        for ep_key, candidates in episode_candidates.items():
+            winner = max(candidates, key=self._tv_candidate_rank)
+            episode_winner_fid[ep_key] = winner["fid"]
+
+        for entry in tv_entries:
+            fid = entry["fid"]
+            episodes = name_parser.iter_episode_keys(entry["coverage"])
+            winner_fids = {
+                episode_winner_fid.get((entry["tmdb_id"], season, episode))
+                for season, episode in episodes
+            }
+            if len(winner_fids) == 1 and fid in winner_fids:
+                continue
+
+            if entry["is_single"]:
+                season, episode = episodes[0]
+                skip_map[fid] = (
+                    f"重复集数 S{season:02d}E{episode:02d}，已保留更高画质版本"
+                )
+                continue
+
+            start = int(entry["coverage"]["episode_start"])
+            end = int(entry["coverage"]["episode_end"])
+            skip_map[fid] = (
+                f"合集 S{entry['coverage']['season']:02d}E{start:02d}-E{end:02d} "
+                f"与已有单集/更优资源重复，已跳过"
+            )
+
+        return skip_map
+
+    @staticmethod
+    def _build_archive_skip_result(item: dict[str, Any], message: str) -> dict[str, Any]:
+        return {
+            "status": ArchiveStatus.SKIPPED.value,
+            "source_fid": item.get("fid", ""),
+            "source_filename": item.get("name", ""),
+            "message": message,
+        }
+
+    async def _get_season_archived_episodes(
+        self,
+        pan115: Pan115Service,
+        season_cid: str,
+        cache: dict[str, set[tuple[int, int]]] | None = None,
+    ) -> set[tuple[int, int]]:
+        cid = str(season_cid or "").strip()
+        if not cid:
+            return set()
+        if cache is not None and cid in cache:
+            return cache[cid]
+
+        episodes: set[tuple[int, int]] = set()
+        offset = 0
+        limit = 200
+        while True:
+            try:
+                result = await pan115.get_file_list(cid=cid, limit=limit, offset=offset)
+            except Exception:
+                break
+            rows = result.get("data") or []
+            if not isinstance(rows, list) or not rows:
+                break
+            for row in rows:
+                if not isinstance(row, dict) or pan115._is_folder_item(row):
+                    continue
+                name = str(row.get("name") or row.get("fn") or "")
+                coverage = name_parser.parse_episode_coverage(name)
+                if not coverage:
+                    continue
+                episodes.update(name_parser.iter_episode_keys(coverage))
+            if len(rows) < limit:
+                break
+            offset += limit
+
+        if cache is not None:
+            cache[cid] = set(episodes)
+        return episodes
+
+    async def _check_tv_episode_archive_conflict(
+        self,
+        pan115: Pan115Service,
+        parsed: dict[str, Any],
+        filename: str,
+        target_cid: str,
+        season_episode_cache: dict[str, set[tuple[int, int]]] | None,
+    ) -> str | None:
+        if str(parsed.get("media_type") or "") != "tv":
+            return None
+        coverage = self._extract_tv_coverage(parsed, filename)
+        if not coverage:
+            return None
+
+        existing = await self._get_season_archived_episodes(
+            pan115, target_cid, season_episode_cache
+        )
+        overlap = [
+            (season, episode)
+            for season, episode in name_parser.iter_episode_keys(coverage)
+            if (season, episode) in existing
+        ]
+        if not overlap:
+            return None
+        if len(overlap) == 1:
+            season, episode = overlap[0]
+            return f"目标目录已存在 S{season:02d}E{episode:02d}，已跳过"
+        labels = ", ".join(f"S{s:02d}E{e:02d}" for s, e in overlap[:5])
+        suffix = " 等" if len(overlap) > 5 else ""
+        return f"目标目录已存在 {labels}{suffix}，已跳过"
+
+    @staticmethod
+    def _remember_archived_tv_episodes(
+        parsed: dict[str, Any],
+        filename: str,
+        target_cid: str,
+        season_episode_cache: dict[str, set[tuple[int, int]]],
+    ) -> None:
+        coverage = ArchiveService._extract_tv_coverage(parsed, filename)
+        if not coverage:
+            return
+        cached = season_episode_cache.setdefault(str(target_cid or ""), set())
+        cached.update(name_parser.iter_episode_keys(coverage))
+
+    # ================================================================
     #  阶段二：处理已识别的视频文件（移动 + 重命名 + 字幕）
     # ================================================================
 
@@ -722,6 +942,7 @@ class ArchiveService:
         trigger: str = "manual",
         folder_cache: dict[tuple[str, ...], str] | None = None,
         subtitle_items: list[dict[str, Any]] | None = None,
+        season_episode_cache: dict[str, set[tuple[int, int]]] | None = None,
     ) -> dict[str, Any]:
         parsed = identify_info["parsed"]
         matched = identify_info["matched"]
@@ -797,6 +1018,16 @@ class ArchiveService:
                     season=season,
                     naming=naming,
                 )
+                conflict = await self._check_tv_episode_archive_conflict(
+                    pan115,
+                    parsed,
+                    filename,
+                    target_cid,
+                    season_episode_cache,
+                )
+                if conflict:
+                    await self._mark_task_skipped(db_task.id, conflict)
+                    return self._build_archive_skip_result(item, conflict)
             else:
                 target_cid = await self._ensure_movie_path(
                     pan115,
@@ -846,6 +1077,13 @@ class ArchiveService:
                 )
 
             await self._mark_task_success(db_task.id)
+            if parsed["media_type"] == "tv" and season_episode_cache is not None:
+                self._remember_archived_tv_episodes(
+                    parsed,
+                    filename,
+                    target_cid,
+                    season_episode_cache,
+                )
             await operation_log_service.log_background_event(
                 source_type="background_task",
                 module="archive",
@@ -896,6 +1134,7 @@ class ArchiveService:
         trigger: str = "manual",
         folder_cache: dict[tuple[str, ...], str] | None = None,
         subtitle_items: list[dict[str, Any]] | None = None,
+        season_episode_cache: dict[str, set[tuple[int, int]]] | None = None,
     ) -> dict[str, Any]:
         fid = item["fid"]
         filename = item["name"]
@@ -975,6 +1214,16 @@ class ArchiveService:
                     season=season,
                     naming=naming,
                 )
+                conflict = await self._check_tv_episode_archive_conflict(
+                    pan115,
+                    parsed,
+                    filename,
+                    target_cid,
+                    season_episode_cache,
+                )
+                if conflict:
+                    await self._mark_task_skipped(db_task.id, conflict)
+                    return self._build_archive_skip_result(item, conflict)
             else:
                 target_cid = await self._ensure_movie_path(
                     pan115,
@@ -1032,6 +1281,13 @@ class ArchiveService:
                 )
 
             await self._mark_task_success(db_task.id)
+            if parsed["media_type"] == "tv" and season_episode_cache is not None:
+                self._remember_archived_tv_episodes(
+                    parsed,
+                    filename,
+                    target_cid,
+                    season_episode_cache,
+                )
             await operation_log_service.log_background_event(
                 source_type="background_task",
                 module="archive",
@@ -2010,6 +2266,14 @@ class ArchiveService:
             task_id,
             status=ArchiveStatus.FAILED,
             error_message=str(error_message or "")[:2000],
+            completed_at=beijing_now(),
+        )
+
+    async def _mark_task_skipped(self, task_id: int, reason: str) -> None:
+        await self._update_task(
+            task_id,
+            status=ArchiveStatus.SKIPPED,
+            error_message=str(reason or "")[:2000],
             completed_at=beijing_now(),
         )
 

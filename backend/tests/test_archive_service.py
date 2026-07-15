@@ -365,3 +365,50 @@ class TestArchiveService:
             await archive_service.run_scan(trigger="manual")
 
         assert marked["count"] == 1
+
+
+class TestArchiveTvEpisodeDedup:
+    def test_dedupe_prefers_single_episode_over_collection(self) -> None:
+        identified = [
+            {
+                "item": {"fid": "pack", "name": "Show.S01E01-E10.2160p.mkv", "size": 20_000},
+                "parsed": {"media_type": "tv", "season": 1, "episode": 1},
+                "matched": {"tmdb_id": 100, "title": "Show"},
+            },
+            {
+                "item": {"fid": "single", "name": "Show.S01E01.1080p.mkv", "size": 8_000},
+                "parsed": {"media_type": "tv", "season": 1, "episode": 1},
+                "matched": {"tmdb_id": 100, "title": "Show"},
+            },
+            {
+                "item": {"fid": "e2", "name": "Show.S01E02.1080p.mkv", "size": 8_000},
+                "parsed": {"media_type": "tv", "season": 1, "episode": 2},
+                "matched": {"tmdb_id": 100, "title": "Show"},
+            },
+        ]
+
+        skip_map = archive_service._dedupe_tv_identified_items(identified)
+
+        assert "pack" in skip_map
+        assert "single" not in skip_map
+        assert "e2" not in skip_map
+
+    def test_dedupe_keeps_best_single_for_same_episode(self) -> None:
+        identified = [
+            {
+                "item": {"fid": "low", "name": "Show.S01E01.720p.mkv", "size": 4_000},
+                "parsed": {"media_type": "tv", "season": 1, "episode": 1},
+                "matched": {"tmdb_id": 100, "title": "Show"},
+            },
+            {
+                "item": {"fid": "high", "name": "Show.S01E01.2160p.mkv", "size": 12_000},
+                "parsed": {"media_type": "tv", "season": 1, "episode": 1},
+                "matched": {"tmdb_id": 100, "title": "Show"},
+            },
+        ]
+
+        skip_map = archive_service._dedupe_tv_identified_items(identified)
+
+        assert skip_map.get("low")
+        assert "high" not in skip_map
+
