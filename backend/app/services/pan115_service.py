@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import logging
 import random
 import re
 from datetime import datetime, timedelta
@@ -14,6 +15,8 @@ from app.constants.pan115_qr_login import normalize_pan115_qr_login_app
 from app.core.config import settings
 
 from app.core.timezone_utils import beijing_now
+
+logger = logging.getLogger(__name__)
 
 P115Client = None
 _P115CLIENT_IMPORT_ERROR = ""
@@ -1405,7 +1408,125 @@ class Pan115Service:
     def _is_tv_video_filename(cls, filename: str) -> bool:
         from app.utils.name_parser import name_parser
 
-        return name_parser.parse_episode(filename) is not None
+        return name_parser.parse_episode_coverage(filename) is not None
+
+    async def collect_tv_episodes_under_folder(
+        self,
+        cid: str,
+        *,
+        show_title: str = "",
+        max_depth: int = 6,
+    ) -> set[tuple[int, int]]:
+        """递归收集目录下已存在的剧集集数（可按剧名过滤）。"""
+        from app.utils.tv_episode_dedup import (
+            extract_episodes_from_filename,
+            filename_likely_same_show,
+        )
+
+        root = str(cid or "").strip()
+        if not root or root == "0":
+            return set()
+
+        episodes: set[tuple[int, int]] = set()
+        queue: list[tuple[str, int]] = [(root, 0)]
+        seen: set[str] = set()
+
+        while queue:
+            current_cid, depth = queue.pop(0)
+            if current_cid in seen:
+                continue
+            seen.add(current_cid)
+
+            offset = 0
+            limit = 200
+            while True:
+                try:
+                    result = await self.get_file_list(
+                        cid=current_cid, offset=offset, limit=limit
+                    )
+                except Exception:
+                    break
+                rows = result.get("data") or []
+                if not isinstance(rows, list) or not rows:
+                    break
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    if self._is_folder_item(row):
+                        if depth >= max_depth:
+                            continue
+                        folder_id = str(
+                            self._extract_folder_id(row) or row.get("fid") or ""
+                        ).strip()
+                        if folder_id:
+                            queue.append((folder_id, depth + 1))
+                        continue
+                    name = self._share_item_name(row)
+                    if show_title and not filename_likely_same_show(name, show_title):
+                        continue
+                    episodes.update(extract_episodes_from_filename(name))
+                if len(rows) < limit:
+                    break
+                offset += limit
+        return episodes
+
+    @classmethod
+    def _select_tv_files_for_transfer(
+        cls,
+        files: list[dict[str, Any]],
+        quality_filter: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        from app.utils.tv_episode_dedup import dedupe_tv_transfer_files
+
+        kept, _ = dedupe_tv_transfer_files(files)
+        return kept
+
+    async def _finalize_tv_transfer_selection(
+        self,
+        selected_files: list[dict[str, Any]],
+        target_cid: str,
+        *,
+        media_type: str | None = None,
+        show_title: str = "",
+    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
+        from app.utils.tv_episode_dedup import dedupe_tv_transfer_files
+
+        normalized_media_type = str(media_type or "").strip().lower()
+        video_files = [
+            item
+            for item in selected_files
+            if isinstance(item, dict)
+            and self._is_video_file_name(self._share_item_name(item))
+        ]
+        if not video_files:
+            return selected_files, {}
+
+        tv_count = sum(
+            1
+            for item in video_files
+            if self._is_tv_video_filename(self._share_item_name(item))
+        )
+        is_tv_context = normalized_media_type == "tv" or tv_count >= max(
+            2, len(video_files) // 2
+        )
+        if not is_tv_context:
+            return selected_files, {}
+
+        existing = await self.collect_tv_episodes_under_folder(
+            target_cid,
+            show_title=show_title,
+        )
+        kept, skip_map = dedupe_tv_transfer_files(
+            selected_files,
+            existing_episodes=existing,
+        )
+        if skip_map:
+            logger.info(
+                "转存按集去重：目标目录=%s，跳过 %s 个重复文件",
+                target_cid,
+                len(skip_map),
+            )
+        return kept, skip_map
 
     @classmethod
     def _are_same_movie(cls, name_a: str, name_b: str) -> bool:
@@ -1679,7 +1800,7 @@ class Pan115Service:
 
         normalized_media_type = str(media_type or "").strip().lower()
         if normalized_media_type == "tv":
-            return video_files
+            return cls._select_tv_files_for_transfer(video_files, quality_filter)
 
         if not normalized_media_type:
             tv_count = sum(
@@ -1688,7 +1809,7 @@ class Pan115Service:
                 if cls._is_tv_video_filename(cls._share_item_name(item))
             )
             if tv_count >= max(2, len(video_files) // 2):
-                return video_files
+                return cls._select_tv_files_for_transfer(video_files, quality_filter)
 
         tv_files: list[dict[str, Any]] = []
         movie_files: list[dict[str, Any]] = []
@@ -1699,7 +1820,9 @@ class Pan115Service:
             else:
                 movie_files.append(item)
 
-        selected: list[dict[str, Any]] = list(tv_files)
+        selected: list[dict[str, Any]] = cls._select_tv_files_for_transfer(
+            tv_files, quality_filter
+        )
         if not movie_files:
             return selected
 
@@ -2509,6 +2632,12 @@ class Pan115Service:
         selected_files = self._select_files_for_best_quality_transfer(
             all_files, quality_filter, media_type
         )
+        selected_files, _skip_map = await self._finalize_tv_transfer_selection(
+            selected_files,
+            target_folder_id,
+            media_type=media_type,
+            show_title=folder_name,
+        )
 
         file_ids = self._collect_share_file_ids(selected_files)
         if not file_ids:
@@ -2571,6 +2700,11 @@ class Pan115Service:
 
         selected_files = self._select_files_for_best_quality_transfer(
             all_files, quality_filter, media_type
+        )
+        selected_files, _skip_map = await self._finalize_tv_transfer_selection(
+            selected_files,
+            str(parent_id or "0"),
+            media_type=media_type,
         )
         file_ids = self._collect_share_file_ids(selected_files)
         if not file_ids:

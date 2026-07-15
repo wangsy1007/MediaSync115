@@ -163,6 +163,36 @@ class TestPan115BestVideoSelection:
 
         assert sorted(item["fid"] for item in selected) == ["1", "2"]
 
+    def test_select_files_tv_episodes_dedupe_same_episode(self) -> None:
+        """电视剧同集多文件应只转存最优一个"""
+
+        files = [
+            {
+                "fid": "1",
+                "name": "Show.S01E01.720p.mkv",
+                "size": 5_000,
+                "relative_path": "Season 1",
+            },
+            {
+                "fid": "2",
+                "name": "Show.S01E01.1080p.mkv",
+                "size": 8_000,
+                "relative_path": "Season 1",
+            },
+            {
+                "fid": "3",
+                "name": "Show.S01E02.1080p.mkv",
+                "size": 8_000,
+                "relative_path": "Season 1",
+            },
+        ]
+
+        selected = Pan115Service._select_files_for_best_quality_transfer(
+            files, media_type="tv"
+        )
+
+        assert sorted(item["fid"] for item in selected) == ["2", "3"]
+
     def test_select_files_media_type_tv_skips_movie_dedup(self) -> None:
         """显式电视剧转存时不做电影择优"""
 

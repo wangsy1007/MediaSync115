@@ -3283,12 +3283,12 @@ class SubscriptionService:
                         is_video_file = self._is_video_filename(filename)
                         if not is_video_file:
                             continue
-                        parsed = name_parser.parse_episode(filename)
-                        if parsed:
-                            parsed_count += 1
-                            pair = (int(parsed[0]), int(parsed[1]))
-                            if pair in missing_episodes:
-                                matched_candidates.setdefault(pair, []).append(item)
+                        coverage = name_parser.parse_episode_coverage(filename)
+                        if coverage:
+                            parsed_count += len(name_parser.iter_episode_keys(coverage))
+                            for pair in name_parser.iter_episode_keys(coverage):
+                                if pair in missing_episodes:
+                                    matched_candidates.setdefault(pair, []).append(item)
                             continue
                         unparsed_video_count += 1
 
@@ -3321,6 +3321,34 @@ class SubscriptionService:
                             )
                         else:
                             selected_items.extend(items)
+                    existing_episodes = await pan_service.collect_tv_episodes_under_folder(
+                        parent_folder_id,
+                        show_title=sub.title,
+                    )
+                    from app.utils.tv_episode_dedup import dedupe_tv_transfer_files
+
+                    selected_items, tv_skip_map = dedupe_tv_transfer_files(
+                        selected_items,
+                        existing_episodes=existing_episodes,
+                    )
+                    if tv_skip_map:
+                        await self._create_step_log(
+                            db,
+                            run_id=run_id,
+                            channel=channel,
+                            subscription_id=sub.id,
+                            subscription_title=sub.title,
+                            step="tv_transfer_dedupe",
+                            status="info",
+                            message=(
+                                f"转存前按集去重，跳过 {len(tv_skip_map)} 个重复文件"
+                            ),
+                            payload={
+                                "record_id": record.id,
+                                "skipped_count": len(tv_skip_map),
+                                "skipped_samples": list(tv_skip_map.values())[:5],
+                            },
+                        )
                     selected_file_ids = list(
                         dict.fromkeys(
                             [

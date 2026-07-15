@@ -119,23 +119,22 @@ class SyncService:
                     continue
                 if not pan115_service._is_video_file_name(filename):
                     continue
-                    
-                # 尝试解析季号和集号
-                parsed = name_parser.parse_episode(filename)
-                
-                # 如果无法解析出集号，为了保险起见，我们选择转存它，或者根据需求选择忽略。
-                # 默认策略：如果解析成功且 Emby 中已存在，则跳过；否则转存。
-                if parsed:
-                    season, episode = parsed
-                    if (season, episode) in existing_episodes:
-                        logger.info("跳过已存在剧集: %s (S%02dE%02d)", filename, season, episode)
+
+                coverage = name_parser.parse_episode_coverage(filename)
+                if coverage:
+                    episode_keys = name_parser.iter_episode_keys(coverage)
+                    if any(key in existing_episodes for key in episode_keys):
+                        logger.info("跳过已存在剧集: %s", filename)
                         continue
-                    candidates_by_episode.setdefault((season, episode), []).append(f)
-                else:
-                    logger.info("未能解析出集数的视频，加入候选队列: %s", filename)
-                    unparsed_video_candidates.append(f)
+                    for season, episode in episode_keys:
+                        candidates_by_episode.setdefault((season, episode), []).append(f)
+                    continue
+
+                logger.info("未能解析出集数的视频，加入候选队列: %s", filename)
+                unparsed_video_candidates.append(f)
 
             from app.utils.resource_tags import build_quality_filter_from_settings
+            from app.utils.tv_episode_dedup import dedupe_tv_transfer_files
 
             quality_filter = build_quality_filter_from_settings()
             selected_files: list[dict[str, Any]] = []
@@ -152,6 +151,14 @@ class SyncService:
                     selected_files.append(best or unparsed_video_candidates[0])
                 else:
                     selected_files.extend(unparsed_video_candidates)
+
+            pan_existing = await pan115_service.collect_tv_episodes_under_folder(
+                target_folder_id
+            )
+            selected_files, _tv_skip = dedupe_tv_transfer_files(
+                selected_files,
+                existing_episodes=pan_existing,
+            )
 
             missing_fids = [str(f.get("fid")) for f in selected_files if f.get("fid")]
             matched_files = [str(f.get("name") or "") for f in selected_files]

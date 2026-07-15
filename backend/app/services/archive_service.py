@@ -745,32 +745,13 @@ class ArchiveService:
             "episode_end": int(episode),
         }
 
-    @staticmethod
-    def _tv_candidate_rank(entry: dict[str, Any]) -> tuple[Any, ...]:
-        item = entry.get("item") or {}
-        score = Pan115Service._score_video_file(
-            {
-                "name": str(item.get("name") or ""),
-                "size": item.get("size") or 0,
-            }
-        )
-        return (
-            1 if entry.get("is_single") else 0,
-            -int(entry.get("span") or 1),
-            score,
-        )
-
     def _dedupe_tv_identified_items(
         self, identified: list[dict[str, Any]]
     ) -> dict[str, str]:
         """同一部剧同一集只保留一个候选：单集优先，其次范围更小，再比画质。"""
-        from collections import defaultdict
+        from app.utils.tv_episode_dedup import build_tv_file_entry, dedupe_tv_file_entries
 
-        episode_candidates: dict[tuple[int, int, int], list[dict[str, Any]]] = (
-            defaultdict(list)
-        )
         tv_entries: list[dict[str, Any]] = []
-
         for identify_info in identified:
             parsed = identify_info.get("parsed") or {}
             matched = identify_info.get("matched") or {}
@@ -779,62 +760,27 @@ class ArchiveService:
             tmdb_id = int(matched.get("tmdb_id") or 0)
             if tmdb_id <= 0:
                 continue
-
             item = identify_info.get("item") or {}
-            fid = str(item.get("fid") or "").strip()
-            if not fid:
-                continue
-
-            coverage = self._extract_tv_coverage(parsed, str(item.get("name") or ""))
-            if not coverage:
-                continue
-
-            span = int(coverage["episode_end"]) - int(coverage["episode_start"]) + 1
-            entry = {
-                "fid": fid,
-                "item": item,
-                "coverage": coverage,
-                "span": span,
-                "is_single": span == 1,
-                "tmdb_id": tmdb_id,
-            }
+            entry = build_tv_file_entry(item, group_id=tmdb_id)
+            if not entry:
+                coverage = self._extract_tv_coverage(parsed, str(item.get("name") or ""))
+                if not coverage:
+                    continue
+                fid = str(item.get("fid") or "").strip()
+                if not fid:
+                    continue
+                span = int(coverage["episode_end"]) - int(coverage["episode_start"]) + 1
+                entry = {
+                    "fid": fid,
+                    "item": item,
+                    "coverage": coverage,
+                    "span": span,
+                    "is_single": span == 1,
+                    "group_id": tmdb_id,
+                }
             tv_entries.append(entry)
-            for season, episode in name_parser.iter_episode_keys(coverage):
-                episode_candidates[(tmdb_id, season, episode)].append(entry)
 
-        skip_map: dict[str, str] = {}
-        if not tv_entries:
-            return skip_map
-
-        episode_winner_fid: dict[tuple[int, int, int], str] = {}
-        for ep_key, candidates in episode_candidates.items():
-            winner = max(candidates, key=self._tv_candidate_rank)
-            episode_winner_fid[ep_key] = winner["fid"]
-
-        for entry in tv_entries:
-            fid = entry["fid"]
-            episodes = name_parser.iter_episode_keys(entry["coverage"])
-            winner_fids = {
-                episode_winner_fid.get((entry["tmdb_id"], season, episode))
-                for season, episode in episodes
-            }
-            if len(winner_fids) == 1 and fid in winner_fids:
-                continue
-
-            if entry["is_single"]:
-                season, episode = episodes[0]
-                skip_map[fid] = (
-                    f"重复集数 S{season:02d}E{episode:02d}，已保留更高画质版本"
-                )
-                continue
-
-            start = int(entry["coverage"]["episode_start"])
-            end = int(entry["coverage"]["episode_end"])
-            skip_map[fid] = (
-                f"合集 S{entry['coverage']['season']:02d}E{start:02d}-E{end:02d} "
-                f"与已有单集/更优资源重复，已跳过"
-            )
-
+        _keep_fids, skip_map = dedupe_tv_file_entries(tv_entries)
         return skip_map
 
     @staticmethod
