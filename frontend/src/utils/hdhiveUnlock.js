@@ -25,6 +25,9 @@ export const isHdhiveResourceSuspectedInvalid = (row) => {
   return ['invalid', 'suspected_invalid', 'suspect_invalid'].includes(validateStatus)
 }
 
+/** HDHive 资源是否为官组发布 */
+export const isHdhiveOfficialResource = (row) => row?.is_official === true
+
 export const isPan115HdhiveActionDisabled = (row, unlockingSlugs, extraDisabled = false) => {
   if (
     extraDisabled

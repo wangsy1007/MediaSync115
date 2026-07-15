@@ -221,6 +221,14 @@
                       <div class="resource-name-row">
                         <div class="resource-name">{{ row.resource_name || row.title || row.name || '未命名资源' }}</div>
                         <el-tag
+                          v-if="isHdhiveOfficialResource(row)"
+                          size="small"
+                          type="warning"
+                          effect="plain"
+                        >
+                          官组
+                        </el-tag>
+                        <el-tag
                           v-if="isHdhiveResourceSuspectedInvalid(row)"
                           size="small"
                           type="danger"
@@ -741,6 +749,7 @@ import { executePan115SaveToFolder } from '@/utils/pan115SaveFlow'
 import {
   isHdhiveResourceLocked,
   isHdhiveResourceSuspectedInvalid,
+  isHdhiveOfficialResource,
   isHdhiveUnlocking,
   isPan115HdhiveActionDisabled,
   isPan115SelectSaveDisabled,
