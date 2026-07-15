@@ -10,6 +10,7 @@ import mimetypes
 import os
 import socket
 import time
+import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -55,6 +56,7 @@ DOWNLOAD_URL_CACHE_DEFAULT_TTL_SECONDS = 1800.0
 DOWNLOAD_URL_CACHE_MAX_ITEMS = 512
 STRM_WRITE_BATCH_SIZE = 32
 STRM_SCAN_CONCURRENCY = 4
+STRM_WRITE_LOG_EVERY = 50
 
 
 class StrmService:
@@ -82,12 +84,61 @@ class StrmService:
             "output_cid": "",
         }
         self._generate_progress: dict[str, Any] = {}
+        self._strm_log_trace_id = ""
 
     def _set_generate_progress(self, **fields: Any) -> None:
         self._generate_progress = {**self._generate_progress, **fields}
 
     def _clear_generate_progress(self) -> None:
         self._generate_progress = {}
+
+    @staticmethod
+    def _strm_trigger_label(trigger: str) -> str:
+        labels = {
+            "manual": "手动",
+            "scheduler": "定时任务",
+            "archive_subscription_transfer": "订阅归档",
+            "archive": "归档",
+            "queued": "排队补跑",
+        }
+        normalized = str(trigger or "").strip().lower()
+        return labels.get(normalized, str(trigger or "未知"))
+
+    @staticmethod
+    def _strm_mode_label(mode: str) -> str:
+        return "全量" if str(mode or "").strip().lower() == "full" else "增量"
+
+    @staticmethod
+    def _strm_scan_source_label(source: str) -> str:
+        labels = {
+            "full": "全量扫描",
+            "full_fallback": "全量回退扫描",
+            "scopes": "指定范围扫描",
+            "root_snapshot": "根目录增量快照",
+            "index_config_rewrite": "索引配置重写",
+        }
+        return labels.get(str(source or ""), str(source or "未知"))
+
+    async def _log_strm_step(
+        self,
+        action: str,
+        message: str,
+        *,
+        status: str = "info",
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        trace_id = str(self._strm_log_trace_id or "strm").strip() or "strm"
+        payload = dict(extra or {})
+        payload.setdefault("trace_id", trace_id)
+        await operation_log_service.log_background_event(
+            source_type="background_task",
+            module="strm",
+            action=action,
+            status=status,
+            message=message,
+            trace_id=trace_id,
+            extra=payload,
+        )
 
     async def reconcile_stale_running_state(self) -> bool:
         """进程内无任务但数据库仍为 running 时，修正为 interrupted。"""
@@ -415,18 +466,20 @@ class StrmService:
             self._last_generate_summary = None
             self._last_generate_trigger = trigger
             self._current_mode = mode
+            self._strm_log_trace_id = f"strm-{uuid.uuid4().hex[:12]}"
             self._clear_generate_progress()
             self._set_generate_progress(phase="preparing", mode=mode)
 
-            await operation_log_service.log_background_event(
-                source_type="background_task",
-                module="strm",
-                action="strm.generate.start",
-                status="info",
-                message=f"STRM 生成开始（触发方式：{self._last_generate_trigger}）",
+            mode_label = self._strm_mode_label(mode)
+            trigger_label = self._strm_trigger_label(trigger)
+            await self._log_strm_step(
+                "strm.generate.start",
+                f"STRM {mode_label}生成开始（触发：{trigger_label}）",
                 extra={
-                    "trigger": self._last_generate_trigger,
+                    "trigger": trigger,
+                    "mode": mode,
                     "output_dir": str(output_dir),
+                    "scope_count": len(scopes),
                 },
             )
 
@@ -456,15 +509,16 @@ class StrmService:
                     )
                 self._last_generate_summary = summary
                 self._last_generate_finished_at = self._now_iso()
-                await operation_log_service.log_background_event(
-                    source_type="background_task",
-                    module="strm",
-                    action="strm.generate.success",
-                    status="success",
-                    message=(
-                        f"STRM 生成完成：扫描 {summary['scanned_video_count']} 个视频，"
-                        f"写入 {summary['written_count']} 个，删除 {summary['removed_count']} 个"
+                await self._log_strm_step(
+                    "strm.generate.success",
+                    (
+                        f"STRM {self._strm_mode_label(summary.get('mode', mode))}生成完成："
+                        f"扫描 {summary['scanned_video_count']} 个，"
+                        f"写入 {summary['written_count']} 个，"
+                        f"跳过 {summary.get('unchanged_count', 0)} 个，"
+                        f"删除 {summary['removed_count']} 个"
                     ),
+                    status="success",
                     extra=summary,
                 )
                 return {"success": True, **summary}
@@ -477,14 +531,13 @@ class StrmService:
                     mode=mode,
                     error=exc,
                 )
-                await operation_log_service.log_background_event(
-                    source_type="background_task",
-                    module="strm",
-                    action="strm.generate.failed",
+                await self._log_strm_step(
+                    "strm.generate.failed",
+                    f"STRM {self._strm_mode_label(mode)}生成失败：{str(exc)[:200]}",
                     status="failed",
-                    message=f"STRM 生成失败：{str(exc)[:200]}",
                     extra={
                         "trigger": self._last_generate_trigger,
+                        "mode": mode,
                         "error": str(exc)[:500],
                     },
                 )
@@ -525,6 +578,13 @@ class StrmService:
         self._set_generate_progress(
             phase="writing", total=total, processed=0, written=0, unchanged=0
         )
+        if total > 0:
+            await self._log_strm_step(
+                "strm.generate.write.start",
+                f"开始写入 STRM 文件，共 {total} 个待处理",
+                extra={"total": total},
+            )
+        last_logged_at = 0
 
         for index, item in enumerate(scanned_files, start=1):
             item["content_hash"] = self._record_content_hash(item)
@@ -559,6 +619,24 @@ class StrmService:
                     written=written_count + len(pending_writes),
                     unchanged=unchanged_count,
                 )
+            if total > 0 and (
+                index - last_logged_at >= STRM_WRITE_LOG_EVERY or index == total
+            ):
+                last_logged_at = index
+                await self._log_strm_step(
+                    "strm.generate.write.progress",
+                    (
+                        f"STRM 写入进度 {index}/{total}，"
+                        f"已新建 {written_count + len(pending_writes)}，"
+                        f"跳过 {unchanged_count}"
+                    ),
+                    extra={
+                        "processed": index,
+                        "total": total,
+                        "written": written_count + len(pending_writes),
+                        "unchanged": unchanged_count,
+                    },
+                )
 
         if pending_writes or dirs_needed:
             written_count += await self._flush_strm_writes(dirs_needed, pending_writes)
@@ -570,6 +648,19 @@ class StrmService:
             written=written_count,
             unchanged=unchanged_count,
         )
+        if total > 0:
+            await self._log_strm_step(
+                "strm.generate.write.finish",
+                (
+                    f"STRM 文件写入完成：新建 {written_count} 个，"
+                    f"跳过 {unchanged_count} 个"
+                ),
+                extra={
+                    "total": total,
+                    "written": written_count,
+                    "unchanged": unchanged_count,
+                },
+            )
         return written_count, unchanged_count
 
     def _prepare_generate(self) -> tuple[str, Path]:
@@ -870,6 +961,11 @@ class StrmService:
             and bool(existing_files)
         )
         self._set_generate_progress(phase="scanning", mode=mode, detail="115 网盘目录")
+        await self._log_strm_step(
+            "strm.generate.scan.start",
+            f"开始扫描 115 归档目录（{self._strm_mode_label(mode)}）",
+            extra={"mode": mode, "scope_count": len(scopes or [])},
+        )
         scan: dict[str, Any]
         if config_only:
             scan = {
@@ -929,6 +1025,18 @@ class StrmService:
             detail="扫描完成",
             scanned=len(scan["files"]),
         )
+        await self._log_strm_step(
+            "strm.generate.scan.finish",
+            (
+                f"115 目录扫描完成，发现 {len(scan['files'])} 个视频"
+                f"（{self._strm_scan_source_label(str(scan.get('source') or ''))}）"
+            ),
+            extra={
+                "scanned_video_count": len(scan["files"]),
+                "scan_source": scan.get("source"),
+                "mode": mode,
+            },
+        )
         scanned_files = scan["files"]
         scanned_by_fid = {item["fid"]: item for item in scanned_files}
         scanned_paths: dict[str, str] = {}
@@ -985,6 +1093,11 @@ class StrmService:
             self._strm_relative_path(item["relative_path"])
             for item in final_records.values()
         }
+        await self._log_strm_step(
+            "strm.generate.index.start",
+            "开始更新 STRM 索引",
+            extra={"file_count": len(final_records)},
+        )
         await self._persist_index(
             output_cid=output_cid,
             scanned_files=scanned_files,
@@ -997,20 +1110,44 @@ class StrmService:
             mode=mode,
             file_count=len(final_records),
         )
+        await self._log_strm_step(
+            "strm.generate.index.finish",
+            f"STRM 索引更新完成，当前共 {len(final_records)} 个文件",
+            extra={"file_count": len(final_records)},
+        )
         stale_paths = paths_to_remove - generated_files
         if mode == "full":
             stale_paths.update(previous_manifest_files - generated_files)
+        if stale_paths:
+            await self._log_strm_step(
+                "strm.generate.cleanup.start",
+                f"开始清理过期 STRM 文件，待删除 {len(stale_paths)} 个",
+                extra={"stale_count": len(stale_paths)},
+            )
         for relative in sorted(stale_paths):
             if await self._remove_generated_file(output_dir, relative):
                 removed_count += 1
+        if stale_paths:
+            await self._log_strm_step(
+                "strm.generate.cleanup.finish",
+                f"过期 STRM 清理完成，删除 {removed_count} 个",
+                extra={"removed_count": removed_count},
+            )
         await asyncio.to_thread(self._cleanup_empty_dirs, output_dir)
         await self._save_manifest_async(manifest_path, generated_files, output_cid)
 
-        refresh_results = (
-            await self._refresh_media_servers()
-            if written_count + removed_count > 0
-            else {}
-        )
+        refresh_results: dict[str, Any] = {}
+        if written_count + removed_count > 0:
+            await self._log_strm_step(
+                "strm.generate.refresh.start",
+                "开始刷新媒体库（Emby / 飞牛）",
+            )
+            refresh_results = await self._refresh_media_servers()
+            await self._log_strm_step(
+                "strm.generate.refresh.finish",
+                "媒体库刷新请求已发送",
+                extra={"refresh_results": refresh_results},
+            )
         return {
             "trigger": self._last_generate_trigger,
             "requested_mode": requested_mode,

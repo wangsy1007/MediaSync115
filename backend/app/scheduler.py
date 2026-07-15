@@ -79,6 +79,8 @@ class SchedulerManager:
             await self.update_workflow_job(workflow)
 
     async def start(self, job_id: str, *, force: bool = False) -> dict[str, Any]:
+        job_label = self.resolve_job_label(job_id)
+        job_extra = self._job_log_extra(job_id)
         meta = self._jobs.get(job_id)
         if not meta:
             await operation_log_service.log_background_event(
@@ -86,8 +88,9 @@ class SchedulerManager:
                 module="scheduler",
                 action="scheduler.job.start",
                 status="warning",
-                message=f"调度任务不存在: {job_id}",
+                message=f"调度任务不存在: {job_label}",
                 trace_id=job_id,
+                extra=job_extra,
             )
             return {"success": False, "message": f"job not found: {job_id}"}
 
@@ -102,8 +105,9 @@ class SchedulerManager:
                         module="scheduler",
                         action="scheduler.job.start",
                         status="warning",
-                        message=f"调度任务已在运行: {job_id}",
+                        message=f"定时任务已在运行: {job_label}",
                         trace_id=job_id,
+                        extra=job_extra,
                     )
                     return {"success": False, "message": f"job is already running: {job_id}"}
             meta["running"] = True
@@ -112,8 +116,9 @@ class SchedulerManager:
             module="scheduler",
             action="scheduler.job.start",
             status="info",
-            message=f"调度任务开始执行: {job_id}",
+            message=f"定时任务开始执行: {job_label}",
             trace_id=job_id,
+            extra=job_extra,
         )
 
         func = meta.get("func")
@@ -148,18 +153,18 @@ class SchedulerManager:
                 module="scheduler",
                 action="scheduler.job.result_persist_failed",
                 status="warning",
-                message=f"调度任务结果持久化失败: {job_id}",
+                message=f"定时任务结果持久化失败: {job_label}",
                 trace_id=job_id,
-                extra={"error": persist_error[:500]},
+                extra={**job_extra, "error": persist_error[:500]},
             )
         try:
             finish_status = "success" if run_ok and not persist_error else ("warning" if run_ok else "failed")
             finish_message = (
-                f"调度任务执行成功: {job_id}"
+                f"定时任务执行成功: {job_label}"
                 if run_ok
-                else f"调度任务执行失败: {job_id}"
+                else f"定时任务执行失败: {job_label}"
             )
-            finish_extra: dict[str, Any] = {"result": result} if run_ok else {"error": run_error}
+            finish_extra: dict[str, Any] = {**job_extra, "result": result} if run_ok else {**job_extra, "error": run_error}
             if persist_error:
                 finish_extra["persist_error"] = persist_error[:500]
             await operation_log_service.log_background_event(
@@ -215,6 +220,7 @@ class SchedulerManager:
                 "running": False,
                 "kind": "workflow",
                 "ref_id": workflow_id,
+                "display_name": f"工作流:{workflow_id}",
             }
         return await self.start(job_id)
 
@@ -243,6 +249,8 @@ class SchedulerManager:
             "running": False,
             "kind": "dynamic",
             "ref_id": task.id,
+            "job_key": task.job_key,
+            "display_name": task.name,
             "timeout": self._derive_job_timeout(task),
         }
 
@@ -293,6 +301,7 @@ class SchedulerManager:
             "running": False,
             "kind": "workflow",
             "ref_id": workflow.id,
+            "display_name": workflow.name,
             "timeout": DEFAULT_JOB_TIMEOUT_SECONDS,
         }
 
@@ -339,7 +348,7 @@ class SchedulerManager:
             rows.append(
                 {
                     "id": job_id,
-                    "name": job_id,
+                    "name": meta.get("display_name") or job_id,
                     "next_run_time": None,
                     "running": bool(meta.get("running", False)),
                     "kind": meta.get("kind"),
@@ -458,6 +467,30 @@ class SchedulerManager:
     @staticmethod
     def _dynamic_job_id(task_id: int) -> str:
         return f"dynamic:{task_id}"
+
+    def resolve_job_label(self, job_id: str) -> str:
+        meta = self._jobs.get(job_id, {})
+        display_name = str(meta.get("display_name") or "").strip()
+        if display_name:
+            return display_name
+        job = self.scheduler.get_job(job_id)
+        if job and job.name and job.name != job_id:
+            return str(job.name)
+        return job_id
+
+    def _job_log_extra(self, job_id: str) -> dict[str, Any]:
+        meta = self._jobs.get(job_id, {})
+        extra: dict[str, Any] = {"job_id": job_id}
+        kind = meta.get("kind")
+        if kind:
+            extra["kind"] = kind
+        if meta.get("ref_id") is not None:
+            extra["ref_id"] = meta.get("ref_id")
+        if meta.get("job_key"):
+            extra["job_key"] = meta.get("job_key")
+        if meta.get("display_name"):
+            extra["display_name"] = meta.get("display_name")
+        return extra
 
     @staticmethod
     def _workflow_job_id(workflow_id: int) -> str:

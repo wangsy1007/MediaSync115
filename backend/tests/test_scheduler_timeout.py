@@ -110,3 +110,16 @@ def test_derive_job_timeout_cron_uses_default():
         SchedulerManager._derive_job_timeout(_make_task(None))
         == DEFAULT_JOB_TIMEOUT_SECONDS
     )
+
+
+def test_resolve_job_label_prefers_display_name():
+    manager = SchedulerManager()
+    job_id = "dynamic:8"
+    manager._jobs[job_id] = {
+        "display_name": "归档扫描",
+        "job_key": "system.archive_scan",
+        "kind": "dynamic",
+        "ref_id": 8,
+    }
+    assert manager.resolve_job_label(job_id) == "归档扫描"
+    manager._jobs.pop(job_id, None)

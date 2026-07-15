@@ -28,6 +28,9 @@
             <el-tag v-if="log.module === 'play'" size="small" type="success" class="log-module">
               播放
             </el-tag>
+            <el-tag v-else-if="moduleLabels[log.module]" size="small" type="info" class="log-module">
+              {{ moduleLabels[log.module] }}
+            </el-tag>
             <el-tag :type="statusTagType(log.status)" size="small" class="log-status">
               {{ statusLabels[log.status] || log.status }}
             </el-tag>
@@ -72,6 +75,12 @@ import { ElMessage } from 'element-plus'
 import { logsApi } from '@/api'
 
 const AUTO_REFRESH_MS = 5000
+
+const moduleLabels = {
+  play: '播放',
+  strm: 'STRM',
+  scheduler: '调度',
+}
 
 const statusLabels = {
   success: '成功',
