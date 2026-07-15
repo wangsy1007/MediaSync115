@@ -86,7 +86,7 @@ class RuntimeSettingsService:
             "hdhive_base_url": settings.HDHIVE_BASE_URL,
             "hdhive_auto_checkin_enabled": False,
             "hdhive_auto_checkin_mode": "normal",
-            "hdhive_auto_checkin_method": "cookie",
+            "hdhive_auto_checkin_method": "web",
             "hdhive_auto_checkin_run_time": "09:00",
             "pansou_base_url": settings.PANSOU_BASE_URL,
             "tg_api_id": settings.TG_API_ID or "",
@@ -457,14 +457,8 @@ class RuntimeSettingsService:
         return "normal"
 
     def get_hdhive_auto_checkin_method(self) -> str:
-        value = (
-            str(self._data.get("hdhive_auto_checkin_method") or "cookie").strip().lower()
-        )
-        if value == "cookie":
-            return "cookie"
-        if value in {"api", "web"}:
-            return "web"
-        return "cookie"
+        # HDHive 已移除旧 /api/checkin；cookie/api 旧值统一迁移到网页 Server Action。
+        return "web"
 
     def get_hdhive_auto_checkin_run_time(self) -> str:
         return str(self._data.get("hdhive_auto_checkin_run_time", "09:00") or "09:00")

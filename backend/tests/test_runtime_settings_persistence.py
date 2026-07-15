@@ -50,6 +50,21 @@ def test_hdhive_renewed_cookie_is_persisted(tmp_path, monkeypatch) -> None:
     assert service.get_hdhive_cookie() == updated
 
 
+def test_legacy_hdhive_cookie_checkin_method_migrates_to_web(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    runtime_dir = tmp_path / "data"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "runtime_settings.json").write_text(
+        json.dumps({"hdhive_auto_checkin_method": "cookie"}),
+        encoding="utf-8",
+    )
+
+    service = RuntimeSettingsService()
+
+    assert service.get_hdhive_auto_checkin_method() == "web"
+    assert service.get_all()["hdhive_auto_checkin_method"] == "web"
+
+
 def test_runtime_file_values_override_env_values_even_when_cleared(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TMDB_API_KEY", "env-only-key")

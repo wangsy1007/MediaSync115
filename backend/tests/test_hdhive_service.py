@@ -220,6 +220,55 @@ class TestHDHiveService:
         assert parsed["code"] == "action_token_invalid"
         assert parsed["message"] == "请刷新页面后重试"
 
+    def test_checkin_error_description_is_classified_as_already_checked_in(self) -> None:
+        service = HDHiveService()
+        parsed = service._web._parse_next_action_response(
+            '1:{"error":{"success":false,"message":"签到失败",'
+            '"description":"你已经签到过了，明天再来吧","code":"400"}}'
+        )
+
+        status, message = service._web._classify_checkin_status(
+            parsed["description"],
+            None,
+            request_success=parsed["success"],
+        )
+
+        assert parsed["message"] == "签到失败"
+        assert parsed["description"] == "你已经签到过了，明天再来吧"
+        assert status == "already_checked_in"
+        assert message == "你已经签到过了，明天再来吧"
+
+    def test_checkin_error_without_already_marker_remains_failed(self) -> None:
+        service = HDHiveService()
+
+        status, message = service._web._classify_checkin_status(
+            "积分服务暂时不可用",
+            None,
+            request_success=False,
+        )
+
+        assert status == "failed"
+        assert message == "积分服务暂时不可用"
+
+    def test_legacy_cookie_checkin_uses_web_server_action(self) -> None:
+        service = HDHiveService(cookie="token=test")
+
+        async def fake_check_in(gamble: bool = False) -> dict:
+            return {
+                "success": False,
+                "status": "already_checked_in",
+                "message": "今天已经签到过了",
+                "mode": "gamble" if gamble else "normal",
+                "method": "web",
+            }
+
+        service._web.check_in = fake_check_in  # type: ignore[method-assign]
+
+        result = asyncio.run(service.check_in_by_cookie(gamble=False))
+
+        assert result["status"] == "already_checked_in"
+        assert result["method"] == "web"
+
     def test_extract_checkin_action_id_from_chunk(self) -> None:
         raw = (
             'xxx(0,e.createServerReference)("406e0e83ed93f56902b65d137f5f98bfb98187e837",'

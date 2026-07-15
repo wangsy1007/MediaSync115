@@ -943,18 +943,33 @@ async def run_hdhive_checkin(payload: HDHiveCheckinRequest):
     cookie = str(payload.cookie or "").strip()
     base_url = str(payload.base_url or "").strip()
     service = hdhive_service
-    if cookie or base_url:
+    saved_cookie = runtime_settings_service.get_hdhive_cookie()
+    saved_base_url = runtime_settings_service.get_hdhive_base_url()
+    if (cookie and cookie != saved_cookie) or (base_url and base_url != saved_base_url):
         from app.services.hdhive_service import HDHiveService
 
         service = HDHiveService(
-            base_url=base_url or runtime_settings_service.get_hdhive_base_url(),
-            cookie=cookie or runtime_settings_service.get_hdhive_cookie(),
+            base_url=base_url or saved_base_url,
+            cookie=cookie or saved_cookie,
         )
 
     try:
         if method == "cookie":
-            return await service.check_in_by_cookie(gamble=(mode == "gamble"))
-        return await service.check_in(gamble=(mode == "gamble"))
+            result = await service.check_in_by_cookie(gamble=(mode == "gamble"))
+        else:
+            result = await service.check_in(gamble=(mode == "gamble"))
+        if (
+            not bool(result.get("success"))
+            and str(result.get("status") or "") != "already_checked_in"
+        ):
+            from app.services.hdhive_service import HDHiveApiError
+
+            raise HDHiveApiError(
+                status_code=502,
+                code=str(result.get("code") or ""),
+                message=str(result.get("message") or "HDHive 签到失败"),
+            )
+        return result
     except Exception as exc:
         from app.services.hdhive_service import HDHiveApiError
 

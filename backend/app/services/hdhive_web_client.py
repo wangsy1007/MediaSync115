@@ -810,7 +810,11 @@ class HDHiveWebClient:
         return None
 
     @staticmethod
-    def _classify_checkin_status(message: str, checked_in: bool | None) -> tuple[str, str]:
+    def _classify_checkin_status(
+        message: str,
+        checked_in: bool | None,
+        request_success: bool | None = None,
+    ) -> tuple[str, str]:
         normalized_message = str(message or "").strip()
         normalized_text = normalized_message.lower()
         already_keywords = (
@@ -823,11 +827,13 @@ class HDHiveWebClient:
             "already signed",
             "already sign",
         )
-        if checked_in is False or any(
+        if any(
             keyword in normalized_text or keyword in normalized_message
             for keyword in already_keywords
         ):
             return "already_checked_in", normalized_message or "今天已经签到过了，无需重复签到"
+        if request_success is False or checked_in is False:
+            return "failed", normalized_message or "签到未完成"
         return "success", normalized_message or "签到成功"
 
     def _map_resource_row(self, row: dict[str, Any], index: int) -> dict[str, Any]:
@@ -1257,12 +1263,14 @@ class HDHiveWebClient:
                         "success": bool(response_obj.get("success")),
                         "code": str(response_obj.get("code") or ""),
                         "message": str(response_obj.get("message") or ""),
+                        "description": str(response_obj.get("description") or ""),
                         "data": response_obj.get("data") if isinstance(response_obj.get("data"), dict) else {},
                     }
                 return {
                     "success": bool(plain_payload.get("success")),
                     "code": str(plain_payload.get("code") or ""),
                     "message": str(plain_payload.get("message") or ""),
+                    "description": str(plain_payload.get("description") or ""),
                     "data": plain_payload.get("data") if isinstance(plain_payload.get("data"), dict) else {},
                 }
             return {"success": False, "message": "未获取到响应数据"}
@@ -1281,6 +1289,7 @@ class HDHiveWebClient:
                 "success": bool(response_obj.get("success")),
                 "code": str(response_obj.get("code") or ""),
                 "message": str(response_obj.get("message") or ""),
+                "description": str(response_obj.get("description") or ""),
                 "data": response_obj.get("data") if isinstance(response_obj.get("data"), dict) else {},
             }
         if isinstance(payload.get("error"), dict):
@@ -1289,6 +1298,7 @@ class HDHiveWebClient:
                 "success": False,
                 "code": str(error_obj.get("code") or ""),
                 "message": str(error_obj.get("message") or error_obj.get("description") or "请求失败"),
+                "description": str(error_obj.get("description") or ""),
                 "data": error_obj.get("data") if isinstance(error_obj.get("data"), dict) else {},
             }
         if isinstance(payload.get("digest"), str):
@@ -1494,9 +1504,16 @@ class HDHiveWebClient:
 
         data = parsed.get("data") if isinstance(parsed.get("data"), dict) else {}
         checked_in = self._extract_optional_bool(data.get("checked_in"))
+        checkin_message = str(
+            parsed.get("description")
+            or parsed.get("message")
+            or data.get("message")
+            or ""
+        ).strip()
         status, message = self._classify_checkin_status(
-            str(parsed.get("message") or data.get("message") or "").strip(),
+            checkin_message,
             checked_in,
+            request_success=bool(parsed.get("success")),
         )
         points_earned = self._extract_first_int(data.get("points_earned"))
         if points_earned is None:
@@ -1520,73 +1537,8 @@ class HDHiveWebClient:
         }
 
     async def check_in_by_cookie(self, gamble: bool = False) -> dict[str, Any]:
-        """使用 /api/checkin 接口签到（Cookie 方式）。"""
-        headers = {
-            "user-agent": self._user_agent,
-            "accept": "application/json",
-            "content-type": "application/json",
-        }
-        if self._cookie:
-            headers["cookie"] = self._cookie
-
-        url = f"{self._base_url}/api/checkin"
-        body = {"is_gambler": True} if gamble else {}
-
-        client = self._create_client()
-        try:
-            durable_cookie_before = self._durable_cookie_pairs(self._cookie)
-            response = await client.post(url, headers=headers, json=body)
-            self._apply_response_cookies(response)
-            self._apply_client_cookies(client)
-            if (
-                self._durable_cookie_pairs(self._cookie) != durable_cookie_before
-                and self._is_auth_failure_response(response)
-            ):
-                headers["cookie"] = self._cookie
-                response = await client.post(url, headers=headers, json=body)
-                self._apply_response_cookies(response)
-                self._apply_client_cookies(client)
-        finally:
-            await client.aclose()
-
-        payload: dict[str, Any] = {}
-        try:
-            raw = response.json()
-            if isinstance(raw, dict):
-                payload = raw
-        except Exception:
-            payload = {}
-
-        success = bool(payload.get("success")) if payload else response.is_success
-        if response.is_error or not success:
-            message = str(payload.get("message") or "").strip() or f"HTTP {response.status_code}"
-            raise ValueError(message)
-
-        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-        checked_in = self._extract_optional_bool(data.get("checked_in"))
-        status, message = self._classify_checkin_status(
-            str(payload.get("message") or data.get("message") or "").strip(),
-            checked_in,
-        )
-        points_earned = self._extract_first_int(data.get("points_earned"))
-        if points_earned is None:
-            points_earned = self._extract_first_int(data.get("points"))
-        if points_earned is None:
-            points_earned = self._extract_first_int(data.get("change"))
-
-        return {
-            "success": status == "success",
-            "status": status,
-            "message": message,
-            "mode": "gamble" if gamble else "normal",
-            "method": "cookie",
-            "code": str(payload.get("code") or "200").strip(),
-            "data": data,
-            "user": {},
-            "points": None,
-            "points_earned": points_earned,
-            "checked_in": checked_in,
-        }
+        """兼容旧配置：HDHive 已移除 /api/checkin，统一改走网页 Server Action。"""
+        return await self.check_in(gamble=gamble)
 
     async def unlock_resource(self, slug: str) -> dict[str, Any]:
         normalized_slug = self._normalize_slug(slug)
