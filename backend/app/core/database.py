@@ -50,6 +50,7 @@ DOWNLOAD_RECORD_COLUMN_SQL = {
     "source_tmdb_id": "ALTER TABLE download_records ADD COLUMN source_tmdb_id INTEGER",
     "matched_media_title": "ALTER TABLE download_records ADD COLUMN matched_media_title VARCHAR(200)",
     "relevance_verified": "ALTER TABLE download_records ADD COLUMN relevance_verified BOOLEAN NOT NULL DEFAULT 0",
+    "resource_source_id": "ALTER TABLE download_records ADD COLUMN resource_source_id VARCHAR(100)",
 }
 
 SUBSCRIPTION_COLUMN_SQL = {

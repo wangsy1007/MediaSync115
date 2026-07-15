@@ -88,6 +88,28 @@ class TestSubscriptionLinkFallback:
         assert len(filtered) == 1
         assert filtered[0]["share_link"] == "https://115.com/s/sw2"
 
+    def test_filter_resources_excluding_source_ids(self) -> None:
+        resources = [
+            {"slug": "aaa111", "title": "资源 A"},
+            {"slug": "bbb222", "title": "资源 B"},
+        ]
+        filtered = SubscriptionService._filter_resources_excluding_source_ids(
+            resources,
+            {"aaa111"},
+        )
+        assert len(filtered) == 1
+        assert filtered[0]["slug"] == "bbb222"
+
+    def test_extract_download_record_relevance_fields_includes_source_id(self) -> None:
+        fields = SubscriptionService._extract_download_record_relevance_fields(
+            {
+                "slug": "df913ae5f38611f0a7c78e06b282dbd4",
+                "matched_media_title": "肖申克的救赎",
+                "hdhive_source_tmdb_id": 278,
+            }
+        )
+        assert fields["resource_source_id"] == "df913ae5f38611f0a7c78e06b282dbd4"
+
     def test_merge_auto_save_stats(self) -> None:
         target = {
             "saved": 0,

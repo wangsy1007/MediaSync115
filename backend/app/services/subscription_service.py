@@ -281,6 +281,13 @@ class SubscriptionService:
                             return
 
                         tv_missing_snapshot = cleanup_before.get("tv_missing_snapshot")
+                        tried_identifiers = None
+                        if not sub.has_successful_transfer and sub.auto_download:
+                            tried_identifiers = (
+                                await self._load_subscription_tried_identifiers(
+                                    inner_db, sub_id
+                                )
+                            )
                         (
                             resources,
                             fetch_trace,
@@ -290,6 +297,16 @@ class SubscriptionService:
                             sub,
                             hdhive_unlock_context,
                             source_order=source_order,
+                            exclude_urls=(
+                                tried_identifiers.get("urls")
+                                if tried_identifiers
+                                else None
+                            ),
+                            exclude_source_ids=(
+                                tried_identifiers.get("source_ids")
+                                if tried_identifiers
+                                else None
+                            ),
                         )
                         for trace in fetch_trace:
                             await self._create_step_log(
@@ -349,6 +366,42 @@ class SubscriptionService:
                         store_stats = await self._store_new_resources(inner_db, sub_id, resources)
                         created_records = store_stats["created_records"]
                         duplicate_urls = store_stats["duplicate_urls"]
+                        if (
+                            (force_auto_download or bool(sub.auto_download))
+                            and not sub.has_successful_transfer
+                            and not created_records
+                        ):
+                            tried_now = (
+                                await self._load_subscription_tried_identifiers(
+                                    inner_db, sub_id
+                                )
+                            )
+                            if tried_now["urls"] or tried_now["source_ids"]:
+                                await self._create_step_log(
+                                    inner_db,
+                                    run_id=run_id,
+                                    channel=normalized_channel,
+                                    subscription_id=sub_id,
+                                    subscription_title=sub_title,
+                                    step="auto_transfer_next_resource_fetch",
+                                    status="info",
+                                    message="上次转存未成功，正在尝试下一条资源",
+                                    payload={
+                                        "tried_url_count": len(tried_now["urls"]),
+                                        "tried_source_count": len(
+                                            tried_now["source_ids"]
+                                        ),
+                                    },
+                                )
+                                created_records = (
+                                    await self._fetch_and_store_next_records(
+                                        inner_db,
+                                        sub,
+                                        channel=normalized_channel,
+                                        hdhive_unlock_context=hdhive_unlock_context,
+                                        source_order=source_order,
+                                    )
+                                )
                         async with result_lock:
                             result["new_resource_count"] += len(created_records)
                             result["resource_checked_count"] += int(store_stats["checked_count"])
@@ -1572,6 +1625,7 @@ class SubscriptionService:
         hdhive_unlock_context: dict[str, Any] | None = None,
         source_order: list[str] | None = None,
         exclude_urls: set[str] | None = None,
+        exclude_source_ids: set[str] | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         traces: list[dict[str, Any]] = []
         source_attempts: list[dict[str, Any]] = []  # 记录每个来源的尝试结果
@@ -1676,9 +1730,54 @@ class SubscriptionService:
                                 },
                             }
                         )
+                    if exclude_source_ids:
+                        before_exclude = len(unlock_candidates)
+                        unlock_candidates = self._filter_resources_excluding_source_ids(
+                            unlock_candidates, exclude_source_ids
+                        )
+                        if before_exclude > len(unlock_candidates):
+                            traces.append(
+                                {
+                                    "step": "fetch_source_skip_tried",
+                                    "status": "info",
+                                    "message": (
+                                        f"已跳过 {before_exclude - len(unlock_candidates)} 条"
+                                        "已尝试过的 HDHive 资源，继续尝试下一条"
+                                    ),
+                                    "payload": {
+                                        "excluded_count": before_exclude
+                                        - len(unlock_candidates),
+                                    },
+                                }
+                            )
+                    if exclude_urls:
+                        before_exclude = len(unlock_candidates)
+                        unlock_candidates = self._filter_resources_excluding_urls(
+                            unlock_candidates, exclude_urls
+                        )
+                        if before_exclude > len(unlock_candidates):
+                            traces.append(
+                                {
+                                    "step": "fetch_source_skip_tried_urls",
+                                    "status": "info",
+                                    "message": (
+                                        f"已跳过 {before_exclude - len(unlock_candidates)} 条"
+                                        "已尝试过的分享链接"
+                                    ),
+                                    "payload": {
+                                        "excluded_count": before_exclude
+                                        - len(unlock_candidates),
+                                    },
+                                }
+                            )
+                    unlock_context = dict(
+                        hdhive_unlock_context or self._build_hdhive_unlock_context()
+                    )
+                    if exclude_source_ids:
+                        unlock_context["exclude_source_ids"] = list(exclude_source_ids)
                     source_resources = await self._prepare_hdhive_locked_resources(
                         unlock_candidates,
-                        hdhive_unlock_context or self._build_hdhive_unlock_context(),
+                        unlock_context,
                         traces,
                     )
                 else:
@@ -1686,6 +1785,10 @@ class SubscriptionService:
                     if pref_res:
                         source_resources = sort_by_preference(
                             source_resources, pref_res, []
+                        )
+                    if exclude_source_ids:
+                        source_resources = self._filter_resources_excluding_source_ids(
+                            source_resources, exclude_source_ids
                         )
                 if exclude_urls:
                     before_exclude = len(source_resources)
@@ -2370,6 +2473,11 @@ class SubscriptionService:
         local_failed = 0
         local_skipped = 0
         local_points_spent = 0
+        exclude_source_ids = {
+            str(item or "").strip()
+            for item in (context.get("exclude_source_ids") or [])
+            if str(item or "").strip()
+        }
         for item in normalized_items:
             if not isinstance(item, dict):
                 continue
@@ -2380,6 +2488,8 @@ class SubscriptionService:
                 continue
 
             slug = str(item.get("slug") or "").strip()
+            if slug and slug in exclude_source_ids:
+                continue
             unlock_points = self._safe_int(item.get("unlock_points"), default=0)
             locked = bool(item.get("hdhive_locked")) or (
                 unlock_points > 0 and not self._extract_resource_url(item)
@@ -2816,17 +2926,77 @@ class SubscriptionService:
             merged.append(record)
         return merged
 
+    async def _load_subscription_tried_identifiers(
+        self, db: AsyncSession, subscription_id: int
+    ) -> dict[str, set[str]]:
+        """获取订阅下已尝试过的资源 URL 与来源标识（如 HDHive slug）。"""
+        with db.no_autoflush:
+            result = await db.execute(
+                select(
+                    DownloadRecord.resource_url,
+                    DownloadRecord.resource_source_id,
+                ).where(DownloadRecord.subscription_id == subscription_id)
+            )
+        urls: set[str] = set()
+        source_ids: set[str] = set()
+        for row in result.all():
+            url = str(row[0] or "").strip()
+            if url:
+                urls.add(url)
+            source_id = str(row[1] or "").strip()
+            if source_id:
+                source_ids.add(source_id)
+        return {"urls": urls, "source_ids": source_ids}
+
     async def _load_subscription_resource_urls(
         self, db: AsyncSession, subscription_id: int
     ) -> set[str]:
         """获取订阅下已记录过的资源 URL，用于跳过失效/已尝试链接。"""
-        with db.no_autoflush:
-            result = await db.execute(
-                select(DownloadRecord.resource_url).where(
-                    DownloadRecord.subscription_id == subscription_id
-                )
-            )
-        return {str(row[0]).strip() for row in result.all() if row and row[0]}
+        tried = await self._load_subscription_tried_identifiers(db, subscription_id)
+        return tried["urls"]
+
+    async def _fetch_and_store_next_records(
+        self,
+        db: AsyncSession,
+        sub: "SubscriptionSnapshot",
+        *,
+        channel: str,
+        hdhive_unlock_context: dict[str, Any] | None,
+        source_order: list[str] | None,
+    ) -> list[DownloadRecord]:
+        tried = await self._load_subscription_tried_identifiers(db, sub.id)
+        resources, _, _ = await self._fetch_resources(
+            channel,
+            sub,
+            hdhive_unlock_context,
+            source_order=source_order,
+            exclude_urls=tried["urls"],
+            exclude_source_ids=tried["source_ids"],
+        )
+        if not resources:
+            return []
+        store_stats = await self._store_new_resources(db, sub.id, resources)
+        return list(store_stats.get("created_records") or [])
+
+    @staticmethod
+    def _resource_source_id(item: dict[str, Any]) -> str:
+        return str(item.get("slug") or item.get("id") or "").strip()
+
+    @classmethod
+    def _filter_resources_excluding_source_ids(
+        cls, resources: list[dict[str, Any]], exclude_source_ids: set[str]
+    ) -> list[dict[str, Any]]:
+        if not exclude_source_ids:
+            return list(resources)
+        filtered: list[dict[str, Any]] = []
+        for item in resources:
+            if not isinstance(item, dict):
+                continue
+            source_id = cls._resource_source_id(item)
+            if source_id and source_id in exclude_source_ids:
+                continue
+            filtered.append(item)
+        return filtered
 
     @staticmethod
     def _resource_candidate_url(item: dict[str, Any]) -> str:
@@ -2907,7 +3077,7 @@ class SubscriptionService:
             "link_fallback_rounds": 0,
         }
         pending_records = list(records or [])
-        if not pending_records:
+        if not pending_records and not enable_link_refetch:
             return merged
 
         last_stats: dict[str, Any] | None = None
@@ -2915,7 +3085,46 @@ class SubscriptionService:
 
         for round_idx in range(MAX_AUTO_TRANSFER_LINK_FALLBACK_ROUNDS):
             if not pending_records:
-                break
+                if not enable_link_refetch:
+                    break
+                pending_records = await self._fetch_and_store_next_records(
+                    db,
+                    sub,
+                    channel=channel,
+                    hdhive_unlock_context=hdhive_unlock_context,
+                    source_order=source_order,
+                )
+                if not pending_records:
+                    if round_idx > 0:
+                        await self._create_step_log(
+                            db,
+                            run_id=run_id,
+                            channel=channel,
+                            subscription_id=sub.id,
+                            subscription_title=sub.title,
+                            step="auto_transfer_link_fallback_empty",
+                            status="warning",
+                            message="未搜索到新的可用链接，停止回退尝试",
+                            payload={"round": round_idx},
+                        )
+                    break
+                if round_idx > 0:
+                    await self._create_step_log(
+                        db,
+                        run_id=run_id,
+                        channel=channel,
+                        subscription_id=sub.id,
+                        subscription_title=sub.title,
+                        step="auto_transfer_link_fallback_stored",
+                        status="success",
+                        message=(
+                            f"补充搜索完成，新增 {len(pending_records)} 条待转存资源"
+                        ),
+                        payload={
+                            "round": round_idx,
+                            "new_count": len(pending_records),
+                        },
+                    )
 
             last_attempted_count = len(pending_records)
             source_label = (
@@ -2986,31 +3195,14 @@ class SubscriptionService:
                 message="当前链接未转存成功，正在搜索下一条可用资源",
                 payload={"round": round_idx + 1},
             )
-            exclude_urls = await self._load_subscription_resource_urls(db, sub.id)
-            resources, fetch_trace, source_attempt_info = await self._fetch_resources(
-                channel,
+            pending_records = await self._fetch_and_store_next_records(
+                db,
                 sub,
-                hdhive_unlock_context,
+                channel=channel,
+                hdhive_unlock_context=hdhive_unlock_context,
                 source_order=source_order,
-                exclude_urls=exclude_urls,
             )
-            for trace in fetch_trace:
-                await self._create_step_log(
-                    db,
-                    run_id=run_id,
-                    channel=channel,
-                    subscription_id=sub.id,
-                    subscription_title=sub.title,
-                    step=str(trace.get("step") or "fetch_trace"),
-                    status=str(trace.get("status") or "info"),
-                    message=str(trace.get("message") or ""),
-                    payload=trace.get("payload")
-                    if isinstance(trace.get("payload"), dict)
-                    else None,
-                )
-
-            resources = self._filter_resources_excluding_urls(resources, exclude_urls)
-            if not resources:
+            if not pending_records:
                 await self._create_step_log(
                     db,
                     run_id=run_id,
@@ -3020,16 +3212,10 @@ class SubscriptionService:
                     step="auto_transfer_link_fallback_empty",
                     status="warning",
                     message="未搜索到新的可用链接，停止回退尝试",
-                    payload={
-                        "round": round_idx + 1,
-                        "excluded_url_count": len(exclude_urls),
-                        "summary": source_attempt_info.get("summary", ""),
-                    },
+                    payload={"round": round_idx + 1},
                 )
                 break
 
-            store_stats = await self._store_new_resources(db, sub.id, resources)
-            pending_records = list(store_stats.get("created_records") or [])
             await self._create_step_log(
                 db,
                 run_id=run_id,
@@ -3037,21 +3223,13 @@ class SubscriptionService:
                 subscription_id=sub.id,
                 subscription_title=sub.title,
                 step="auto_transfer_link_fallback_stored",
-                status="success" if pending_records else "warning",
-                message=(
-                    f"补充搜索完成，新增 {len(pending_records)} 条待转存资源"
-                    if pending_records
-                    else "补充搜索未获得新链接（可能均已尝试过）"
-                ),
+                status="success",
+                message=f"补充搜索完成，新增 {len(pending_records)} 条待转存资源",
                 payload={
                     "round": round_idx + 1,
                     "new_count": len(pending_records),
-                    "fetched_count": len(resources),
-                    "summary": source_attempt_info.get("summary", ""),
                 },
             )
-            if not pending_records:
-                break
 
         return merged
 
@@ -4021,11 +4199,13 @@ class SubscriptionService:
         matched_media_title = str(
             item.get("matched_media_title") or item.get("overview") or ""
         ).strip() or None
+        resource_source_id = SubscriptionService._resource_source_id(item) or None
 
         return {
             "source_tmdb_id": source_tmdb_id,
             "matched_media_title": matched_media_title,
             "relevance_verified": True,
+            "resource_source_id": resource_source_id,
         }
 
     @staticmethod
