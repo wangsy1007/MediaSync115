@@ -18,6 +18,20 @@ engine = create_async_engine(
 )
 
 
+@event.listens_for(engine.sync_engine, "connect")
+def _configure_sqlite_connection(dbapi_connection, _connection_record) -> None:
+    """为 NullPool 创建的每条 SQLite 连接应用一致的连接级参数。"""
+    cursor = dbapi_connection.cursor()
+    try:
+        # busy_timeout 是连接级设置，仅在 init_db 的那条连接上执行并不会
+        # 影响后续由 NullPool 新建的业务连接。
+        cursor.execute("PRAGMA busy_timeout=60000")
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+    finally:
+        cursor.close()
+
+
 async_session_maker = async_sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
 )
@@ -117,6 +131,21 @@ def is_missing_table_error(exc: Exception, *table_names: str) -> bool:
     return any(table_name.lower() in message for table_name in table_names)
 
 
+def is_database_locked_error(exc: BaseException) -> bool:
+    """识别 SQLite 的数据库、表和 schema 写锁错误。"""
+    if not isinstance(exc, OperationalError):
+        return False
+    message = str(exc or "").lower()
+    return any(
+        marker in message
+        for marker in (
+            "database is locked",
+            "database table is locked",
+            "database schema is locked",
+        )
+    )
+
+
 PERFORMANCE_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS ix_download_records_subscription_id "
     "ON download_records (subscription_id)",
@@ -142,6 +171,8 @@ async def init_db():
     async with engine.connect() as conn:
         await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.execute(text("PRAGMA busy_timeout=60000"))
+        await conn.execute(text("PRAGMA synchronous=NORMAL"))
+        await conn.execute(text("PRAGMA wal_autocheckpoint=1000"))
         await conn.commit()
     await ensure_tables_exist()
     await ensure_subscription_columns()

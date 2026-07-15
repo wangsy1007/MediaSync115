@@ -168,6 +168,7 @@ async def lifespan(app: FastAPI):
     pansou_service.set_base_url(runtime_settings_service.get_pansou_base_url())
     await init_db()
     await operation_log_service.prune(days=30)
+    await operation_log_service.start()
 
     from app.services.strm_service import strm_service
 
@@ -252,6 +253,7 @@ async def lifespan(app: FastAPI):
     await tg_bot_service.stop()
     await scheduler_manager.stop()
     await pansou_service.close()
+    await operation_log_service.stop()
     kafka_producer.close()
 
 

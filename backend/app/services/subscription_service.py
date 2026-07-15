@@ -2799,7 +2799,10 @@ class SubscriptionService:
             created_records.append(record)
 
         if created_records:
-            await db.flush()
+            # 资源记录一旦 flush，SQLite 写锁会一直持有到事务结束。这里后续会
+            # 执行搜索、115 转存和独立操作日志写入，因此必须立即提交，避免在
+            # 网络 I/O 期间占住唯一写锁，也避免另一个连接写日志时形成自锁。
+            await db.commit()
 
         return {
             "created_records": created_records,
