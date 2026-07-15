@@ -363,7 +363,9 @@ class SubscriptionService:
                                 "source_attempt_summary": source_summary,
                             },
                         )
-                        store_stats = await self._store_new_resources(inner_db, sub_id, resources)
+                        store_stats = await self._store_new_resources(
+                            inner_db, sub_id, resources, sub=sub
+                        )
                         created_records = store_stats["created_records"]
                         duplicate_urls = store_stats["duplicate_urls"]
                         if (
@@ -581,7 +583,7 @@ class SubscriptionService:
                                     tv_missing_snapshot=tv_missing_snapshot,
                                     hdhive_unlock_context=hdhive_unlock_context,
                                     source_order=source_order,
-                                    enable_link_refetch=False,
+                                    enable_link_refetch=True,
                                 )
                                 sub_saved_count += int(retry_auto_stats.get("saved") or 0)
                                 sub_failed_transfer_count += int(
@@ -2141,7 +2143,7 @@ class SubscriptionService:
                     resources = await hdhive_service.get_tv_pan115(sub.tmdb_id)
                 else:
                     resources = await hdhive_service.get_movie_pan115(sub.tmdb_id)
-                resources = self._normalize_hdhive_subscription_items(resources)
+                resources = self._normalize_hdhive_subscription_items(resources, sub=sub)
                 if runtime_settings_service.get_subscription_hdhive_prefer_free():
                     resources = hdhive_service.sort_free_first(resources)
                 traces.append(
@@ -2190,7 +2192,7 @@ class SubscriptionService:
             rows = await hdhive_service.get_pan115_by_keyword(
                 candidate, media_type=media_type
             )
-            rows = self._normalize_hdhive_subscription_items(rows)
+            rows = self._normalize_hdhive_subscription_items(rows, sub=sub)
             if runtime_settings_service.get_subscription_hdhive_prefer_free():
                 rows = hdhive_service.sort_free_first(rows)
             if rows:
@@ -2426,7 +2428,9 @@ class SubscriptionService:
         context: dict[str, Any],
         traces: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        normalized_items = self._normalize_hdhive_subscription_items(resources)
+        normalized_items = self._normalize_hdhive_subscription_items(
+            resources, sub=None
+        )
         if not normalized_items:
             return normalized_items
 
@@ -2739,6 +2743,7 @@ class SubscriptionService:
         db: AsyncSession,
         subscription_id: int,
         resources: list[dict[str, Any]],
+        sub: "SubscriptionSnapshot | None" = None,
     ) -> dict[str, Any]:
         from app.models.models import MediaStatus
 
@@ -2787,11 +2792,14 @@ class SubscriptionService:
                 resource_url=resource_url,
                 resource_type=resource_type,
                 status=MediaStatus.MATCHED,
-                **self._extract_download_record_relevance_fields(item),
+                **self._extract_download_record_relevance_fields(item, sub=sub),
             )
             db.add(record)
             existing_urls.add(resource_url)
             created_records.append(record)
+
+        if created_records:
+            await db.flush()
 
         return {
             "created_records": created_records,
@@ -2975,7 +2983,7 @@ class SubscriptionService:
         )
         if not resources:
             return []
-        store_stats = await self._store_new_resources(db, sub.id, resources)
+        store_stats = await self._store_new_resources(db, sub.id, resources, sub=sub)
         return list(store_stats.get("created_records") or [])
 
     @staticmethod
@@ -3077,6 +3085,7 @@ class SubscriptionService:
             "link_fallback_rounds": 0,
         }
         pending_records = list(records or [])
+        pending_records = self._dedupe_records_by_url(pending_records)
         if not pending_records and not enable_link_refetch:
             return merged
 
@@ -3258,6 +3267,7 @@ class SubscriptionService:
         saved = 0
         failed = 0
         errors: list[dict[str, Any]] = []
+        records = self._dedupe_records_by_url(list(records or []))
         tv_missing_enabled = False
         missing_episodes: set[tuple[int, int]] = set()
         is_tv_subscription = sub.media_type == MediaType.TV and sub.tmdb_id is not None
@@ -3340,6 +3350,7 @@ class SubscriptionService:
                 )
 
         for record in records:
+            self._backfill_download_record_relevance(record, sub)
             if not await self._is_resource_relevant_for_subscription(
                 sub,
                 record,
@@ -4185,11 +4196,45 @@ class SubscriptionService:
         }
 
     @staticmethod
+    def _backfill_download_record_relevance(
+        record: DownloadRecord,
+        sub: "SubscriptionSnapshot",
+    ) -> None:
+        """为历史入库记录补全归属元数据，避免转存阶段重复误判。"""
+        if record.source_tmdb_id is None and sub.tmdb_id is not None:
+            record.source_tmdb_id = sub.tmdb_id
+        if not str(record.matched_media_title or "").strip() and sub.title:
+            record.matched_media_title = str(sub.title).strip()
+        if not record.relevance_verified and record.source_tmdb_id is not None:
+            record.relevance_verified = True
+
+    @staticmethod
+    def _dedupe_records_by_url(
+        records: list[DownloadRecord],
+    ) -> list[DownloadRecord]:
+        deduped: list[DownloadRecord] = []
+        seen_urls: set[str] = set()
+        for record in records:
+            if not record:
+                continue
+            url = str(record.resource_url or "").strip()
+            if url:
+                if url in seen_urls:
+                    continue
+                seen_urls.add(url)
+            deduped.append(record)
+        return deduped
+
+    @staticmethod
     def _extract_download_record_relevance_fields(
         item: dict[str, Any],
+        *,
+        sub: "SubscriptionSnapshot | None" = None,
     ) -> dict[str, Any]:
         """从搜索候选资源提取归属元数据，供转存阶段复用。"""
         source_tmdb_id = item.get("hdhive_source_tmdb_id")
+        if source_tmdb_id is None and sub is not None and sub.tmdb_id is not None:
+            source_tmdb_id = sub.tmdb_id
         if source_tmdb_id is not None:
             try:
                 source_tmdb_id = int(source_tmdb_id)
@@ -4198,7 +4243,10 @@ class SubscriptionService:
 
         matched_media_title = str(
             item.get("matched_media_title") or item.get("overview") or ""
-        ).strip() or None
+        ).strip()
+        if not matched_media_title and sub is not None:
+            matched_media_title = str(sub.title or "").strip()
+        matched_media_title = matched_media_title or None
         resource_source_id = SubscriptionService._resource_source_id(item) or None
 
         return {
@@ -4403,12 +4451,18 @@ class SubscriptionService:
         if embedded_title:
             return False
 
+        share_link = self._extract_share_link_from_item(item)
+        if share_link:
+            verified = await self._verify_share_content_matches_subscription(
+                share_link,
+                expected_title,
+                expected_original_title,
+                expected_year,
+            )
+            if verified:
+                return True
+
         if not self._resource_has_identifiable_title(label):
-            share_link = self._extract_share_link_from_item(item)
-            if share_link:
-                return await self._verify_share_content_matches_subscription(
-                    share_link, expected_title, expected_original_title, expected_year
-                )
             return True
 
         return score >= 50 and strong_hit
@@ -4518,6 +4572,8 @@ class SubscriptionService:
     @staticmethod
     def _normalize_hdhive_subscription_items(
         items: list[dict[str, Any]],
+        *,
+        sub: "SubscriptionSnapshot | None" = None,
     ) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []
         for item in items:
@@ -4528,6 +4584,12 @@ class SubscriptionService:
                 row["pan115_share_link"] = str(row.get("share_link") or "").strip()
             if not row.get("name") and row.get("resource_name"):
                 row["name"] = str(row.get("resource_name") or "").strip()
+            if sub is not None:
+                if row.get("hdhive_source_tmdb_id") is None and sub.tmdb_id is not None:
+                    row["hdhive_source_tmdb_id"] = sub.tmdb_id
+                if not row.get("matched_media_title"):
+                    row["matched_media_title"] = str(sub.title or "").strip()
+                row["relevance_verified"] = True
             normalized.append(row)
         return normalized
 
@@ -4646,9 +4708,28 @@ class SubscriptionService:
         return bool(re.fullmatch(r"[a-zA-Z0-9]+(?:-[a-zA-Z0-9]{4})?", value))
 
     @staticmethod
+    def _is_expired_share_link_error(error_text: str) -> bool:
+        text = str(error_text or "").lower()
+        if not text:
+            return False
+        tokens = (
+            "链接已过期",
+            "4100018",
+            "link expired",
+            "share expired",
+            "分享已过期",
+            "分享链接失效",
+        )
+        return any(token in text for token in tokens)
+
+    @staticmethod
     def _is_retryable_transfer_error(error_text: str) -> bool:
         text = str(error_text or "").lower()
         if not text:
+            return False
+        if SubscriptionService._is_expired_share_link_error(error_text):
+            return False
+        if "资源与订阅不匹配" in str(error_text or ""):
             return False
         tokens = (
             "share_api_method_not_allowed",

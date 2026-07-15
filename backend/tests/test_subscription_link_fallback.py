@@ -110,6 +110,37 @@ class TestSubscriptionLinkFallback:
         )
         assert fields["resource_source_id"] == "df913ae5f38611f0a7c78e06b282dbd4"
 
+    def test_extract_download_record_relevance_fields_falls_back_to_subscription(self) -> None:
+        sub = _movie_snapshot()
+        sub.tmdb_id = 278
+        sub.title = "肖申克的救赎"
+        fields = SubscriptionService._extract_download_record_relevance_fields(
+            {"slug": "abc123", "title": "4K蓝光原盘"},
+            sub=sub,
+        )
+        assert fields["source_tmdb_id"] == 278
+        assert fields["matched_media_title"] == "肖申克的救赎"
+        assert fields["relevance_verified"] is True
+
+    def test_dedupe_records_by_url(self) -> None:
+        from app.models.models import DownloadRecord
+
+        records = [
+            DownloadRecord(resource_url="https://115.com/s/a"),
+            DownloadRecord(resource_url="https://115.com/s/a"),
+            DownloadRecord(resource_url="https://115.com/s/b"),
+        ]
+        deduped = SubscriptionService._dedupe_records_by_url(records)
+        assert len(deduped) == 2
+
+    def test_expired_share_link_is_not_retryable(self) -> None:
+        assert SubscriptionService._is_expired_share_link_error(
+            "[Errno 5] {'error': '链接已过期', 'errno': 4100018}"
+        )
+        assert not SubscriptionService._is_retryable_transfer_error(
+            "[Errno 5] {'error': '链接已过期', 'errno': 4100018}"
+        )
+
     def test_merge_auto_save_stats(self) -> None:
         target = {
             "saved": 0,

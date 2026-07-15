@@ -212,6 +212,29 @@ class TestSubscriptionResourceRelevance:
           sub, record, context
       )
 
+  @pytest.mark.asyncio
+  async def test_accepts_legacy_download_record_after_backfill(self) -> None:
+      """历史记录缺少归属元数据时，转存前应自动补全订阅归属。"""
+      sub = _movie_snapshot(title="肖申克的救赎", tmdb_id=278, year="1994")
+      context = {
+          "title": "肖申克的救赎",
+          "original_title": "The Shawshank Redemption",
+          "year": "1994",
+      }
+      record = DownloadRecord(
+          subscription_id=6,
+          resource_name="4K蓝光原盘，内封中文字幕，HDR+杜比视界！",
+          resource_url="https://115.com/s/example",
+          resource_type="pan115",
+      )
+      SubscriptionService._backfill_download_record_relevance(record, sub)
+      assert record.source_tmdb_id == 278
+      assert record.matched_media_title == "肖申克的救赎"
+      assert record.relevance_verified is True
+      assert await subscription_service._is_resource_relevant_for_subscription(
+          sub, record, context
+      )
+
   def test_extract_download_record_relevance_fields(self) -> None:
       fields = SubscriptionService._extract_download_record_relevance_fields(
           {
@@ -223,3 +246,12 @@ class TestSubscriptionResourceRelevance:
       assert fields["source_tmdb_id"] == 278
       assert fields["matched_media_title"] == "肖申克的救赎"
       assert fields["relevance_verified"] is True
+
+  def test_extract_download_record_relevance_fields_with_subscription(self) -> None:
+      sub = _movie_snapshot(title="星际穿越", tmdb_id=157336, year="2014")
+      fields = SubscriptionService._extract_download_record_relevance_fields(
+          {"slug": "slug-1", "title": "2160p REMUX"},
+          sub=sub,
+      )
+      assert fields["source_tmdb_id"] == 157336
+      assert fields["matched_media_title"] == "星际穿越"
