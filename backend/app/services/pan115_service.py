@@ -1470,6 +1470,38 @@ class Pan115Service:
                 offset += limit
         return episodes
 
+    async def _collect_tv_existing_episodes_for_transfer(
+        self,
+        *,
+        target_cid: str,
+        show_title: str = "",
+    ) -> set[tuple[int, int]]:
+        """
+        转存补缺集时判定「已有集数」：
+        - 归档正式库（输出目录）中已入库的集数
+        - 本次转存目标目录内已有的集数
+        监听目录根下待归档的旧文件不计入，避免误跳过缺集补全。
+        """
+        from app.services.runtime_settings_service import runtime_settings_service
+
+        episodes: set[tuple[int, int]] = set()
+        title = str(show_title or "").strip()
+
+        target = str(target_cid or "").strip()
+        if target and target != "0":
+            episodes |= await self.collect_tv_episodes_under_folder(
+                target,
+                show_title=title,
+            )
+
+        output_cid = runtime_settings_service.get_archive_output_cid()
+        if output_cid and title:
+            episodes |= await self.collect_tv_episodes_under_folder(
+                output_cid,
+                show_title=title,
+            )
+        return episodes
+
     @classmethod
     def _select_tv_files_for_transfer(
         cls,
@@ -1512,8 +1544,8 @@ class Pan115Service:
         if not is_tv_context:
             return selected_files, {}
 
-        existing = await self.collect_tv_episodes_under_folder(
-            target_cid,
+        existing = await self._collect_tv_existing_episodes_for_transfer(
+            target_cid=str(target_cid or ""),
             show_title=show_title,
         )
         kept, skip_map = dedupe_tv_transfer_files(
@@ -1522,8 +1554,9 @@ class Pan115Service:
         )
         if skip_map:
             logger.info(
-                "转存按集去重：目标目录=%s，跳过 %s 个重复文件",
+                "转存按集去重：目标目录=%s，正式库+目标目录已有 %s 集，跳过 %s 个文件",
                 target_cid,
+                len(existing),
                 len(skip_map),
             )
         return kept, skip_map
@@ -2632,6 +2665,14 @@ class Pan115Service:
         selected_files = self._select_files_for_best_quality_transfer(
             all_files, quality_filter, media_type
         )
+        if not str(media_type or "").strip().lower():
+            tv_count = sum(
+                1
+                for item in selected_files
+                if self._is_tv_video_filename(self._share_item_name(item))
+            )
+            if tv_count >= max(1, len(selected_files) // 2):
+                media_type = "tv"
         selected_files, _skip_map = await self._finalize_tv_transfer_selection(
             selected_files,
             target_folder_id,

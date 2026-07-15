@@ -781,7 +781,13 @@ class ArchiveService:
                 }
             tv_entries.append(entry)
 
-        _keep_fids, skip_map = dedupe_tv_file_entries(tv_entries)
+        skip_map: dict[str, str] = {}
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for entry in tv_entries:
+            grouped.setdefault(int(entry.get("group_id") or 0), []).append(entry)
+        for entries in grouped.values():
+            _, group_skip = dedupe_tv_file_entries(entries)
+            skip_map.update(group_skip)
         return skip_map
 
     @staticmethod

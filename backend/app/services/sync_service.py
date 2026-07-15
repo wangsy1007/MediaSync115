@@ -152,8 +152,8 @@ class SyncService:
                 else:
                     selected_files.extend(unparsed_video_candidates)
 
-            pan_existing = await pan115_service.collect_tv_episodes_under_folder(
-                target_folder_id
+            pan_existing = await pan115_service._collect_tv_existing_episodes_for_transfer(
+                target_cid=str(target_folder_id or ""),
             )
             selected_files, _tv_skip = dedupe_tv_transfer_files(
                 selected_files,
