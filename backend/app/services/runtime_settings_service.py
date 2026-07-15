@@ -661,14 +661,14 @@ class RuntimeSettingsService:
         value = self._data.get("emby_sync_interval_minutes")
         if value is not None:
             try:
-                return max(15, int(value))
+                return max(1, int(value))
             except Exception:
                 pass
         # 兼容旧版 hours 配置，自动转换为分钟
         old_hours = self._data.get("emby_sync_interval_hours")
         if old_hours is not None:
             try:
-                return max(15, int(old_hours) * 60)
+                return max(1, int(old_hours) * 60)
             except Exception:
                 pass
         return 1440
@@ -782,14 +782,14 @@ class RuntimeSettingsService:
         value = self._data.get("feiniu_sync_interval_minutes")
         if value is not None:
             try:
-                return max(15, int(value))
+                return max(1, int(value))
             except Exception:
                 pass
         # 兼容旧版 hours 配置，自动转换为分钟
         old_hours = self._data.get("feiniu_sync_interval_hours")
         if old_hours is not None:
             try:
-                return max(15, int(old_hours) * 60)
+                return max(1, int(old_hours) * 60)
             except Exception:
                 pass
         return 1440

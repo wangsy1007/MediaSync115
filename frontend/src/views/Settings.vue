@@ -492,8 +492,9 @@
             <el-form-item label="同步间隔(分钟)">
               <el-input-number
                 v-model="embyForm.syncIntervalMinutes"
-                :min="15"
+                :min="1"
                 :max="10080"
+                :step="1"
                 :disabled="!embyForm.syncEnabled"
               />
             </el-form-item>
@@ -598,8 +599,9 @@
             <el-form-item label="同步间隔(分钟)">
               <el-input-number
                 v-model="feiniuForm.syncIntervalMinutes"
-                :min="15"
+                :min="1"
                 :max="10080"
+                :step="1"
                 :disabled="!feiniuForm.syncEnabled"
               />
             </el-form-item>

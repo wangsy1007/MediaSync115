@@ -445,8 +445,8 @@ def _validate_emby_sync_settings(merged_settings: dict) -> None:
     # 兼容旧版 hours：如果值 <= 168 视为小时，转换为分钟
     if 0 < interval_minutes <= 168:
         interval_minutes = interval_minutes * 60
-    if interval_minutes < 15:
-        raise HTTPException(status_code=400, detail="Emby 同步间隔必须大于等于 15 分钟")
+    if interval_minutes < 1:
+        raise HTTPException(status_code=400, detail="Emby 同步间隔必须大于等于 1 分钟")
 
 
 def _validate_feiniu_sync_settings(merged_settings: dict) -> None:
@@ -467,8 +467,8 @@ def _validate_feiniu_sync_settings(merged_settings: dict) -> None:
     # 兼容旧版 hours：如果值 <= 168 视为小时，转换为分钟
     if 0 < interval_minutes <= 168:
         interval_minutes = interval_minutes * 60
-    if interval_minutes < 15:
-        raise HTTPException(status_code=400, detail="飞牛同步间隔必须大于等于 15 分钟")
+    if interval_minutes < 1:
+        raise HTTPException(status_code=400, detail="飞牛同步间隔必须大于等于 1 分钟")
 
 
 @router.get("/runtime")
