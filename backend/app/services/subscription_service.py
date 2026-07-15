@@ -3343,6 +3343,7 @@ class SubscriptionService:
         missing_episodes: set[tuple[int, int]] = set()
         is_tv_subscription = sub.media_type == MediaType.TV and sub.tmdb_id is not None
         subscription_completed = False
+        archive_needed = False
         cleanup_step = ""
         cleanup_message = ""
         cleanup_payload: dict[str, Any] = {}
@@ -3734,9 +3735,7 @@ class SubscriptionService:
                         "精准转存",
                         getattr(sub, "poster_path", None),
                     )
-                    await media_postprocess_service.trigger_archive_after_transfer(
-                        trigger="subscription_transfer"
-                    )
+                    archive_needed = True
                     await self._create_step_log(
                         db,
                         run_id=run_id,
@@ -3847,9 +3846,7 @@ class SubscriptionService:
                         "分享转存",
                         getattr(sub, "poster_path", None),
                     )
-                    await media_postprocess_service.trigger_archive_after_transfer(
-                        trigger="subscription_transfer"
-                    )
+                    archive_needed = True
                     await self._create_step_log(
                         db,
                         run_id=run_id,
@@ -4030,6 +4027,11 @@ class SubscriptionService:
                         "error": str(exc),
                     }
                 )
+
+        if archive_needed:
+            await media_postprocess_service.trigger_archive_after_transfer(
+                trigger="subscription_transfer"
+            )
 
         return {
             "saved": saved,
