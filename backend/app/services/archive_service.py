@@ -11,6 +11,7 @@ from app.models.archive import ArchiveStatus, ArchiveTask
 from app.models.models import DownloadRecord, MediaType, Subscription
 from app.services.transfer_intent_service import (
     extract_chinese_title_from_text,
+    intent_matches_file,
     pick_preferred_chinese_title,
     transfer_intent_service,
 )
@@ -907,9 +908,19 @@ class ArchiveService:
             str(item.get("cid") or ""),
             fid,
             str(item.get("relative_path") or ""),
+            tmdb_id=int(matched.get("tmdb_id") or 0) or None,
             media_type=str(parsed.get("media_type") or "movie"),
+            filename=filename,
         )
         intent = transfer_context.get("intent") or {}
+        if intent and not intent_matches_file(
+            intent,
+            filename=filename,
+            folder_name=str(transfer_context.get("folder_name") or ""),
+            tmdb_id=int(matched.get("tmdb_id") or 0) or None,
+        ):
+            transfer_context["intent"] = {}
+            intent = {}
         if intent.get("tmdb_id"):
             intent_matched = await self._identify_by_tmdb_id(
                 int(intent["tmdb_id"]),
@@ -927,7 +938,7 @@ class ArchiveService:
             display_title = self._resolve_archive_display_title(
                 parsed,
                 matched,
-                transfer_context=transfer_context,
+                transfer_context={**transfer_context, "filename": filename},
             )
             title = display_title
             year = str(matched.get("year") or parsed.get("year") or "")
@@ -1101,21 +1112,31 @@ class ArchiveService:
         )
 
         try:
+            matched = await self.identify_media(parsed)
             transfer_context = await self._lookup_transfer_context(
                 str(item.get("cid") or source_cid or ""),
                 fid,
                 str(item.get("relative_path") or ""),
+                tmdb_id=int(matched.get("tmdb_id") or 0) if matched else None,
                 media_type=str(parsed.get("media_type") or "movie"),
+                filename=filename,
             )
             intent = transfer_context.get("intent") or {}
-            matched: dict[str, Any] | None = None
+            if intent and matched and not intent_matches_file(
+                intent,
+                filename=filename,
+                folder_name=str(transfer_context.get("folder_name") or ""),
+                tmdb_id=int(matched.get("tmdb_id") or 0) or None,
+            ):
+                transfer_context["intent"] = {}
+                intent = {}
             if intent.get("tmdb_id"):
-                matched = await self._identify_by_tmdb_id(
+                intent_matched = await self._identify_by_tmdb_id(
                     int(intent["tmdb_id"]),
                     str(intent.get("media_type") or parsed.get("media_type") or "movie"),
                 )
-            if not matched:
-                matched = await self.identify_media(parsed)
+                if intent_matched:
+                    matched = intent_matched
             if not matched:
                 raise ValueError("TMDB 未匹配到可用结果")
 
@@ -1123,7 +1144,7 @@ class ArchiveService:
             display_title = self._resolve_archive_display_title(
                 parsed,
                 matched,
-                transfer_context=transfer_context,
+                transfer_context={**transfer_context, "filename": filename},
             )
             title = display_title
             year = str(matched.get("year") or parsed.get("year") or "")
@@ -1307,14 +1328,19 @@ class ArchiveService:
         *,
         tmdb_id: int | None = None,
         media_type: str = "",
+        filename: str = "",
     ) -> dict[str, Any]:
         resource_name = ""
         subscription_title = ""
         subscription_title_by_tmdb = ""
+        folder_name = self._extract_transfer_folder_name(relative_path)
+        file_title_hint = extract_chinese_title_from_text(
+            filename or (relative_path.rsplit("/", 1)[-1] if relative_path else "")
+        )
         lookup_ids = [value for value in (parent_cid, fid) if str(value or "").strip()]
         if lookup_ids:
             async with async_session_maker() as db:
-                result = await db.execute(
+                stmt = (
                     select(DownloadRecord.resource_name, Subscription.title)
                     .join(
                         Subscription,
@@ -1326,17 +1352,44 @@ class ArchiveService:
                         DownloadRecord.completed_at.desc().nullslast(),
                         DownloadRecord.created_at.desc(),
                     )
-                    .limit(1)
                 )
+                if file_title_hint:
+                    stmt = stmt.where(
+                        DownloadRecord.resource_name.contains(file_title_hint)
+                        | Subscription.title.contains(file_title_hint)
+                    )
+                result = await db.execute(stmt.limit(1))
                 row = result.first()
                 if row:
                     resource_name = str(row.resource_name or "").strip()
                     subscription_title = str(row.title or "").strip()
+                elif file_title_hint:
+                    fallback = await db.execute(
+                        select(DownloadRecord.resource_name, Subscription.title)
+                        .join(
+                            Subscription,
+                            DownloadRecord.subscription_id == Subscription.id,
+                            isouter=True,
+                        )
+                        .where(DownloadRecord.file_id.in_(lookup_ids))
+                        .order_by(
+                            DownloadRecord.completed_at.desc().nullslast(),
+                            DownloadRecord.created_at.desc(),
+                        )
+                        .limit(1)
+                    )
+                    row = fallback.first()
+                    if row:
+                        resource_name = str(row.resource_name or "").strip()
+                        subscription_title = str(row.title or "").strip()
 
         intent = await transfer_intent_service.find_best_match(
             parent_cid=parent_cid,
             file_fid=fid,
+            tmdb_id=tmdb_id,
             media_type=media_type,
+            filename=filename,
+            folder_name=folder_name,
         )
 
         lookup_tmdb_id = int(intent["tmdb_id"]) if intent and intent.get("tmdb_id") else None
@@ -1358,7 +1411,6 @@ class ArchiveService:
                 )
                 subscription_title_by_tmdb = str(sub_result.scalar_one_or_none() or "").strip()
 
-        folder_name = self._extract_transfer_folder_name(relative_path)
         if not resource_name and folder_name:
             resource_name = folder_name
 
@@ -1368,6 +1420,7 @@ class ArchiveService:
             "subscription_title_by_tmdb": subscription_title_by_tmdb,
             "folder_name": folder_name,
             "intent": intent or {},
+            "filename": filename,
         }
 
     def _resolve_archive_display_title(
@@ -1381,6 +1434,15 @@ class ArchiveService:
         media_type = str(parsed.get("media_type") or "movie")
         intent = context.get("intent") or {}
         intent_title = str(intent.get("display_title") or "").strip()
+        source_filename = str(context.get("filename") or parsed.get("source_filename") or "")
+
+        if intent_title and not intent_matches_file(
+            intent,
+            filename=source_filename,
+            folder_name=str(context.get("folder_name") or ""),
+            tmdb_id=int(matched.get("tmdb_id") or 0) or None,
+        ):
+            intent_title = ""
 
         folder_title = extract_chinese_title_from_text(str(context.get("folder_name") or ""))
         resource_title = extract_chinese_title_from_text(

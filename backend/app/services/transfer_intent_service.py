@@ -19,6 +19,7 @@ _CJK_RE = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
 _YEAR_SUFFIX_RE = re.compile(r"\s*[\(（]\s*\d{4}\s*[\)）]\s*$")
 _RETENTION_DAYS = 90
 _MAX_ROWS = 2000
+_SHARED_PARENT_SCAN_LIMIT = 300
 
 
 def contains_cjk(text: str) -> bool:
@@ -62,6 +63,63 @@ def pick_preferred_chinese_title(*candidates: str) -> str:
         if contains_cjk(value):
             return value
     return cleaned[0] if cleaned else ""
+
+
+def _title_hints(*candidates: str) -> list[str]:
+    hints: list[str] = []
+    for candidate in candidates:
+        value = extract_chinese_title_from_text(candidate)
+        if value and value not in hints:
+            hints.append(value)
+    return hints
+
+
+def _titles_overlap(left: str, right: str) -> bool:
+    a = str(left or "").strip()
+    b = str(right or "").strip()
+    if not a or not b:
+        return False
+    if a == b or a in b or b in a:
+        return True
+    a_latin = re.sub(r"[^a-z0-9]+", "", a.lower())
+    b_latin = re.sub(r"[^a-z0-9]+", "", b.lower())
+    return bool(a_latin and b_latin and len(a_latin) >= 3 and a_latin == b_latin)
+
+
+def intent_matches_file(
+    intent: dict[str, Any] | None,
+    *,
+    filename: str = "",
+    folder_name: str = "",
+    tmdb_id: int | None = None,
+) -> bool:
+    """判断转存意图是否与待归档文件属于同一部影视。"""
+    if not isinstance(intent, dict) or not intent:
+        return False
+
+    parsed_tmdb_id = int(tmdb_id) if tmdb_id and int(tmdb_id) > 0 else None
+    intent_tmdb_id = (
+        int(intent["tmdb_id"])
+        if intent.get("tmdb_id") and int(intent["tmdb_id"]) > 0
+        else None
+    )
+    if parsed_tmdb_id and intent_tmdb_id:
+        return parsed_tmdb_id == intent_tmdb_id
+
+    file_hints = _title_hints(filename, folder_name)
+    intent_hints = _title_hints(
+        str(intent.get("display_title") or ""),
+        str(intent.get("resource_name") or ""),
+    )
+    if not file_hints:
+        return False
+    if not intent_hints:
+        return False
+    return any(
+        _titles_overlap(file_hint, intent_hint)
+        for file_hint in file_hints
+        for intent_hint in intent_hints
+    )
 
 
 class TransferIntentService:
@@ -117,57 +175,100 @@ class TransferIntentService:
         file_fid: str = "",
         tmdb_id: int | None = None,
         media_type: str = "",
+        filename: str = "",
+        folder_name: str = "",
     ) -> dict[str, Any] | None:
         parent = str(parent_cid or "").strip()
         fid = str(file_fid or "").strip()
         normalized_type = str(media_type or "").strip().lower()
         parsed_tmdb_id = int(tmdb_id) if tmdb_id and int(tmdb_id) > 0 else None
+        filename_text = str(filename or "").strip()
+        folder_text = str(folder_name or "").strip()
 
         async with async_session_maker() as db:
-            queries: list[Any] = []
             if parent:
-                queries.append(
-                    select(TransferIntent)
-                    .where(TransferIntent.target_folder_id == parent)
-                    .order_by(TransferIntent.created_at.desc())
-                    .limit(1)
-                )
-                queries.append(
-                    select(TransferIntent)
-                    .where(TransferIntent.target_parent_id == parent)
-                    .order_by(TransferIntent.created_at.desc())
-                    .limit(1)
-                )
+                folder_row = (
+                    await db.execute(
+                        select(TransferIntent)
+                        .where(TransferIntent.target_folder_id == parent)
+                        .order_by(TransferIntent.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                payload = self._row_to_dict(folder_row)
+                if payload and intent_matches_file(
+                    payload,
+                    filename=filename_text,
+                    folder_name=folder_text,
+                    tmdb_id=parsed_tmdb_id,
+                ):
+                    return payload
+
             if parsed_tmdb_id:
                 stmt = (
                     select(TransferIntent)
                     .where(TransferIntent.tmdb_id == parsed_tmdb_id)
                     .order_by(TransferIntent.created_at.desc())
-                    .limit(1)
+                    .limit(_SHARED_PARENT_SCAN_LIMIT)
                 )
                 if normalized_type in {"movie", "tv"}:
                     stmt = stmt.where(TransferIntent.media_type == normalized_type)
-                queries.append(stmt)
+                rows = (await db.execute(stmt)).scalars().all()
+                for row in rows:
+                    payload = self._row_to_dict(row)
+                    if not payload:
+                        continue
+                    if intent_matches_file(
+                        payload,
+                        filename=filename_text,
+                        folder_name=folder_text,
+                        tmdb_id=parsed_tmdb_id,
+                    ):
+                        return payload
 
-            for stmt in queries:
-                row = (await db.execute(stmt)).scalar_one_or_none()
-                payload = self._row_to_dict(row)
-                if payload:
-                    return payload
+            if parent:
+                rows = (
+                    await db.execute(
+                        select(TransferIntent)
+                        .where(
+                            (TransferIntent.target_parent_id == parent)
+                            | (TransferIntent.target_folder_id == parent)
+                        )
+                        .order_by(TransferIntent.created_at.desc())
+                        .limit(_SHARED_PARENT_SCAN_LIMIT)
+                    )
+                ).scalars().all()
+                for row in rows:
+                    payload = self._row_to_dict(row)
+                    if not payload:
+                        continue
+                    if intent_matches_file(
+                        payload,
+                        filename=filename_text,
+                        folder_name=folder_text,
+                        tmdb_id=parsed_tmdb_id,
+                    ):
+                        return payload
 
-            if parent or fid:
-                recent = (
+            if fid:
+                rows = (
                     await db.execute(
                         select(TransferIntent)
                         .order_by(TransferIntent.created_at.desc())
-                        .limit(200)
+                        .limit(_SHARED_PARENT_SCAN_LIMIT)
                     )
                 ).scalars().all()
-                for row in recent:
-                    if parent and row.target_folder_id == parent:
-                        return self._row_to_dict(row)
-                    if parent and row.target_parent_id == parent:
-                        return self._row_to_dict(row)
+                for row in rows:
+                    if row.target_folder_id != fid and row.target_parent_id != fid:
+                        continue
+                    payload = self._row_to_dict(row)
+                    if payload and intent_matches_file(
+                        payload,
+                        filename=filename_text,
+                        folder_name=folder_text,
+                        tmdb_id=parsed_tmdb_id,
+                    ):
+                        return payload
         return None
 
     @staticmethod
