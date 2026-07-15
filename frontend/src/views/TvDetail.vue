@@ -428,6 +428,7 @@
             :media-type="'tv'"
             :tmdb-id="tvId"
             :visible="activeTab === 'quark'"
+            :skip-initial-auto-fetch="skipQuarkAutoFetch"
             :quark-configured="quarkConfigured"
             :season="quarkSeason"
             :title="tv?.name || tv?.title || ''"
@@ -731,6 +732,7 @@ import { Star, Plus, ArrowLeft } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import QuarkResourceTab from '@/components/detail/QuarkResourceTab.vue'
 import { getVisibleTabs, loadVisibleTabs, isTabVisible, getOrderedVisibleSubTabs, getFirstVisibleSubTabName, getOrderedVisibleMainTabs } from '@/utils/detailTabs'
+import { useDetailResourceTabAutoFetch } from '@/utils/detailResourceTabAutoFetch'
 import { extractTags } from '@/utils/resourceTags'
 import { navigateBackFromDetail } from '@/utils/navigation'
 import { copyText } from '@/utils/clipboard'
@@ -1342,6 +1344,43 @@ const handleFetchButailingMagnet = async () => {
   }
 }
 
+const autoFetchPan115SubTab = (tab) => {
+  if (tab === 'pansou' && !pansouTried.value) {
+    void handleFetchPansouPan115()
+    return
+  }
+  if (tab === 'hdhive' && !hdhiveTried.value) {
+    void handleFetchHdhivePan115()
+    return
+  }
+  if (tab === 'tg' && !tgTried.value) {
+    void handleFetchTgPan115()
+  }
+}
+
+const autoFetchMagnetSubTab = (tab) => {
+  if (tab === 'seedhub' && !seedhubMagnetTried.value) {
+    void handleFetchSeedhubMagnet()
+    return
+  }
+  if (tab === 'butailing' && !butailingMagnetTried.value) {
+    void handleFetchButailingMagnet()
+  }
+}
+
+const {
+  captureInitialTabs,
+  skipQuarkAutoFetch,
+  setupAutoFetchWatchers,
+} = useDetailResourceTabAutoFetch({
+  activeTab,
+  pan115SourceTab,
+  magnetSourceTab,
+  onPan115SubTab: autoFetchPan115SubTab,
+  onMagnetSubTab: autoFetchMagnetSubTab,
+})
+setupAutoFetchWatchers()
+
 const handleSeasonChange = () => {
   magnetSourceTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'magnet') || 'seedhub'
   magnetPager.value = { seedhub: 1, butailing: 1 }
@@ -1354,6 +1393,7 @@ const handleSeasonChange = () => {
   hdhiveTried.value = false
   tgTried.value = false
   pan115SourceTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'pan115') || 'pansou'
+  captureInitialTabs()
 }
 
 const handleSubscribe = async () => {
@@ -1796,6 +1836,7 @@ watch(() => route.params.id, () => {
   magnetResources.value = []
   fetchTv()
   checkSubscribed()
+  captureInitialTabs()
 })
 
 onMounted(() => {
@@ -1807,6 +1848,7 @@ onMounted(() => {
   fetchTv()
   checkSubscribed()
   refreshQuarkConfigured()
+  captureInitialTabs()
 })
 </script>
 

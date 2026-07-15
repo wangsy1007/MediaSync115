@@ -126,6 +126,7 @@ const props = defineProps({
   quarkConfigured: { type: Boolean, default: false },
   season: { type: Number, default: null },
   title: { type: String, default: '' },
+  skipInitialAutoFetch: { type: Boolean, default: false },
 })
 
 const router = useRouter()
@@ -244,11 +245,11 @@ watch(orderedQuarkSubTabs, (tabs) => {
   }
 })
 
-// 懒加载：visible / activeSubTab 变化时按需触发
 watch(
-  () => [props.visible, activeSubTab.value],
-  ([visible, sub]) => {
+  () => [props.visible, activeSubTab.value, props.skipInitialAutoFetch],
+  ([visible, sub, skipInitialAutoFetch]) => {
     if (!visible) return
+    if (skipInitialAutoFetch) return
     if (loaded[sub]) return
     fetchResources(sub)
   },
@@ -262,7 +263,7 @@ watch(
     Object.assign(loaded, { pansou: false, hdhive: false, tg: false })
     Object.assign(tried, { pansou: false, hdhive: false, tg: false })
     Object.assign(resources, { pansou: [], hdhive: [], tg: [] })
-    if (props.visible && !loaded[activeSubTab.value]) {
+    if (props.visible && !props.skipInitialAutoFetch && !loaded[activeSubTab.value]) {
       fetchResources(activeSubTab.value)
     }
   }

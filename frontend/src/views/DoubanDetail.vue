@@ -376,6 +376,7 @@
             :media-type="mediaType"
             :tmdb-id="mappedTmdbId"
             :visible="activeTab === 'quark'"
+            :skip-initial-auto-fetch="skipQuarkAutoFetch"
             :quark-configured="quarkConfigured"
             :title="detail?.title || ''"
           />
@@ -643,6 +644,7 @@ import { ArrowLeft, VideoCamera } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import QuarkResourceTab from '@/components/detail/QuarkResourceTab.vue'
 import { getVisibleTabs, loadVisibleTabs, isTabVisible, getOrderedVisibleSubTabs, getFirstVisibleSubTabName, getOrderedVisibleMainTabs } from '@/utils/detailTabs'
+import { useDetailResourceTabAutoFetch } from '@/utils/detailResourceTabAutoFetch'
 import { extractTags } from '@/utils/resourceTags'
 import { navigateBackFromDetail } from '@/utils/navigation'
 import { copyText } from '@/utils/clipboard'
@@ -1705,6 +1707,43 @@ const openDoubanPage = () => {
   window.open(url, '_blank', 'noopener,noreferrer')
 }
 
+const autoFetchPan115SubTab = (tab) => {
+  if (tab === 'pansou' && !pansouTried.value) {
+    void fetchPansouPan115()
+    return
+  }
+  if (tab === 'hdhive' && !hdhiveTried.value) {
+    void fetchHdhivePan115()
+    return
+  }
+  if (tab === 'tg' && !tgTried.value) {
+    void fetchTgPan115()
+  }
+}
+
+const autoFetchMagnetSubTab = (tab) => {
+  if (tab === 'seedhub' && !seedhubMagnetTried.value) {
+    void fetchSeedhubMagnet()
+    return
+  }
+  if (tab === 'butailing' && !butailingMagnetTried.value) {
+    void fetchButailingMagnet()
+  }
+}
+
+const {
+  captureInitialTabs,
+  skipQuarkAutoFetch,
+  setupAutoFetchWatchers,
+} = useDetailResourceTabAutoFetch({
+  activeTab,
+  pan115SourceTab,
+  magnetSourceTab,
+  onPan115SubTab: autoFetchPan115SubTab,
+  onMagnetSubTab: autoFetchMagnetSubTab,
+})
+setupAutoFetchWatchers()
+
 watch(pan115SourceTab, async (tab) => {
   if (tab === 'pansou') pan115Pager.value.pansou = 1
   if (tab === 'hdhive') pan115Pager.value.hdhive = 1
@@ -1724,6 +1763,7 @@ watch(() => `${route.params.mediaType || ''}:${route.params.id || ''}`, async ()
   magnetSourceTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'magnet') || 'seedhub'
   resetResources()
   await loadDetail()
+  captureInitialTabs()
 })
 
 onMounted(async () => {
@@ -1733,6 +1773,7 @@ onMounted(async () => {
   magnetSourceTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'magnet') || 'seedhub'
   await loadDetail()
   refreshQuarkConfigured()
+  captureInitialTabs()
 })
 </script>
 

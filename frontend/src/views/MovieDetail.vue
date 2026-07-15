@@ -418,6 +418,7 @@
               :media-type="'movie'"
               :tmdb-id="movieId"
               :visible="activeTab === 'quark'"
+              :skip-initial-auto-fetch="skipQuarkAutoFetch"
               :quark-configured="quarkConfigured"
               :title="movie?.title || movie?.name || ''"
             />
@@ -646,6 +647,7 @@ import { Star, Plus, ArrowLeft, VideoCamera } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import QuarkResourceTab from '@/components/detail/QuarkResourceTab.vue'
 import { getVisibleTabs, loadVisibleTabs, isTabVisible, getOrderedVisibleSubTabs, getFirstVisibleSubTabName, getOrderedVisibleMainTabs } from '@/utils/detailTabs'
+import { useDetailResourceTabAutoFetch } from '@/utils/detailResourceTabAutoFetch'
 import { extractTags } from '@/utils/resourceTags'
 import { navigateBackFromDetail } from '@/utils/navigation'
 import { copyText } from '@/utils/clipboard'
@@ -1505,6 +1507,43 @@ const handleSaveMagnet = async (item) => {
   }
 }
 
+const autoFetchPan115SubTab = (tab) => {
+  if (tab === 'pansou' && !pansouTried.value) {
+    void handleFetchPansouPan115()
+    return
+  }
+  if (tab === 'hdhive' && !hdhiveTried.value) {
+    void handleFetchHdhivePan115()
+    return
+  }
+  if (tab === 'tg' && !tgTried.value) {
+    void handleFetchTgPan115()
+  }
+}
+
+const autoFetchMagnetSubTab = (tab) => {
+  if (tab === 'seedhub' && !seedhubMagnetTried.value) {
+    void handleFetchSeedhubMagnet()
+    return
+  }
+  if (tab === 'butailing' && !butailingMagnetTried.value) {
+    void handleFetchButailingMagnet()
+  }
+}
+
+const {
+  captureInitialTabs,
+  skipQuarkAutoFetch,
+  setupAutoFetchWatchers,
+} = useDetailResourceTabAutoFetch({
+  activeTab,
+  pan115SourceTab,
+  magnetSourceTab,
+  onPan115SubTab: autoFetchPan115SubTab,
+  onMagnetSubTab: autoFetchMagnetSubTab,
+})
+setupAutoFetchWatchers()
+
 watch(magnetSourceTab, (tab) => {
   if (tab === 'seedhub') magnetPager.value.seedhub = 1
   if (tab === 'butailing') magnetPager.value.butailing = 1
@@ -1538,6 +1577,7 @@ watch(() => route.params.id, () => {
   magnetResources.value = []
   fetchMovie()
   checkSubscribed()
+  captureInitialTabs()
 })
 
 onMounted(() => {
@@ -1549,6 +1589,7 @@ onMounted(() => {
   fetchMovie()
   refreshQuarkConfigured()
   checkSubscribed()
+  captureInitialTabs()
 })
 </script>
 
