@@ -258,6 +258,24 @@ class TestSubscriptionResourceRelevance:
           sub, record, context
       )
 
+  @pytest.mark.asyncio
+  async def test_explicit_wrong_tg_title_cannot_be_rescued_by_overview(self) -> None:
+      """标题明确属于其他剧时，简介里出现“主角”也不能通过归属校验。"""
+      sub = _tv_snapshot(title="主角", tmdb_id=284110, year="2026")
+      context = {"title": "主角", "original_title": "", "year": "2026"}
+      record = DownloadRecord(
+          subscription_id=sub.id,
+          resource_name="📺 电视剧：我们愉快的好日子 (2026) - S01E35",
+          resource_url="https://115.com/s/polluted-record",
+          resource_type="pan115",
+          source_tmdb_id=284110,
+          matched_media_title="讲述主角成长的故事",
+          relevance_verified=True,
+      )
+      assert not await subscription_service._is_resource_relevant_for_subscription(
+          sub, record, context
+      )
+
   def test_extract_download_record_relevance_fields(self) -> None:
       fields = SubscriptionService._extract_download_record_relevance_fields(
           {

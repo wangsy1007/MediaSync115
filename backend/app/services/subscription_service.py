@@ -4358,6 +4358,9 @@ class SubscriptionService:
     ) -> dict[str, Any]:
         """从搜索候选资源提取归属元数据，供转存阶段复用。"""
         source_tmdb_id = item.get("hdhive_source_tmdb_id")
+        identity_verified = bool(item.get("relevance_verified")) or (
+            source_tmdb_id is not None
+        )
         if source_tmdb_id is None and sub is not None and sub.tmdb_id is not None:
             source_tmdb_id = sub.tmdb_id
         if source_tmdb_id is not None:
@@ -4377,7 +4380,7 @@ class SubscriptionService:
         return {
             "source_tmdb_id": source_tmdb_id,
             "matched_media_title": matched_media_title,
-            "relevance_verified": True,
+            "relevance_verified": identity_verified,
             "resource_source_id": resource_source_id,
         }
 
@@ -4538,6 +4541,21 @@ class SubscriptionService:
         overview, source_tmdb_id, relevance_verified = self._extract_relevance_context(
             item
         )
+        expected_title = str(media_context.get("title") or sub.title or "")
+        expected_original_title = str(media_context.get("original_title") or "")
+        expected_year = str(media_context.get("year") or sub.year or "")
+
+        embedded_title = self._extract_embedded_media_title(label)
+        if embedded_title:
+            embedded_score, _, embedded_strong_hit = tg_service._score_row_relevance(
+                row_title=embedded_title,
+                row_overview="",
+                expected_title=expected_title,
+                expected_original_title=expected_original_title,
+                expected_year="",
+            )
+            if not embedded_strong_hit or embedded_score < 80:
+                return False
 
         if (
             source_tmdb_id is not None
@@ -4565,10 +4583,6 @@ class SubscriptionService:
         if embedded_tmdb_id is not None and sub.tmdb_id is not None:
             return embedded_tmdb_id == sub.tmdb_id
 
-        expected_title = str(media_context.get("title") or sub.title or "")
-        expected_original_title = str(media_context.get("original_title") or "")
-        expected_year = str(media_context.get("year") or sub.year or "")
-
         score, _, strong_hit = tg_service._score_row_relevance(
             row_title=label,
             row_overview=overview,
@@ -4578,10 +4592,6 @@ class SubscriptionService:
         )
         if strong_hit and score >= 80:
             return True
-
-        embedded_title = self._extract_embedded_media_title(label)
-        if embedded_title:
-            return False
 
         share_link = self._extract_share_link_from_item(item)
         if share_link:

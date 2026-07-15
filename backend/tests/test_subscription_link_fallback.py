@@ -124,7 +124,7 @@ class TestSubscriptionLinkFallback:
         )
         assert fields["source_tmdb_id"] == 278
         assert fields["matched_media_title"] == "肖申克的救赎"
-        assert fields["relevance_verified"] is True
+        assert fields["relevance_verified"] is False
 
     def test_dedupe_records_by_url(self) -> None:
         records = [
