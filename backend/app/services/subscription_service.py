@@ -3314,13 +3314,20 @@ class SubscriptionService:
                     )
 
                     selected_items: list[dict[str, Any]] = []
+                    seen_selected_fids: set[str] = set()
                     for items in matched_candidates.values():
-                        if len(items) > 1:
-                            selected_items.append(
-                                pan_service.pick_best_video_file(items, quality_filter) or items[0]
-                            )
-                        else:
-                            selected_items.extend(items)
+                        chosen = (
+                            pan_service.pick_best_video_file(items, quality_filter)
+                            if len(items) > 1
+                            else items[0]
+                        )
+                        if not chosen:
+                            continue
+                        fid = str(chosen.get("fid") or "").strip()
+                        if not fid or fid in seen_selected_fids:
+                            continue
+                        seen_selected_fids.add(fid)
+                        selected_items.append(chosen)
                     existing_episodes = await pan_service.collect_tv_episodes_under_folder(
                         parent_folder_id,
                         show_title=sub.title,
