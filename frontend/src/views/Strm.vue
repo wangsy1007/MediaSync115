@@ -43,19 +43,20 @@
 
           <el-form-item label="播放模式">
             <el-select v-model="config.strm_redirect_mode" style="width: 220px">
-              <el-option label="自动（推荐）" value="auto" />
               <el-option label="302 直链播放" value="redirect" />
               <el-option label="服务器代理" value="proxy" />
             </el-select>
-            <div class="form-hint">302 直链会绑定当前播放器的 User-Agent；如果 115 链接要求额外 Cookie（f=3），系统会自动回退代理。</div>
+            <div class="form-hint">302 直链会绑定当前播放器的 User-Agent；若 115 链接要求额外 Cookie（f=3），播放时会自动回退到代理。</div>
           </el-form-item>
 
           <el-form-item label="生成后刷新 Emby">
-            <el-switch v-model="config.strm_refresh_emby_after_generate" />
+            <el-switch v-model="config.strm_refresh_emby_after_generate" :disabled="!config.strm_enabled" />
+            <div class="form-hint">STRM 生成完成后触发 Emby 媒体库刷新</div>
           </el-form-item>
 
           <el-form-item label="生成后刷新飞牛">
-            <el-switch v-model="config.strm_refresh_feiniu_after_generate" />
+            <el-switch v-model="config.strm_refresh_feiniu_after_generate" :disabled="!config.strm_enabled" />
+            <div class="form-hint">STRM 生成完成后触发飞牛影视媒体库刷新</div>
           </el-form-item>
 
           <el-form-item label="定时增量生成">
@@ -67,10 +68,11 @@
               v-model="config.strm_incremental_interval_minutes"
               :min="30"
               :step="30"
-              :disabled="!config.strm_schedule_enabled"
+              :disabled="!config.strm_enabled"
               style="width: 180px"
             />
             <span class="input-suffix">分钟</span>
+            <div class="form-hint">启用「定时增量生成」后按此间隔执行；最少 30 分钟</div>
           </el-form-item>
 
           <el-form-item label="每周全量生成">
@@ -281,7 +283,7 @@ const config = reactive({
   strm_enabled: false,
   strm_output_dir: '',
   strm_base_url: '',
-  strm_redirect_mode: 'auto',
+  strm_redirect_mode: 'redirect',
   strm_auto_after_archive: true,
   strm_refresh_emby_after_generate: false,
   strm_refresh_feiniu_after_generate: false,
@@ -353,11 +355,13 @@ const generateStatusLabel = computed(() => {
   return '生成中'
 })
 
-const redirectModeLabel = computed(() => {
-  if (config.strm_redirect_mode === 'redirect') return '302 直链播放'
-  if (config.strm_redirect_mode === 'proxy') return '服务器代理'
-  return '自动（推荐）'
-})
+const normalizeRedirectMode = (mode) => (
+  String(mode || '').trim().toLowerCase() === 'proxy' ? 'proxy' : 'redirect'
+)
+
+const redirectModeLabel = computed(() => (
+  config.strm_redirect_mode === 'proxy' ? '服务器代理' : '302 直链播放'
+))
 
 const playUrlTemplate = computed(() => {
   if (!config.strm_base_url) return '未配置'
@@ -413,11 +417,9 @@ const formatRuntimeTime = (value) => (
   value ? formatBeijingTableCell(null, null, value) : '-'
 )
 
-const getModeLabel = (mode) => {
-  if (mode === 'redirect') return '302 直链播放'
-  if (mode === 'proxy') return '服务器代理'
-  return '自动（推荐）'
-}
+const getModeLabel = (mode) => (
+  normalizeRedirectMode(mode) === 'proxy' ? '服务器代理' : '302 直链播放'
+)
 
 const getRequirementLabel = (requirement) => {
   if (requirement === '1') return 'f=1，要求绑定 User-Agent'
@@ -440,7 +442,7 @@ const applyConfig = (data) => {
   config.strm_enabled = !!data.strm_enabled
   config.strm_output_dir = data.strm_output_dir || ''
   config.strm_base_url = data.strm_base_url || ''
-  config.strm_redirect_mode = data.strm_redirect_mode || 'auto'
+  config.strm_redirect_mode = normalizeRedirectMode(data.strm_redirect_mode)
   config.strm_auto_after_archive = data.strm_auto_after_archive !== false
   config.strm_refresh_emby_after_generate = !!data.strm_refresh_emby_after_generate
   config.strm_refresh_feiniu_after_generate = !!data.strm_refresh_feiniu_after_generate
@@ -505,7 +507,7 @@ const saveConfig = async () => {
       strm_enabled: config.strm_enabled,
       strm_output_dir: config.strm_output_dir,
       strm_base_url: config.strm_base_url,
-      strm_redirect_mode: config.strm_redirect_mode,
+      strm_redirect_mode: normalizeRedirectMode(config.strm_redirect_mode),
       strm_auto_after_archive: config.strm_auto_after_archive,
       strm_refresh_emby_after_generate: config.strm_refresh_emby_after_generate,
       strm_refresh_feiniu_after_generate: config.strm_refresh_feiniu_after_generate,
@@ -513,13 +515,15 @@ const saveConfig = async () => {
       strm_proxy_port: config.strm_proxy_port,
       strm_early_redirect: config.strm_early_redirect,
       strm_schedule_enabled: config.strm_schedule_enabled,
-      strm_incremental_interval_minutes: config.strm_incremental_interval_minutes,
+      strm_incremental_interval_minutes: Number(config.strm_incremental_interval_minutes) || 360,
       strm_full_schedule_enabled: config.strm_full_schedule_enabled,
       strm_full_schedule_day: config.strm_full_schedule_day,
       strm_full_schedule_time: config.strm_full_schedule_time
     })
     applyConfig(data)
     ElMessage.success('STRM 配置已保存')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || 'STRM 配置保存失败')
   } finally {
     saving.value = false
   }

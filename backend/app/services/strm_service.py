@@ -795,8 +795,6 @@ class StrmService:
         effective_mode = configured_mode
         if configured_mode == "redirect" and direct_requirement == "3":
             effective_mode = "proxy"
-        elif configured_mode == "auto":
-            effective_mode = "proxy" if direct_requirement == "3" else "redirect"
 
         return {
             "sample_file": str(sample_path),
@@ -866,9 +864,6 @@ class StrmService:
             mode = "proxy"
         elif mode == "redirect" and direct_requirement == "3":
             mode = "proxy"
-        elif mode == "auto":
-            requires_proxy = direct_requirement == "3"
-            mode = "proxy" if requires_proxy else "redirect"
 
         if mode == "redirect":
             if method == "GET":
@@ -1983,8 +1978,6 @@ class StrmService:
         mode = runtime_settings_service.get_strm_redirect_mode()
         if mode == "redirect" and direct_requirement == "3":
             mode = "proxy"
-        elif mode == "auto":
-            mode = "proxy" if direct_requirement == "3" else "redirect"
         return {
             "download_url": download_url,
             "pick_code": pick_code,
@@ -2123,13 +2116,7 @@ class StrmService:
             if effective_mode == "proxy":
                 return "当前配置为 302 直链，但该 115 链接要求额外 Cookie（f=3），已自动回退到代理。"
             return "当前配置为 302 直链，系统会按本次请求的 User-Agent 绑定 115 直链。"
-        if effective_mode == "proxy":
-            return (
-                "自动模式检测到该 115 链接要求额外 Cookie（f=3），因此切换到代理播放。"
-            )
-        if direct_requirement == "1":
-            return "自动模式检测到该 115 链接需要绑定 User-Agent（f=1），但不要求额外 Cookie，因此可使用 302 直链。"
-        return "自动模式判定该样本可直接使用 302 直链。"
+        return "当前播放模式未知，已按 302 直链处理。"
 
     @staticmethod
     def _extract_file_name(item: Any, fallback: str = "") -> str:

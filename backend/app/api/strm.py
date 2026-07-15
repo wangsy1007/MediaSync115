@@ -57,22 +57,25 @@ def _validate_strm_settings(payload: dict[str, object]) -> None:
             payload.get(
                 "strm_redirect_mode", runtime_settings_service.get_strm_redirect_mode()
             )
-            or "auto"
+            or "redirect"
         )
         .strip()
         .lower()
     )
-    schedule_enabled = bool(
-        payload.get(
-            "strm_schedule_enabled",
-            runtime_settings_service.get_strm_schedule_enabled(),
-        )
+    if redirect_mode == "auto":
+        redirect_mode = "redirect"
+
+    enabling_schedule = payload.get("strm_schedule_enabled") is True
+    enabling_full = payload.get("strm_full_schedule_enabled") is True
+    schedule_enabled = (
+        bool(payload["strm_schedule_enabled"])
+        if "strm_schedule_enabled" in payload
+        else runtime_settings_service.get_strm_schedule_enabled()
     )
-    full_schedule_enabled = bool(
-        payload.get(
-            "strm_full_schedule_enabled",
-            runtime_settings_service.get_strm_full_schedule_enabled(),
-        )
+    full_schedule_enabled = (
+        bool(payload["strm_full_schedule_enabled"])
+        if "strm_full_schedule_enabled" in payload
+        else runtime_settings_service.get_strm_full_schedule_enabled()
     )
     strm_enabled = bool(
         payload.get("strm_enabled", runtime_settings_service.get_strm_enabled())
@@ -84,23 +87,39 @@ def _validate_strm_settings(payload: dict[str, object]) -> None:
         or ""
     ).strip()
 
-    if redirect_mode not in {"auto", "redirect", "proxy"}:
+    if redirect_mode not in {"redirect", "proxy"}:
         raise HTTPException(
-            status_code=400, detail="STRM 播放模式仅支持 auto / redirect / proxy"
+            status_code=400, detail="STRM 播放模式仅支持 redirect / proxy"
         )
-    if schedule_enabled or full_schedule_enabled:
-        if not strm_enabled:
-            raise HTTPException(status_code=400, detail="启用 STRM 定时任务前请先启用 STRM")
-        if not output_dir or not base_url:
-            raise HTTPException(
-                status_code=400,
-                detail="启用 STRM 定时任务前请先配置输出目录和播放根地址",
-            )
-        if not runtime_settings_service.get_archive_output_cid():
-            raise HTTPException(
-                status_code=400,
-                detail="启用 STRM 定时任务前请先配置归档输出目录",
-            )
+    if enabling_schedule or enabling_full or (
+        (schedule_enabled or full_schedule_enabled)
+        and {
+            "strm_schedule_enabled",
+            "strm_full_schedule_enabled",
+            "strm_incremental_interval_minutes",
+            "strm_full_schedule_day",
+            "strm_full_schedule_time",
+            "strm_enabled",
+            "strm_output_dir",
+            "strm_base_url",
+        }
+        & set(payload.keys())
+    ):
+        if schedule_enabled or full_schedule_enabled:
+            if not strm_enabled:
+                raise HTTPException(
+                    status_code=400, detail="启用 STRM 定时任务前请先启用 STRM"
+                )
+            if not output_dir or not base_url:
+                raise HTTPException(
+                    status_code=400,
+                    detail="启用 STRM 定时任务前请先配置输出目录和播放根地址",
+                )
+            if not runtime_settings_service.get_archive_output_cid():
+                raise HTTPException(
+                    status_code=400,
+                    detail="启用 STRM 定时任务前请先配置归档输出目录",
+                )
     if not base_url:
         return
     parsed = urlparse(base_url)

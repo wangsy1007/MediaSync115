@@ -698,24 +698,9 @@ async def _resolve_effective_redirect_mode(
 ) -> str:
     """解析 STRM 实际播放模式：redirect（302 直链）或 proxy（本地反代）。"""
     configured = runtime_settings_service.get_strm_redirect_mode()
-    if configured in {"redirect", "proxy"}:
-        return configured
-
-    pick_code = _extract_pickcode_from_play_url(play_url)
-    if not pick_code:
-        return "redirect"
-
-    try:
-        from app.services.strm_service import strm_service
-
-        info = await strm_service._fetch_pick_code_download_info(
-            pick_code, user_agent=user_agent or ""
-        )
-        direct_requirement = str(info.get("direct_requirement") or "").strip()
-        return "proxy" if direct_requirement == "3" else "redirect"
-    except Exception:
-        logger.debug("解析 STRM 播放模式失败，默认 302 直链", exc_info=True)
-        return "redirect"
+    if configured == "proxy":
+        return "proxy"
+    return "redirect"
 
 
 async def _resolve_local_proxy_url(play_url: str) -> str:

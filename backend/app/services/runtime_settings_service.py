@@ -193,7 +193,7 @@ class RuntimeSettingsService:
             "strm_enabled": False,
             "strm_output_dir": "",
             "strm_base_url": "",
-            "strm_redirect_mode": "auto",
+            "strm_redirect_mode": "redirect",
             "strm_auto_after_archive": True,
             "strm_refresh_emby_after_generate": False,
             "strm_refresh_feiniu_after_generate": False,
@@ -1034,10 +1034,12 @@ class RuntimeSettingsService:
         return str(self._data.get("strm_base_url") or "").strip().rstrip("/")
 
     def get_strm_redirect_mode(self) -> str:
-        value = str(self._data.get("strm_redirect_mode") or "auto").strip().lower()
-        if value in {"redirect", "proxy"}:
-            return value
-        return "auto"
+        value = str(self._data.get("strm_redirect_mode") or "redirect").strip().lower()
+        if value == "proxy":
+            return "proxy"
+        if value == "auto":
+            return "redirect"
+        return "redirect"
 
     def get_strm_auto_after_archive(self) -> bool:
         """归档成功后是否自动增量生成 STRM；缺省开启。"""
@@ -1129,10 +1131,12 @@ class RuntimeSettingsService:
             "strm_redirect_mode" in payload
             and payload["strm_redirect_mode"] is not None
         ):
-            mode = str(payload["strm_redirect_mode"] or "auto").strip().lower()
-            self._data["strm_redirect_mode"] = (
-                mode if mode in {"auto", "redirect", "proxy"} else "auto"
-            )
+            mode = str(payload["strm_redirect_mode"] or "redirect").strip().lower()
+            if mode == "auto":
+                mode = "redirect"
+            if mode not in {"redirect", "proxy"}:
+                raise ValueError("STRM 播放模式仅支持 redirect / proxy")
+            self._data["strm_redirect_mode"] = mode
         if (
             "strm_auto_after_archive" in payload
             and payload["strm_auto_after_archive"] is not None

@@ -24,12 +24,34 @@ class TestStrmApi:
             }
         )
 
-    def test_validate_strm_settings_rejects_invalid_mode(self) -> None:
-        """测试非法播放模式"""
-        with pytest.raises(HTTPException) as exc_info:
-            _validate_strm_settings({"strm_redirect_mode": "invalid"})
+    def test_validate_strm_settings_normalizes_legacy_auto_mode(self) -> None:
+        _validate_strm_settings({"strm_redirect_mode": "auto"})
 
-        assert exc_info.value.status_code == 400
+    def test_update_strm_config_persists_refresh_flags(self) -> None:
+        service = RuntimeSettingsService.__new__(RuntimeSettingsService)
+        service._data = dict(RuntimeSettingsService._defaults)
+        service._save = lambda: None
+
+        service.update_strm_config(
+            {
+                "strm_refresh_emby_after_generate": True,
+                "strm_refresh_feiniu_after_generate": True,
+                "strm_incremental_interval_minutes": 120,
+            }
+        )
+
+        assert service.get_strm_refresh_emby_after_generate() is True
+        assert service.get_strm_refresh_feiniu_after_generate() is True
+        assert service.get_strm_incremental_interval_minutes() == 120
+
+    def test_update_strm_config_normalizes_legacy_auto_mode(self) -> None:
+        service = RuntimeSettingsService.__new__(RuntimeSettingsService)
+        service._data = dict(RuntimeSettingsService._defaults)
+        service._save = lambda: None
+
+        service.update_strm_config({"strm_redirect_mode": "auto"})
+
+        assert service.get_strm_redirect_mode() == "redirect"
 
     def test_validate_strm_settings_rejects_invalid_base_url(self) -> None:
         """测试非法播放地址"""
