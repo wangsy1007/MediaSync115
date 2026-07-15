@@ -748,8 +748,8 @@ def _validate_strm_schedule_settings(merged_settings: dict[str, Any]) -> None:
         interval = int(merged_settings.get("strm_incremental_interval_minutes", 360))
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="STRM 增量生成间隔必须是整数")
-    if interval < 30:
-        raise HTTPException(status_code=400, detail="STRM 增量生成间隔不能少于 30 分钟")
+    if interval < 1:
+        raise HTTPException(status_code=400, detail="STRM 增量生成间隔不能少于 1 分钟")
 
     day = str(merged_settings.get("strm_full_schedule_day") or "sun").lower()
     if day not in {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}:

@@ -100,8 +100,8 @@ class TestStrmApi:
         }
         service._save = lambda: None
 
-        with pytest.raises(ValueError, match="30"):
-            service.update_strm_config({"strm_incremental_interval_minutes": 10})
+        with pytest.raises(ValueError, match="1"):
+            service.update_strm_config({"strm_incremental_interval_minutes": 0})
         with pytest.raises(ValueError, match="星期"):
             service.update_strm_config({"strm_full_schedule_day": "holiday"})
         with pytest.raises(ValueError, match="HH:MM"):

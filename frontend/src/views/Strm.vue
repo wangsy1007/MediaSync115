@@ -66,13 +66,13 @@
           <el-form-item label="增量生成间隔">
             <el-input-number
               v-model="config.strm_incremental_interval_minutes"
-              :min="30"
-              :step="30"
+              :min="1"
+              :step="1"
               :disabled="!config.strm_enabled"
               style="width: 180px"
             />
             <span class="input-suffix">分钟</span>
-            <div class="form-hint">启用「定时增量生成」后按此间隔执行；最少 30 分钟</div>
+            <div class="form-hint">启用「定时增量生成」后按此间隔执行；最少 1 分钟</div>
           </el-form-item>
 
           <el-form-item label="每周全量生成">
