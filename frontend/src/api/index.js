@@ -301,6 +301,20 @@ export const pansouApi = {
   updateConfig: (baseUrl) => api.put('/pansou/config', { base_url: baseUrl })
 }
 
+export const juyingApi = {
+  check: () => api.get('/settings/juying/check'),
+  getResources: (mediaType, tmdbId, resourceType = 'all', season = null, refresh = false) =>
+    api.get(`/juying/${mediaType}/${tmdbId}/resources`, {
+      params: { resource_type: resourceType, season, refresh },
+      timeout: 60000,
+    }),
+  resolveResource: (resourceId) =>
+    api.post(`/juying/resource/${encodeURIComponent(resourceId)}/resolve`, null, {
+      timeout: 20000,
+      silentError: true,
+    }),
+}
+
 export const settingsApi = {
   getRuntime: () => api.get('/settings/runtime'),
   getAppInfo: () => api.get('/settings/app-info'),
@@ -311,6 +325,7 @@ export const settingsApi = {
   checkTg: () => api.get('/settings/tg/check'),
   checkTmdb: (params) => api.get('/settings/tmdb/check', { params }),
   checkPansou: () => api.get('/settings/pansou/check'),
+  checkJuying: () => api.get('/settings/juying/check'),
   checkEmby: (params) => api.get('/settings/emby/check', { params }),
   checkFeiniu: (params) => api.get('/settings/feiniu/check', { params }),
   feiniuLogin: (username, password, url) =>

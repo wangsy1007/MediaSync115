@@ -1016,6 +1016,62 @@
         </el-card>
       </el-tab-pane>
 
+      <el-tab-pane label="聚影" name="juying">
+        <el-card class="settings-card">
+          <template #header>
+            <div class="card-header">
+              <span>聚影网页渠道</span>
+              <el-tag v-if="juyingStatus.checked" :type="juyingStatus.valid ? 'success' : 'danger'" size="small">
+                {{ juyingStatus.valid ? '已登录' : '登录失败' }}
+              </el-tag>
+            </div>
+          </template>
+          <el-alert
+            type="warning"
+            :closable="false"
+            show-icon
+            title="使用普通网站账号访问网页内部接口；密码加密保存在后端，不会返回前端。请控制请求频率。"
+            style="margin-bottom: 16px"
+          />
+          <el-form :model="juyingForm" label-width="120px">
+            <el-form-item label="启用渠道">
+              <el-switch v-model="juyingForm.enabled" />
+            </el-form-item>
+            <el-form-item label="网站地址">
+              <el-input v-model="juyingForm.baseUrl" placeholder="https://www.jying.top" />
+            </el-form-item>
+            <el-form-item label="登录账号">
+              <el-input v-model="juyingForm.username" autocomplete="off" />
+            </el-form-item>
+            <el-form-item label="登录密码">
+              <el-input
+                v-model="juyingForm.password"
+                type="password"
+                show-password
+                autocomplete="new-password"
+                :placeholder="juyingForm.passwordSet ? '已保存，留空表示不修改' : '请输入登录密码'"
+              />
+            </el-form-item>
+            <el-form-item label="资源类型">
+              <el-checkbox v-model="juyingForm.pan115Enabled">115网盘</el-checkbox>
+              <el-checkbox v-model="juyingForm.magnetEnabled">磁力链接</el-checkbox>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingJuying" @click="handleSaveJuying">保存</el-button>
+              <el-button :loading="testingJuying" @click="handleTestJuying">测试登录</el-button>
+            </el-form-item>
+          </el-form>
+          <div
+            v-if="juyingStatus.checked"
+            class="connection-result"
+            :class="juyingStatus.valid ? 'is-success' : 'is-failed'"
+          >
+            <div class="result-title">连接检测结果</div>
+            <div class="result-message">{{ juyingStatus.message }}</div>
+          </div>
+        </el-card>
+      </el-tab-pane>
+
       <el-tab-pane label="代理设置" name="proxy">
         <el-card class="settings-card">
           <template #header>
@@ -2069,18 +2125,35 @@ const resourcePrefForm = reactive({
 })
 const sourceLabelMap = {
   hdhive: 'HDHive',
+  juying: '聚影',
   pansou: 'Pansou',
   tg: 'Telegram'
 }
-const resourcePriority = ref(['hdhive', 'pansou', 'tg'])
+const resourcePriority = ref(['hdhive', 'juying', 'pansou', 'tg'])
 const resourceEnabled = reactive({
   hdhive: true,
+  juying: false,
   pansou: true,
   tg: true
 })
 
 const pansouForm = ref({
   baseUrl: ''
+})
+
+const juyingForm = ref({
+  enabled: false,
+  baseUrl: 'https://www.jying.top',
+  username: '',
+  password: '',
+  passwordSet: false,
+  pan115Enabled: true,
+  magnetEnabled: true,
+})
+const juyingStatus = reactive({
+  checked: false,
+  valid: false,
+  message: '',
 })
 
 // 代理配置
@@ -2102,6 +2175,7 @@ const healthStatus = ref({
 })
 const serviceNameMap = {
   hdhive: 'HDHive',
+  juying: '聚影',
   tg: 'Telegram',
   tmdb: 'TMDB'
 }
@@ -2113,16 +2187,16 @@ const savingAccount = ref(false)
 const detailTabsForm = reactive({
   main_order: ['pan115', 'quark', 'magnet'],
   pan115: true,
-  pan115_children: ['pan115_pansou', 'pan115_hdhive', 'pan115_tg'],
+  pan115_children: ['pan115_pansou', 'pan115_juying', 'pan115_hdhive', 'pan115_tg'],
   quark: true,
   quark_children: ['quark_pansou', 'quark_hdhive', 'quark_tg'],
   magnet: true,
-  magnet_children: ['magnet_seedhub', 'magnet_butailing'],
+  magnet_children: ['magnet_seedhub', 'magnet_juying', 'magnet_butailing'],
 })
 
-const ALL_PAN115_CHILDREN = ['pan115_pansou', 'pan115_hdhive', 'pan115_tg']
+const ALL_PAN115_CHILDREN = ['pan115_pansou', 'pan115_juying', 'pan115_hdhive', 'pan115_tg']
 const ALL_QUARK_CHILDREN = ['quark_pansou', 'quark_hdhive', 'quark_tg']
-const ALL_MAGNET_CHILDREN = ['magnet_seedhub', 'magnet_butailing']
+const ALL_MAGNET_CHILDREN = ['magnet_seedhub', 'magnet_juying', 'magnet_butailing']
 const ALL_MAIN_TAB_KEYS = ['pan115', 'quark', 'magnet']
 
 const getSubTabLabel = (key) => {
@@ -2251,6 +2325,8 @@ const testing = ref(false)
 const testingRiskHealth = ref(false)
 const savingPansou = ref(false)
 const testingPansou = ref(false)
+const savingJuying = ref(false)
+const testingJuying = ref(false)
 const savingHdhive = ref(false)
 const testingHdhive = ref(false)
 const runningHdhiveCheckin = ref(false)
@@ -2695,6 +2771,7 @@ let embySyncPollTimer = null
 let feiniuSyncPollTimer = null
 const sourceConnectionStatus = reactive({
   hdhive: { checked: false, ok: false, text: '未检测' },
+  juying: { checked: false, ok: false, text: '未检测' },
   pansou: { checked: false, ok: false, text: '未检测' },
   tg: { checked: false, ok: false, text: '未检测' }
 })
@@ -2781,8 +2858,9 @@ const updateStatusTagText = computed(() => {
 const refreshSourceConnectionStatus = async () => {
   checkingSourceStatus.value = true
   try {
-    const [hdhiveResult, pansouResult, tgResult] = await Promise.allSettled([
+    const [hdhiveResult, juyingResult, pansouResult, tgResult] = await Promise.allSettled([
       settingsApi.checkHdhive(),
+      settingsApi.checkJuying(),
       pansouApi.health(),
       settingsApi.checkTg()
     ])
@@ -2798,6 +2876,20 @@ const refreshSourceConnectionStatus = async () => {
       sourceConnectionStatus.hdhive.checked = true
       sourceConnectionStatus.hdhive.ok = false
       sourceConnectionStatus.hdhive.text = `连接失败: ${message}`
+    }
+
+    if (juyingResult.status === 'fulfilled') {
+      const payload = juyingResult.value?.data || {}
+      sourceConnectionStatus.juying.checked = true
+      sourceConnectionStatus.juying.ok = !!payload.valid
+      sourceConnectionStatus.juying.text = payload.valid
+        ? '连接正常'
+        : `连接失败: ${payload.message || '账号不可用'}`
+    } else {
+      const message = juyingResult.reason?.response?.data?.detail || juyingResult.reason?.message || '请求失败'
+      sourceConnectionStatus.juying.checked = true
+      sourceConnectionStatus.juying.ok = false
+      sourceConnectionStatus.juying.text = `连接失败: ${message}`
     }
 
     if (pansouResult.status === 'fulfilled') {
@@ -3276,6 +3368,60 @@ const handleTestPansou = async () => {
     ElMessage.error('Pansou 服务连接失败')
   } finally {
     testingPansou.value = false
+  }
+}
+
+const handleSaveJuying = async (notify = true) => {
+  if (!String(juyingForm.value.baseUrl || '').trim() || !String(juyingForm.value.username || '').trim()) {
+    ElMessage.warning('请输入聚影网站地址和登录账号')
+    return false
+  }
+  if (!juyingForm.value.passwordSet && !String(juyingForm.value.password || '')) {
+    ElMessage.warning('请输入聚影登录密码')
+    return false
+  }
+  savingJuying.value = true
+  try {
+    const payload = {
+      juying_base_url: juyingForm.value.baseUrl,
+      juying_username: juyingForm.value.username,
+      juying_enabled: !!juyingForm.value.enabled,
+      juying_pan115_enabled: !!juyingForm.value.pan115Enabled,
+      juying_magnet_enabled: !!juyingForm.value.magnetEnabled,
+    }
+    if (juyingForm.value.password) payload.juying_password = juyingForm.value.password
+    const { data } = await settingsApi.updateRuntime(payload)
+    const saved = data?.settings || {}
+    juyingForm.value.password = ''
+    juyingForm.value.passwordSet = saved.juying_password_set !== false
+    if (notify) ElMessage.success('聚影配置已保存')
+    return true
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '聚影配置保存失败')
+    return false
+  } finally {
+    savingJuying.value = false
+  }
+}
+
+const handleTestJuying = async () => {
+  const saved = await handleSaveJuying(false)
+  if (!saved) return
+  testingJuying.value = true
+  try {
+    const { data } = await settingsApi.checkJuying()
+    juyingStatus.checked = true
+    juyingStatus.valid = !!data?.valid
+    juyingStatus.message = data?.message || (data?.valid ? '登录成功' : '登录失败')
+    if (data?.valid) ElMessage.success('聚影账号登录成功')
+    else ElMessage.error(juyingStatus.message)
+  } catch (error) {
+    juyingStatus.checked = true
+    juyingStatus.valid = false
+    juyingStatus.message = error.response?.data?.detail || error.message || '登录失败'
+    ElMessage.error(String(juyingStatus.message))
+  } finally {
+    testingJuying.value = false
   }
 }
 
@@ -4626,6 +4772,13 @@ const fetchRuntimeSettings = async () => {
     if (!pansouForm.value.baseUrl) {
       pansouForm.value.baseUrl = data.pansou_base_url || ''
     }
+    juyingForm.value.enabled = !!data.juying_enabled
+    juyingForm.value.baseUrl = data.juying_base_url || 'https://www.jying.top'
+    juyingForm.value.username = data.juying_username || ''
+    juyingForm.value.password = ''
+    juyingForm.value.passwordSet = !!data.juying_password_set
+    juyingForm.value.pan115Enabled = data.juying_pan115_enabled !== false
+    juyingForm.value.magnetEnabled = data.juying_magnet_enabled !== false
 
     // TG Bot settings
     applyTgBotSettings(data)
@@ -4674,7 +4827,7 @@ const fetchRuntimeSettings = async () => {
       if (!sourceLabelMap[source]) continue
       if (!deduped.includes(source)) deduped.push(source)
     }
-    for (const source of ['hdhive', 'pansou', 'tg']) {
+    for (const source of ['hdhive', 'juying', 'pansou', 'tg']) {
       if (!deduped.includes(source)) deduped.push(source)
     }
     resourcePriority.value = deduped
@@ -4767,6 +4920,7 @@ const movePriority = (source, direction) => {
 const normalizeResourceEnabled = (enabledMap) => {
   const normalized = {
     hdhive: true,
+    juying: false,
     pansou: true,
     tg: true
   }
@@ -4791,7 +4945,7 @@ const applyResourceEnabled = (enabledMap) => {
 }
 
 const normalizeResourcePriority = (priorityList) => {
-  const fallbackOrder = ['hdhive', 'pansou', 'tg']
+  const fallbackOrder = ['hdhive', 'juying', 'pansou', 'tg']
   const normalized = []
   for (const item of Array.isArray(priorityList) ? priorityList : []) {
     const source = String(item || '').trim().toLowerCase()
@@ -5222,6 +5376,15 @@ const ensureSettingsTabLoaded = (tab) => {
       break
     case 'pansou':
       fetchPansouConfig()
+      break
+    case 'juying':
+      if (juyingForm.value.passwordSet && juyingForm.value.username) {
+        settingsApi.checkJuying().then(({ data }) => {
+          juyingStatus.checked = true
+          juyingStatus.valid = !!data?.valid
+          juyingStatus.message = data?.message || ''
+        }).catch(() => {})
+      }
       break
     case 'proxy':
       fetchProxyStatus()

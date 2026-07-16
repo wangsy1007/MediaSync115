@@ -35,6 +35,7 @@ from app.services.emby_service import emby_service
 from app.services.feiniu_service import feiniu_service
 from app.services.feiniu_sync_index_service import feiniu_sync_index_service
 from app.services.hdhive_service import hdhive_service
+from app.services.juying_web_service import juying_web_service
 from app.services.pan115_service import Pan115Service
 from app.services.pansou_service import pansou_service
 from app.services.runtime_settings_service import runtime_settings_service
@@ -1669,6 +1670,8 @@ class SubscriptionService:
             try:
                 if source == "hdhive":
                     source_resources, source_traces = await self._fetch_from_hdhive(sub)
+                elif source == "juying":
+                    source_resources, source_traces = await self._fetch_from_juying(sub)
                 elif source == "tg":
                     source_resources, source_traces = await self._fetch_from_tg(
                         sub, media_context=media_context
@@ -1813,6 +1816,7 @@ class SubscriptionService:
                         )
                         attempt_info["status"] = "empty"
                         attempt_info["count"] = 0
+                        source_attempts.append(attempt_info)
                         continue
                 attempt_info["count"] = len(source_resources)
                 primary_resources.extend(source_resources)
@@ -1950,6 +1954,11 @@ class SubscriptionService:
                         attempt["count"] = 0
                         attempt["error"] = "资源经 ISO 原盘过滤后均不可用"
 
+        primary_resources, resolve_traces = await self._resolve_juying_resource_links(
+            primary_resources
+        )
+        traces.extend(resolve_traces)
+
         primary_resources, unsavable_excluded = self._finalize_savable_resources(
             primary_resources
         )
@@ -1994,6 +2003,7 @@ class SubscriptionService:
         # 来源名称映射
         source_names = {
             "hdhive": "HDHive",
+            "juying": "聚影",
             "pansou": "Pansou",
             "tg": "TG",
             "offline": "离线磁力",
@@ -2031,7 +2041,9 @@ class SubscriptionService:
     def _resolve_source_order(self, channel: str) -> list[str]:
         _ = channel
         priority = runtime_settings_service.get_active_subscription_resource_priority()
-        source_order = [item for item in priority if item in {"hdhive", "pansou", "tg"}]
+        source_order = [
+            item for item in priority if item in {"hdhive", "juying", "pansou", "tg"}
+        ]
         tg_ready = bool(
             runtime_settings_service.get_tg_api_id().strip()
             and runtime_settings_service.get_tg_api_hash().strip()
@@ -2041,6 +2053,35 @@ class SubscriptionService:
         if not tg_ready:
             source_order = [item for item in source_order if item != "tg"]
         return source_order
+
+    async def _fetch_from_juying(
+        self, sub: "SubscriptionSnapshot"
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """通过普通账号网页接口获取聚影 115 元数据。"""
+        traces: list[dict[str, Any]] = [
+            {
+                "step": "fetch_juying_start",
+                "status": "info",
+                "message": "开始通过聚影网页接口搜索 115 资源",
+            }
+        ]
+        result = await juying_web_service.search_resources(
+            title=sub.title,
+            year=str(sub.year or ""),
+            media_type="tv" if sub.media_type == MediaType.TV else "movie",
+            tmdb_id=sub.tmdb_id,
+            season=sub.tv_season_number if sub.media_type == MediaType.TV else None,
+        )
+        rows = list(result.get("pan115") or [])
+        traces.append(
+            {
+                "step": "fetch_juying_done",
+                "status": "success" if rows else "warning",
+                "message": f"聚影返回 {len(rows)} 条 115 候选资源",
+                "payload": {"count": len(rows)},
+            }
+        )
+        return rows, traces
 
     async def _fetch_from_pansou(
         self, sub: "SubscriptionSnapshot"
@@ -2264,7 +2305,7 @@ class SubscriptionService:
         self,
         sub: "SubscriptionSnapshot",
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """离线转存启用时，从 SeedHub / 不太灵并发抓取磁力资源。"""
+        """离线转存启用时，从 SeedHub / 不太灵 / 聚影并发抓取磁力资源。"""
         if not runtime_settings_service.get_subscription_offline_transfer_enabled():
             return [], []
 
@@ -2284,9 +2325,22 @@ class SubscriptionService:
                 keyword, media_type=media_type
             )
 
-        seedhub_result, butailing_result = await asyncio.gather(
+        async def _juying() -> list[dict[str, Any]]:
+            if not juying_web_service.enabled or not juying_web_service.magnet_enabled:
+                return []
+            result = await juying_web_service.search_resources(
+                title=sub.title,
+                year=str(sub.year or ""),
+                media_type=media_type,
+                tmdb_id=sub.tmdb_id,
+                season=sub.tv_season_number if media_type == "tv" else None,
+            )
+            return list(result.get("magnets") or [])
+
+        seedhub_result, butailing_result, juying_result = await asyncio.gather(
             _seedhub(),
             _butailing(),
+            _juying(),
             return_exceptions=True,
         )
 
@@ -2294,6 +2348,7 @@ class SubscriptionService:
         for label, result in [
             ("SeedHub", seedhub_result),
             ("不太灵", butailing_result),
+            ("聚影", juying_result),
         ]:
             if isinstance(result, BaseException):
                 traces.append(
@@ -2351,6 +2406,57 @@ class SubscriptionService:
             )
 
         return merged, traces
+
+    async def _resolve_juying_resource_links(
+        self, resources: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """在通用筛选结束后按需解析聚影短时资源链接。"""
+        if not resources:
+            return [], []
+        resolved: list[dict[str, Any]] = []
+        traces: list[dict[str, Any]] = []
+        success_count = 0
+        failed_count = 0
+        for item in resources:
+            if not isinstance(item, dict) or item.get("source_service") != "juying":
+                resolved.append(item)
+                continue
+            if self._extract_resource_url(item) or self._extract_offline_url(item):
+                resolved.append(item)
+                continue
+            try:
+                access = await juying_web_service.resolve_resource(
+                    str(item.get("juying_resource_id") or item.get("id") or "")
+                )
+                row = dict(item)
+                if access.get("resource_type") == "115":
+                    row["share_link"] = access.get("share_link") or ""
+                    row["pan115_share_link"] = access.get("share_link") or ""
+                    row["access_code"] = access.get("access_code") or ""
+                    row["extraction_code"] = access.get("access_code") or ""
+                else:
+                    row["magnet"] = access.get("magnet") or ""
+                resolved.append(row)
+                success_count += 1
+            except Exception as exc:
+                failed_count += 1
+                logger.warning(
+                    "聚影资源解析失败 resource_id=%s error=%s",
+                    item.get("juying_resource_id") or item.get("id"),
+                    str(exc)[:200],
+                )
+        if success_count or failed_count:
+            traces.append(
+                {
+                    "step": "resolve_juying_resources",
+                    "status": "success" if success_count else "warning",
+                    "message": (
+                        f"聚影短时链接解析完成：成功 {success_count} 条，失败 {failed_count} 条"
+                    ),
+                    "payload": {"success": success_count, "failed": failed_count},
+                }
+            )
+        return resolved, traces
 
     async def _prefilter_resources_for_unlock(
         self,

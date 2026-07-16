@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 from app.services.hdhive_service import hdhive_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pansou_service import pansou_service
+from app.services.juying_web_service import juying_web_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.app_metadata_service import app_metadata_service
 from app.services.subscription_scheduler_service import subscription_scheduler_service
@@ -65,6 +66,12 @@ class RuntimeSettingsRequest(BaseModel):
     hdhive_auto_checkin_method: Optional[str] = None
     hdhive_auto_checkin_run_time: Optional[str] = None
     pansou_base_url: Optional[str] = None
+    juying_base_url: Optional[str] = None
+    juying_username: Optional[str] = None
+    juying_password: Optional[str] = None
+    juying_enabled: Optional[bool] = None
+    juying_pan115_enabled: Optional[bool] = None
+    juying_magnet_enabled: Optional[bool] = None
     tg_api_id: Optional[str] = None
     tg_api_hash: Optional[str] = None
     tg_phone: Optional[str] = None
@@ -286,7 +293,7 @@ def _build_qr_image_url(content: str) -> str:
 
 
 def _normalize_subscription_priority(raw: object) -> list[str]:
-    allowed = {"hdhive", "pansou", "tg"}
+    allowed = {"hdhive", "juying", "pansou", "tg"}
     source_items: list[str] = []
     if isinstance(raw, list):
         source_items = [str(item or "").strip().lower() for item in raw]
@@ -332,6 +339,15 @@ async def _validate_priority_source_config(merged_settings: dict) -> None:
             base_url = str(merged_settings.get("pansou_base_url") or "").strip()
             if not base_url:
                 errors.append("Pansou 优先级已启用，但缺少服务地址配置")
+        elif source == "juying":
+            username = str(merged_settings.get("juying_username") or "").strip()
+            password_set = bool(
+                merged_settings.get("juying_password_set")
+                or merged_settings.get("juying_password")
+                or runtime_settings_service.has_juying_password()
+            )
+            if not username or not password_set:
+                errors.append("聚影优先级已启用，但缺少网页登录账号或密码")
         elif source == "tg":
             tg_api_id = str(merged_settings.get("tg_api_id") or "").strip()
             tg_api_hash = str(merged_settings.get("tg_api_hash") or "").strip()
@@ -779,6 +795,10 @@ async def update_runtime_settings(
         api_key_value = payload.pop("llm_api_key")
         if api_key_value is not None:
             runtime_settings_service.set_llm_api_key(str(api_key_value))
+    if "juying_password" in payload:
+        password_value = payload.pop("juying_password")
+        if password_value:
+            runtime_settings_service.set_juying_password(str(password_value))
     if "subscription_resource_priority" in payload or "subscription_resource_enabled" in payload:
         await _validate_priority_source_config(merged_settings)
     unlock_keys = {
@@ -869,6 +889,8 @@ async def update_runtime_settings(
         "license_key",
         "llm_api_key",
         "llm_api_key_enc",
+        "juying_password",
+        "juying_password_enc",
     }
     safe_keys = [k for k in payload.keys() if k not in _secret_keys]
     redacted_keys = [k for k in payload.keys() if k in _secret_keys]
@@ -916,6 +938,12 @@ async def check_updates():
 @router.get("/hdhive/check")
 async def check_hdhive_credentials():
     return await _perform_hdhive_check_cached()
+
+
+@router.get("/juying/check")
+async def check_juying_credentials():
+    """使用已保存的普通账号验证聚影网页登录。"""
+    return await juying_web_service.check_connection()
 
 
 @router.post("/hdhive/checkin")

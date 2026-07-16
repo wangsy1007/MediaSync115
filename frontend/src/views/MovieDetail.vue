@@ -194,6 +194,15 @@
                 </div>
               </div>
             </el-tab-pane>
+              <el-tab-pane v-else-if="key === 'pan115_juying'" label="聚影" name="juying">
+                <JuyingResourceTab
+                  media-type="movie"
+                  :tmdb-id="movieId"
+                  resource-type="115"
+                  :title="movie?.title || ''"
+                  :year="movie?.release_date?.split('-')[0] || ''"
+                />
+              </el-tab-pane>
               <el-tab-pane v-else-if="key === 'pan115_hdhive'" label="HDHive" name="hdhive">
               <div class="resource-tools resource-tools-split">
                 <el-button
@@ -509,7 +518,16 @@
                   <el-button size="small" @click="openManualMagnetDialog">导入磁链</el-button>
                 </div>
               </div>
-            </el-tab-pane>
+              </el-tab-pane>
+              <el-tab-pane v-else-if="key === 'magnet_juying'" label="聚影" name="juying">
+                <JuyingResourceTab
+                  media-type="movie"
+                  :tmdb-id="movieId"
+                  resource-type="magnet"
+                  :title="movie?.title || ''"
+                  :year="movie?.release_date?.split('-')[0] || ''"
+                />
+              </el-tab-pane>
               <el-tab-pane v-else-if="key === 'magnet_butailing'" label="不太灵" name="butailing">
               <div class="resource-tools resource-tools-split">
                 <el-button
@@ -654,6 +672,7 @@ import { searchApi, subscriptionApi, pan115Api, quarkApi } from '@/api'
 import { Star, Plus, ArrowLeft, VideoCamera } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import QuarkResourceTab from '@/components/detail/QuarkResourceTab.vue'
+import JuyingResourceTab from '@/components/detail/JuyingResourceTab.vue'
 import { getVisibleTabs, loadVisibleTabs, isTabVisible, getOrderedVisibleSubTabs, getFirstVisibleSubTabName, getOrderedVisibleMainTabs } from '@/utils/detailTabs'
 import { useDetailResourceTabAutoFetch } from '@/utils/detailResourceTabAutoFetch'
 import { extractTags } from '@/utils/resourceTags'

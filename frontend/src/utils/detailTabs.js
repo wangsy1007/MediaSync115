@@ -5,6 +5,7 @@ import { settingsApi } from '@/api'
 export const ALL_TABS = [
   { key: 'pan115', label: '115网盘', group: 'main' },
   { key: 'pan115_pansou', label: 'Pansou', group: 'pan115', parent: 'pan115' },
+  { key: 'pan115_juying', label: '聚影', group: 'pan115', parent: 'pan115' },
   { key: 'pan115_hdhive', label: 'HDHive', group: 'pan115', parent: 'pan115' },
   { key: 'pan115_tg', label: 'Telegram', group: 'pan115', parent: 'pan115' },
   { key: 'quark', label: '夸克网盘', group: 'main' },
@@ -13,6 +14,7 @@ export const ALL_TABS = [
   { key: 'quark_tg', label: 'Telegram', group: 'quark', parent: 'quark' },
   { key: 'magnet', label: '磁力链接', group: 'main' },
   { key: 'magnet_seedhub', label: 'SeedHub', group: 'magnet', parent: 'magnet' },
+  { key: 'magnet_juying', label: '聚影', group: 'magnet', parent: 'magnet' },
   { key: 'magnet_butailing', label: '不太灵', group: 'magnet', parent: 'magnet' },
 ]
 

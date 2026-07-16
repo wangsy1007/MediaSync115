@@ -34,6 +34,7 @@ class TestSubscriptionResourceEnabled:
         enabled = service.get_subscription_resource_enabled()
         assert enabled == {
             "hdhive": False,
+            "juying": False,
             "pansou": True,
             "tg": False,
         }

@@ -16,6 +16,7 @@ from app.services.archive_naming_config import (
 )
 from app.services.hdhive_service import hdhive_service
 from app.services.pansou_service import pansou_service
+from app.services.juying_web_service import juying_web_service
 from app.services.tg_service import tg_service
 from app.services.emby_service import emby_service
 from app.utils.proxy import proxy_manager
@@ -89,6 +90,12 @@ class RuntimeSettingsService:
             "hdhive_auto_checkin_method": "web",
             "hdhive_auto_checkin_run_time": "09:00",
             "pansou_base_url": settings.PANSOU_BASE_URL,
+            "juying_base_url": "https://www.jying.top",
+            "juying_username": "",
+            "juying_password_enc": "",
+            "juying_enabled": False,
+            "juying_pan115_enabled": True,
+            "juying_magnet_enabled": True,
             "tg_api_id": settings.TG_API_ID or "",
             "tg_api_hash": settings.TG_API_HASH or "",
             "tg_phone": settings.TG_PHONE or "",
@@ -129,9 +136,10 @@ class RuntimeSettingsService:
             "auth_secret": "",
             "subscription_enabled": False,
             "subscription_interval_hours": 24,
-            "subscription_resource_priority": ["hdhive", "pansou", "tg"],
+            "subscription_resource_priority": ["hdhive", "juying", "pansou", "tg"],
             "subscription_resource_enabled": {
                 "hdhive": True,
+                "juying": False,
                 "pansou": True,
                 "tg": True,
             },
@@ -158,6 +166,7 @@ class RuntimeSettingsService:
             "detail_visible_tabs": [
                 "pan115",
                 "pan115_pansou",
+                "pan115_juying",
                 "pan115_hdhive",
                 "pan115_tg",
                 "quark",
@@ -166,6 +175,7 @@ class RuntimeSettingsService:
                 "quark_tg",
                 "magnet",
                 "magnet_seedhub",
+                "magnet_juying",
                 "magnet_butailing",
             ],
             "license_key": "",
@@ -220,24 +230,40 @@ class RuntimeSettingsService:
         self.apply_runtime_overrides()
 
     def _migrate_detail_visible_tabs(self) -> None:
-        """老配置里没有 quark 相关 tab key 时自动补全，让新增功能默认可见"""
+        """为旧配置补全新增加的详情页资源标签。"""
         current = self._data.get("detail_visible_tabs")
         if not isinstance(current, list) or not current:
             return
+        changed = False
         quark_keys = ["quark", "quark_pansou", "quark_hdhive", "quark_tg"]
-        if any(k in current for k in quark_keys):
-            return
-        # 把 quark 系列插入到 magnet 之前；找不到 magnet 就追加到末尾
-        new_list = []
-        inserted = False
-        for key in current:
-            if key == "magnet" and not inserted:
+        if not any(k in current for k in quark_keys):
+            new_list = []
+            inserted = False
+            for key in current:
+                if key == "magnet" and not inserted:
+                    new_list.extend(quark_keys)
+                    inserted = True
+                new_list.append(key)
+            if not inserted:
                 new_list.extend(quark_keys)
-                inserted = True
-            new_list.append(key)
-        if not inserted:
-            new_list.extend(quark_keys)
-        self._data["detail_visible_tabs"] = new_list
+            current = new_list
+            changed = True
+
+        for parent, child in (("pan115", "pan115_juying"), ("magnet", "magnet_juying")):
+            if child in current:
+                continue
+            try:
+                insert_at = current.index(parent) + 1
+            except ValueError:
+                insert_at = len(current)
+            while insert_at < len(current) and current[insert_at].startswith(f"{parent}_"):
+                insert_at += 1
+            current.insert(insert_at, child)
+            changed = True
+
+        if not changed:
+            return
+        self._data["detail_visible_tabs"] = current
         try:
             self._save()
         except Exception:
@@ -416,6 +442,44 @@ class RuntimeSettingsService:
 
     def get_pansou_base_url(self) -> str:
         return self._data["pansou_base_url"]
+
+    def get_juying_base_url(self) -> str:
+        return str(self._data.get("juying_base_url") or "https://www.jying.top").strip()
+
+    def get_juying_username(self) -> str:
+        return str(self._data.get("juying_username") or "").strip()
+
+    def get_juying_password(self) -> str:
+        """解密读取聚影网页登录密码。"""
+        from app.utils.credential_crypto import decrypt_credential
+
+        encrypted = str(self._data.get("juying_password_enc") or "").strip()
+        return decrypt_credential(encrypted, self.get_auth_secret()) if encrypted else ""
+
+    def set_juying_password(self, password: str) -> None:
+        """加密保存聚影网页登录密码；空值表示保留现有密码。"""
+        from app.utils.credential_crypto import encrypt_credential
+
+        plain = str(password or "")
+        if not plain:
+            return
+        self._data["juying_password_enc"] = encrypt_credential(
+            plain, self.get_auth_secret()
+        )
+        self._loaded_keys.add("juying_password_enc")
+        self._save()
+
+    def has_juying_password(self) -> bool:
+        return bool(str(self._data.get("juying_password_enc") or "").strip())
+
+    def get_juying_enabled(self) -> bool:
+        return bool(self._data.get("juying_enabled", False))
+
+    def get_juying_pan115_enabled(self) -> bool:
+        return bool(self._data.get("juying_pan115_enabled", True))
+
+    def get_juying_magnet_enabled(self) -> bool:
+        return bool(self._data.get("juying_magnet_enabled", True))
 
     def get_hdhive_cookie(self) -> str:
         return self._data["hdhive_cookie"]
@@ -834,7 +898,7 @@ class RuntimeSettingsService:
         if not isinstance(value, list):
             return list(self._defaults["subscription_resource_priority"])
 
-        allowed = {"hdhive", "pansou", "tg"}
+        allowed = {"hdhive", "juying", "pansou", "tg"}
         normalized: list[str] = []
         seen: set[str] = set()
         for item in value:
@@ -849,14 +913,17 @@ class RuntimeSettingsService:
 
     @staticmethod
     def _subscription_resource_source_set() -> set[str]:
-        return {"hdhive", "pansou", "tg"}
+        return {"hdhive", "juying", "pansou", "tg"}
 
     def get_subscription_resource_enabled(self) -> dict[str, bool]:
         allowed = self._subscription_resource_source_set()
-        defaults = {
-            source: True
-            for source in self._defaults.get("subscription_resource_enabled") or allowed
-        }
+        raw_defaults = self._defaults.get("subscription_resource_enabled")
+        if isinstance(raw_defaults, dict):
+            defaults = {
+                source: bool(raw_defaults.get(source, True)) for source in allowed
+            }
+        else:
+            defaults = {source: True for source in allowed}
         if not defaults:
             defaults = {source: True for source in allowed}
 
@@ -1378,11 +1445,19 @@ class RuntimeSettingsService:
                     continue
 
                 if key == "subscription_resource_priority":
-                    allowed = {"hdhive", "pansou", "tg"}
+                    allowed = {"hdhive", "juying", "pansou", "tg"}
                 elif key == "subscription_resource_enabled":
                     allowed = self._subscription_resource_source_set()
+                    configured_defaults = self._defaults.get(
+                        "subscription_resource_enabled"
+                    )
                     defaults = {
-                        source: True for source in allowed
+                        source: bool(
+                            configured_defaults.get(source, True)
+                            if isinstance(configured_defaults, dict)
+                            else True
+                        )
+                        for source in allowed
                     }
                     normalized_map = dict(defaults)
                     if isinstance(value, dict):
@@ -1459,6 +1534,14 @@ class RuntimeSettingsService:
         hdhive_service.set_cookie(self.get_hdhive_cookie())
         hdhive_service.set_base_url(self.get_hdhive_base_url())
         pansou_service.set_base_url(self.get_pansou_base_url())
+        juying_web_service.configure(
+            base_url=self.get_juying_base_url(),
+            username=self.get_juying_username(),
+            password=self.get_juying_password(),
+            enabled=self.get_juying_enabled(),
+            pan115_enabled=self.get_juying_pan115_enabled(),
+            magnet_enabled=self.get_juying_magnet_enabled(),
+        )
         tg_service.set_config(
             api_id=self.get_tg_api_id(),
             api_hash=self.get_tg_api_hash(),
@@ -1508,6 +1591,12 @@ class RuntimeSettingsService:
             "hdhive_auto_checkin_method": self.get_hdhive_auto_checkin_method(),
             "hdhive_auto_checkin_run_time": self.get_hdhive_auto_checkin_run_time(),
             "pansou_base_url": self.get_pansou_base_url(),
+            "juying_base_url": self.get_juying_base_url(),
+            "juying_username": self.get_juying_username(),
+            "juying_password_set": self.has_juying_password(),
+            "juying_enabled": self.get_juying_enabled(),
+            "juying_pan115_enabled": self.get_juying_pan115_enabled(),
+            "juying_magnet_enabled": self.get_juying_magnet_enabled(),
             "tg_api_id": self.get_tg_api_id(),
             "tg_api_hash": self.get_tg_api_hash(),
             "tg_phone": self.get_tg_phone(),

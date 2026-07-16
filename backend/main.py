@@ -20,6 +20,7 @@ from app.api import (
     pan115,
     pan115_play as pan115_play_api,
     pansou,
+    juying,
     quark,
     scheduler,
     search,
@@ -36,6 +37,7 @@ from app.services.auth_service import auth_service
 from app.services.app_metadata_service import app_metadata_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pansou_service import pansou_service
+from app.services.juying_web_service import juying_web_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.emby_sync_scheduler_service import emby_sync_scheduler_service
 from app.services.feiniu_sync_scheduler_service import feiniu_sync_scheduler_service
@@ -253,6 +255,7 @@ async def lifespan(app: FastAPI):
     await tg_bot_service.stop()
     await scheduler_manager.stop()
     await pansou_service.close()
+    await juying_web_service.close()
     await operation_log_service.stop()
     kafka_producer.close()
 
@@ -456,6 +459,7 @@ app.include_router(pan115.router, prefix="/api")
 app.include_router(pan115_play_api.router, prefix="/api")
 app.include_router(quark.router, prefix="/api")
 app.include_router(pansou.router, prefix="/api")
+app.include_router(juying.router, prefix="/api")
 app.include_router(runtime_settings_api.router, prefix="/api")
 app.include_router(strm_api.router, prefix="/api")
 app.include_router(emby_proxy_api.router, prefix="/api")

@@ -5,6 +5,7 @@
       <div class="filters">
         <el-select v-model="filters.channel" clearable placeholder="渠道" class="filter-item filter-item-channel">
           <el-option label="HDHive" value="hdhive" />
+          <el-option label="聚影" value="juying" />
           <el-option label="Pansou" value="pansou" />
           <el-option label="Telegram" value="tg" />
         </el-select>
@@ -82,6 +83,9 @@ const stepLabelMap = {
   fetch_hdhive_tmdb_failed: 'HDHive TMDB 抓取失败',
   fetch_hdhive_keyword_start: 'HDHive 关键词抓取开始',
   fetch_hdhive_keyword_done: 'HDHive 关键词抓取结束',
+  fetch_juying_start: '聚影资源抓取开始',
+  fetch_juying_done: '聚影资源抓取结束',
+  resolve_juying_resources: '聚影短时链接解析',
   fetch_tg_keyword_start: 'Telegram 抓取开始',
   fetch_tg_keyword_done: 'Telegram 抓取结束',
   fetch_pansou_tmdb_start: 'Pansou TMDB 抓取开始',
