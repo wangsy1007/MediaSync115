@@ -195,6 +195,7 @@
                   :season="selectedSeason || null"
                   :title="tv?.name || ''"
                   :year="tv?.first_air_date?.split('-')[0] || ''"
+                  @switch-resource-type="handleJuyingResourceTypeSwitch"
                 />
               </el-tab-pane>
               <el-tab-pane v-else-if="key === 'pan115_hdhive'" label="HDHive" name="hdhive">
@@ -540,6 +541,7 @@
                   :season="selectedSeason || null"
                   :title="tv?.name || ''"
                   :year="tv?.first_air_date?.split('-')[0] || ''"
+                  @switch-resource-type="handleJuyingResourceTypeSwitch"
                 />
               </el-tab-pane>
               <el-tab-pane v-else-if="key === 'magnet_butailing'" label="不太灵" name="butailing">
@@ -828,6 +830,16 @@ const refreshQuarkConfigured = async () => {
 const pan115SourceTab = ref(getFirstVisibleSubTabName(_visibleTabs.value, 'pan115') || 'pansou')
 const magnetSourceTab = ref(getFirstVisibleSubTabName(_visibleTabs.value, 'magnet') || 'seedhub')
 const selectedSeason = ref(1)
+
+const handleJuyingResourceTypeSwitch = (resourceType) => {
+  if (resourceType === 'magnet') {
+    activeTab.value = 'magnet'
+    magnetSourceTab.value = 'juying'
+    return
+  }
+  activeTab.value = 'pan115'
+  pan115SourceTab.value = 'juying'
+}
 const quarkSeason = computed(() => Number(selectedSeason.value || 0) || null)
 
 // 生成季度列表

@@ -173,6 +173,18 @@
                 </div>
               </div>
             </el-tab-pane>
+              <el-tab-pane v-else-if="key === 'pan115_juying'" label="聚影" name="juying">
+                <el-empty v-if="!mappedTmdbId" description="请先匹配 TMDB 后再查看聚影资源" />
+                <JuyingResourceTab
+                  v-else
+                  :media-type="mediaType"
+                  :tmdb-id="mappedTmdbId"
+                  resource-type="115"
+                  :title="detail?.title || ''"
+                  :year="detail?.year || ''"
+                  @switch-resource-type="handleJuyingResourceTypeSwitch"
+                />
+              </el-tab-pane>
               <el-tab-pane v-else-if="key === 'pan115_hdhive'" label="HDHive" name="hdhive">
               <div class="resource-tools resource-tools-split">
                 <el-button size="small" type="primary" plain :loading="hdhiveLoading" @click="fetchHdhivePan115">
@@ -452,6 +464,18 @@
                 </div>
               </div>
             </el-tab-pane>
+              <el-tab-pane v-else-if="key === 'magnet_juying'" label="聚影" name="juying">
+                <el-empty v-if="!mappedTmdbId" description="请先匹配 TMDB 后再查看聚影资源" />
+                <JuyingResourceTab
+                  v-else
+                  :media-type="mediaType"
+                  :tmdb-id="mappedTmdbId"
+                  resource-type="magnet"
+                  :title="detail?.title || ''"
+                  :year="detail?.year || ''"
+                  @switch-resource-type="handleJuyingResourceTypeSwitch"
+                />
+              </el-tab-pane>
               <el-tab-pane v-else-if="key === 'magnet_butailing'" label="不太灵" name="butailing">
               <div class="resource-tools resource-tools-split">
                 <el-button size="small" type="primary" plain :loading="butailingMagnetLoading" @click="fetchButailingMagnet">
@@ -651,6 +675,7 @@ import { pansouApi, pan115Api, searchApi, subscriptionApi, quarkApi } from '@/ap
 import { ArrowLeft, VideoCamera } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import QuarkResourceTab from '@/components/detail/QuarkResourceTab.vue'
+import JuyingResourceTab from '@/components/detail/JuyingResourceTab.vue'
 import { getVisibleTabs, loadVisibleTabs, isTabVisible, getOrderedVisibleSubTabs, getFirstVisibleSubTabName, getOrderedVisibleMainTabs } from '@/utils/detailTabs'
 import { useDetailResourceTabAutoFetch } from '@/utils/detailResourceTabAutoFetch'
 import { extractTags } from '@/utils/resourceTags'
@@ -719,6 +744,16 @@ const refreshQuarkConfigured = async () => {
 const activeTab = ref(getOrderedVisibleMainTabs(_visibleTabs.value)[0] || 'pan115')
 const pan115SourceTab = ref(getFirstVisibleSubTabName(_visibleTabs.value, 'pan115') || 'pansou')
 const magnetSourceTab = ref(getFirstVisibleSubTabName(_visibleTabs.value, 'magnet') || 'seedhub')
+
+const handleJuyingResourceTypeSwitch = (resourceType) => {
+  if (resourceType === 'magnet') {
+    activeTab.value = 'magnet'
+    magnetSourceTab.value = 'juying'
+    return
+  }
+  activeTab.value = 'pan115'
+  pan115SourceTab.value = 'juying'
+}
 
 const pan115Resources = ref([])
 const magnetResources = ref([])

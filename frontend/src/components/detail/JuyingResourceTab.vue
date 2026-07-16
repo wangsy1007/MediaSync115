@@ -51,7 +51,13 @@
       :total="resources.length"
       class="pagination"
     />
-    <el-empty v-if="!loading && !resources.length" :description="emptyDescription" />
+    <div v-if="!loading && !resources.length && alternateCount" class="alternate-resource-tip">
+      <el-empty :description="emptyDescription" />
+      <el-button type="primary" plain @click="switchResourceType">
+        查看 {{ alternateCount }} 条聚影{{ alternateLabel }}资源
+      </el-button>
+    </div>
+    <el-empty v-else-if="!loading && !resources.length" :description="emptyDescription" />
   </div>
 </template>
 
@@ -63,6 +69,8 @@ import { copyText } from '@/utils/clipboard'
 import { executePan115SaveToFolder } from '@/utils/pan115SaveFlow'
 
 defineOptions({ name: 'JuyingResourceTab' })
+
+const emit = defineEmits(['switch-resource-type'])
 
 const props = defineProps({
   mediaType: { type: String, required: true },
@@ -77,17 +85,28 @@ const loading = ref(false)
 const tried = ref(false)
 const resources = ref([])
 const matchedMovie = ref(null)
+const pan115Count = ref(0)
+const magnetCount = ref(0)
 const page = ref(1)
 const pageSize = 8
 const isMagnet = computed(() => props.resourceType === 'magnet')
+const alternateCount = computed(() => isMagnet.value ? pan115Count.value : magnetCount.value)
+const alternateLabel = computed(() => isMagnet.value ? '115' : '磁力')
 const pagedResources = computed(() => {
   const start = (page.value - 1) * pageSize
   return resources.value.slice(start, start + pageSize)
 })
 const emptyDescription = computed(() => {
   if (!tried.value) return '尚未获取聚影资源'
+  if (alternateCount.value) {
+    return `当前没有聚影${isMagnet.value ? '磁力' : '115'}资源，但另一分类已有结果`
+  }
   return isMagnet.value ? '聚影暂无可用磁力资源' : '聚影暂无可用115资源'
 })
+
+const switchResourceType = () => {
+  emit('switch-resource-type', isMagnet.value ? '115' : 'magnet')
+}
 
 const errorMessage = (error, fallback) => {
   const detail = error?.response?.data?.detail
@@ -109,9 +128,14 @@ const fetchResources = async (refresh = false) => {
     )
     resources.value = Array.isArray(data?.list) ? data.list : []
     matchedMovie.value = data?.movie || null
+    pan115Count.value = Number(data?.pan115_count || 0)
+    magnetCount.value = Number(data?.magnet_count || 0)
     page.value = 1
   } catch (error) {
     resources.value = []
+    matchedMovie.value = null
+    pan115Count.value = 0
+    magnetCount.value = 0
     ElMessage.error(errorMessage(error, '聚影资源加载失败'))
   } finally {
     loading.value = false
@@ -199,6 +223,8 @@ watch(
   () => {
     resources.value = []
     matchedMovie.value = null
+    pan115Count.value = 0
+    magnetCount.value = 0
     tried.value = false
     fetchResources()
   },
@@ -224,5 +250,12 @@ onMounted(() => fetchResources())
 .pagination {
   margin-top: 16px;
   justify-content: center;
+}
+.alternate-resource-tip {
+  text-align: center;
+  padding-bottom: 20px;
+}
+.alternate-resource-tip :deep(.el-empty) {
+  padding-bottom: 12px;
 }
 </style>

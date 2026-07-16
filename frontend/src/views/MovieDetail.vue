@@ -201,6 +201,7 @@
                   resource-type="115"
                   :title="movie?.title || ''"
                   :year="movie?.release_date?.split('-')[0] || ''"
+                  @switch-resource-type="handleJuyingResourceTypeSwitch"
                 />
               </el-tab-pane>
               <el-tab-pane v-else-if="key === 'pan115_hdhive'" label="HDHive" name="hdhive">
@@ -526,6 +527,7 @@
                   resource-type="magnet"
                   :title="movie?.title || ''"
                   :year="movie?.release_date?.split('-')[0] || ''"
+                  @switch-resource-type="handleJuyingResourceTypeSwitch"
                 />
               </el-tab-pane>
               <el-tab-pane v-else-if="key === 'magnet_butailing'" label="不太灵" name="butailing">
@@ -737,6 +739,16 @@ const pan115Resources = ref([])
 const pan115SourceTab = ref(getFirstVisibleSubTabName(_visibleTabs.value, 'pan115') || 'pansou')
 const magnetSourceTab = ref(getFirstVisibleSubTabName(_visibleTabs.value, 'magnet') || 'seedhub')
 const magnetResources = ref([])
+
+const handleJuyingResourceTypeSwitch = (resourceType) => {
+  if (resourceType === 'magnet') {
+    activeTab.value = 'magnet'
+    magnetSourceTab.value = 'juying'
+    return
+  }
+  activeTab.value = 'pan115'
+  pan115SourceTab.value = 'juying'
+}
 
 const pansouLoading = ref(false)
 const pansouTried = ref(false)

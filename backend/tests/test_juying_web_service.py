@@ -104,3 +104,48 @@ class TestJuyingWebService:
         assert result["share_link"] == "https://115cdn.com/s/example"
         assert result["access_code"] == "abcd"
         asyncio.run(service.close())
+
+    def test_find_movie_retries_original_title_without_year(self) -> None:
+        service = JuyingWebService()
+        service.configure(
+            base_url="https://www.jying.top",
+            username="user@example.com",
+            password="secret",
+            enabled=True,
+        )
+        service._request = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[
+                {"results": []},
+                {"results": []},
+                {"results": []},
+                {
+                    "results": [
+                        {
+                            "id": 46882,
+                            "title": "The Furious",
+                            "release_year": 2025,
+                            "movie_type": "movie",
+                            "tmdb_id": "1280738",
+                        }
+                    ]
+                },
+            ]
+        )
+
+        result = asyncio.run(
+            service._find_movie(
+                title="火遮眼",
+                alternative_titles=["The Furious"],
+                year="2026",
+                media_type="movie",
+                tmdb_id=1280738,
+                season=None,
+            )
+        )
+
+        assert result is not None
+        assert result["id"] == 46882
+        calls = service._request.await_args_list
+        assert calls[-1].kwargs["params"]["q"] == "The Furious"
+        assert "year" not in calls[-1].kwargs["params"]
+        asyncio.run(service.close())

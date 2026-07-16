@@ -277,24 +277,51 @@ class JuyingWebService:
         return re.sub(r"[^\w\u4e00-\u9fff]+", "", str(value or "").casefold())
 
     @classmethod
+    def _unique_titles(
+        cls,
+        title: str,
+        alternative_titles: list[str] | None = None,
+    ) -> list[str]:
+        titles: list[str] = []
+        seen: set[str] = set()
+        for value in [title, *(alternative_titles or [])]:
+            cleaned = str(value or "").strip()
+            fingerprint = cls._fingerprint(cleaned)
+            if not cleaned or not fingerprint or fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            titles.append(cleaned)
+        return titles
+
+    @staticmethod
+    def _safe_int(value: Any) -> int:
+        try:
+            return int(str(value or "0").strip())
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
     def _movie_score(
         cls,
         row: dict[str, Any],
         *,
-        title: str,
+        titles: list[str],
         year: str,
         media_type: str,
         tmdb_id: int | None,
     ) -> int:
         score = 0
-        if tmdb_id and int(row.get("tmdb_id") or 0) == int(tmdb_id):
+        if tmdb_id and cls._safe_int(row.get("tmdb_id")) == int(tmdb_id):
             score += 1000
-        expected = cls._fingerprint(title)
         actual = cls._fingerprint(row.get("title"))
-        if expected and actual == expected:
-            score += 250
-        elif expected and (expected in actual or actual in expected):
-            score += 80
+        title_score = 0
+        for title in titles:
+            expected = cls._fingerprint(title)
+            if expected and actual == expected:
+                title_score = max(title_score, 250)
+            elif expected and actual and (expected in actual or actual in expected):
+                title_score = max(title_score, 80)
+        score += title_score
         row_year = str(row.get("release_year") or row.get("year") or "").strip()
         if year and row_year == str(year):
             score += 60
@@ -313,44 +340,64 @@ class JuyingWebService:
         media_type: str,
         tmdb_id: int | None,
         season: int | None,
+        alternative_titles: list[str] | None = None,
     ) -> dict[str, Any] | None:
-        query = str(title or "").strip()
-        if media_type == "tv" and season:
-            query = f"{query} S{int(season):02d}".strip()
-        params: dict[str, Any] = {"q": query, "page": 1, "page_size": 30}
-        if year:
-            params["year"] = year
-        payload = await self._request("GET", "/api/app/movies/", params=params)
-        rows = payload.get("results") or []
-        if not isinstance(rows, list) or not rows:
-            if query != str(title or "").strip():
-                params["q"] = str(title or "").strip()
-                payload = await self._request("GET", "/api/app/movies/", params=params)
+        titles = self._unique_titles(title, alternative_titles)
+        if not titles:
+            return None
+
+        queries: list[str] = []
+        for candidate_title in titles:
+            if media_type == "tv" and season:
+                queries.append(f"{candidate_title} S{int(season):02d}")
+            queries.append(candidate_title)
+
+        attempted: set[tuple[str, str]] = set()
+        for query in queries:
+            year_options = [str(year), ""] if year else [""]
+            for query_year in year_options:
+                attempt_key = (self._fingerprint(query), query_year)
+                if attempt_key in attempted:
+                    continue
+                attempted.add(attempt_key)
+                params: dict[str, Any] = {
+                    "q": query,
+                    "page": 1,
+                    "page_size": 30,
+                }
+                if query_year:
+                    params["year"] = query_year
+                payload = await self._request(
+                    "GET", "/api/app/movies/", params=params
+                )
                 rows = payload.get("results") or []
-        candidates = [row for row in rows if isinstance(row, dict)]
-        if not candidates:
-            return None
-        ranked = sorted(
-            candidates,
-            key=lambda row: self._movie_score(
-                row,
-                title=title,
-                year=year,
-                media_type=media_type,
-                tmdb_id=tmdb_id,
-            ),
-            reverse=True,
-        )
-        best = ranked[0]
-        if self._movie_score(
-            best,
-            title=title,
-            year=year,
-            media_type=media_type,
-            tmdb_id=tmdb_id,
-        ) < 200:
-            return None
-        return best
+                candidates = [
+                    row for row in rows if isinstance(row, dict)
+                ] if isinstance(rows, list) else []
+                if not candidates:
+                    continue
+                ranked = sorted(
+                    candidates,
+                    key=lambda row: self._movie_score(
+                        row,
+                        titles=titles,
+                        year=year,
+                        media_type=media_type,
+                        tmdb_id=tmdb_id,
+                    ),
+                    reverse=True,
+                )
+                best = ranked[0]
+                score = self._movie_score(
+                    best,
+                    titles=titles,
+                    year=year,
+                    media_type=media_type,
+                    tmdb_id=tmdb_id,
+                )
+                if score >= 200:
+                    return best
+        return None
 
     async def _load_movie_resources(self, movie_id: int) -> list[dict[str, Any]]:
         resources: list[dict[str, Any]] = []
@@ -423,12 +470,20 @@ class JuyingWebService:
         media_type: str = "movie",
         tmdb_id: int | None = None,
         season: int | None = None,
+        alternative_titles: list[str] | None = None,
         force: bool = False,
     ) -> dict[str, Any]:
         self._ensure_available()
         normalized_type = "tv" if str(media_type).lower() == "tv" else "movie"
         cache_key = "|".join(
-            [normalized_type, str(tmdb_id or 0), self._fingerprint(title), str(year), str(season or 0)]
+            [
+                normalized_type,
+                str(tmdb_id or 0),
+                self._fingerprint(title),
+                ",".join(self._fingerprint(item) for item in (alternative_titles or [])),
+                str(year),
+                str(season or 0),
+            ]
         )
         now = time.monotonic()
         if not force:
@@ -447,6 +502,7 @@ class JuyingWebService:
                 media_type=normalized_type,
                 tmdb_id=tmdb_id,
                 season=season,
+                alternative_titles=alternative_titles,
             )
             if not movie:
                 result = {"movie": None, "list": [], "pan115": [], "magnets": []}
@@ -473,6 +529,7 @@ class JuyingWebService:
                     "media_type": normalized_type,
                     "tmdb_id": tmdb_id,
                     "season": season,
+                    "alternative_titles": alternative_titles,
                 }
 
             pan115 = [row for row in public_rows if row["resource_type"] == "115"]

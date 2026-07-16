@@ -36,8 +36,17 @@ async def _media_context(tmdb_id: int, media_type: str) -> dict:
         date_value = payload.get("release_date") or payload.get("first_air_date")
     if not title:
         raise HTTPException(status_code=404, detail="未找到目标影视信息")
+    alternative_titles: list[str] = []
+    for value in (
+        payload.get("original_name"),
+        payload.get("original_title"),
+    ):
+        cleaned = str(value or "").strip()
+        if cleaned and cleaned != str(title) and cleaned not in alternative_titles:
+            alternative_titles.append(cleaned)
     return {
         "title": str(title),
+        "alternative_titles": alternative_titles,
         "year": str(date_value or "")[:4],
         "media_type": media_type,
         "tmdb_id": tmdb_id,
@@ -86,4 +95,3 @@ async def resolve_juying_resource(resource_id: str):
         return await juying_web_service.resolve_resource(resource_id)
     except Exception as exc:
         _raise_http(exc)
-
