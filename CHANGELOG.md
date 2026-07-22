@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.2
+
+### 重点更新
+- 修复 Python 3.12 下 p115client 依赖（python-asynctools）引用 `_check_methods` 导致 115 二维码生成失败的问题，升级 p115client 并锁定 python-asynctools>=0.2.2。
+- 新增 DevCloud 部署支持（Dockerfile.devcloud 与 docker/devcloud 配置）。
+- 修复 Windows 下构建镜像时 start.sh CRLF 行尾符导致容器启动失败的问题。
+- compose.yaml 的 EMBY_PROXY_HOST 默认值调整为 host.docker.internal。
+
 ## 1.3.1
 
 ### 重点更新

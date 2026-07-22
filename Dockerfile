@@ -32,8 +32,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-ARG APP_BUILD_VERSION=1.3.1
-ARG APP_BUILD_TAG=1.3.1
+ARG APP_BUILD_VERSION=1.3.2
+ARG APP_BUILD_TAG=1.3.2
 ARG APP_BUILD_GIT_SHA=local
 ARG APP_BUILD_TIME=
 
@@ -72,7 +72,8 @@ COPY --from=frontend-builder /frontend/dist /usr/share/nginx/html
 COPY docker/all-in-one/nginx.conf /etc/nginx/nginx.conf
 COPY docker/all-in-one/start.sh /start.sh
 
-RUN chmod +x /start.sh \
+RUN sed -i 's/\r$//' /start.sh \
+    && chmod +x /start.sh \
     && mkdir -p /app/data /run/nginx /var/cache/nginx /var/log/nginx
 
 LABEL org.opencontainers.image.version="${APP_BUILD_VERSION}" \
