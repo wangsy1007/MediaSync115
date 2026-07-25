@@ -52,6 +52,24 @@ async def list_workflows(db: AsyncSession = Depends(get_db)):
     return await WorkflowService(db).list_all()
 
 
+@router.get("/event-types")
+async def list_event_types():
+    return {
+        "items": [
+            {"value": "download.completed", "title": "下载完成"},
+            {"value": "download.failed", "title": "下载失败"},
+            {"value": "subscription.created", "title": "订阅创建"},
+            {"value": "manual.trigger", "title": "手动触发"},
+        ]
+    }
+
+
+@router.post("/events/trigger")
+async def trigger_workflow_event(payload: EventTriggerPayload):
+    results = await scheduler_manager.trigger_event_workflows(payload.event_type, payload.payload)
+    return {"count": len(results), "results": results}
+
+
 @router.get("/{workflow_id}")
 async def get_workflow(workflow_id: int, db: AsyncSession = Depends(get_db)):
     workflow = await WorkflowService(db).get(workflow_id)
@@ -182,19 +200,3 @@ async def reset_workflow(workflow_id: int, db: AsyncSession = Depends(get_db)):
     return {"success": True}
 
 
-@router.post("/events/trigger")
-async def trigger_workflow_event(payload: EventTriggerPayload):
-    results = await scheduler_manager.trigger_event_workflows(payload.event_type, payload.payload)
-    return {"count": len(results), "results": results}
-
-
-@router.get("/event-types")
-async def list_event_types():
-    return {
-        "items": [
-            {"value": "download.completed", "title": "下载完成"},
-            {"value": "download.failed", "title": "下载失败"},
-            {"value": "subscription.created", "title": "订阅创建"},
-            {"value": "manual.trigger", "title": "手动触发"},
-        ]
-    }

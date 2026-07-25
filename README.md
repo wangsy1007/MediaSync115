@@ -316,6 +316,46 @@ docker compose up -d
 - 使用 `latest`：适合绝大多数 NAS 用户，能更容易被平台识别到有更新
 - 使用固定版本 tag，例如 `1.3.1`：适合想锁版本的用户，但通常不会收到“新版本可更新”提示
 
+## 上线前验证（Pre-release Check）
+
+发布或部署新版本前，建议在本机 Docker 已拉起且健康检查通过后，跑一遍全自动回归：
+
+```powershell
+# Windows
+.\scripts\prerelease_check.ps1
+
+# 含实网副作用（115 转存 / 订阅队列，会改动网盘数据）
+.\scripts\prerelease_check.ps1 -Live
+
+# 排障时可跳过某一层
+.\scripts\prerelease_check.ps1 -SkipUnit -SkipUi
+```
+
+```bash
+# Linux / macOS
+chmod +x scripts/prerelease_check.sh
+./scripts/prerelease_check.sh
+./scripts/prerelease_check.sh --live
+./scripts/prerelease_check.sh --skip-unit --skip-ui
+```
+
+脚本分层：
+
+| 层级 | 内容 | 默认 |
+|------|------|------|
+| L0 | `5173/healthz`（及 `9008`）就绪 | 必跑 |
+| L1 | 后端 `pytest`（临时容器挂载 `backend/`） | 必跑 |
+| L2 | [`scripts/prerelease_api_smoke.py`](./scripts/prerelease_api_smoke.py)：鉴权、各模块只读 API、连通性 | 必跑 |
+| L3 | Playwright UI 冒烟（探索/详情 + 订阅/下载/归档/STRM/设置等页面） | 必跑 |
+| L4 | 实网转存/订阅队列（[`backend/tests/run_live_subscription_transfer_smoke.py`](./backend/tests/run_live_subscription_transfer_smoke.py)） | 仅 `--live` / `-Live` |
+
+说明：
+
+- 默认账号 `admin` / `password`，可用环境变量 `MEDIASYNC_USER`、`MEDIASYNC_PASSWORD`、`MEDIASYNC_BASE_URL` 覆盖
+- L2 对「未配置」的外部服务记为 **WARN**（不阻断）；已配置但连通失败记为 **FAIL**。可用 `--strict` / `-Strict` 让 WARN 也失败
+- 本机无 Python 时，编排脚本会把冒烟脚本 `docker cp` 进 `mediasync115` 容器执行
+- 前端单独跑 UI：`cd frontend && npm run test:smoke`（健康检查默认走 `http://127.0.0.1:5173/healthz`）
+
 ## Changelog
 
 `1.3.1` 重点更新：

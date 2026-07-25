@@ -14,7 +14,9 @@ It is intentionally side-effect aware:
 from __future__ import annotations
 
 import argparse
+import http.cookiejar
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -26,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+DEFAULT_BASE_URL = os.environ.get("MEDIASYNC_BASE_URL", "http://127.0.0.1:5173")
 DEFAULT_TIMEOUT_SECONDS = 360
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_SAVE_CASES = [
@@ -60,6 +62,19 @@ class LiveSmokeRunner:
         self.base_url = base_url.rstrip("/")
         self.folder_id = str(folder_id or "0")
         self.timeout_seconds = timeout_seconds
+        self.cookie_jar = http.cookiejar.CookieJar()
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self.cookie_jar)
+        )
+
+    def login(self, username: str, password: str) -> None:
+        """登录并保存会话 Cookie（生产中间件需要 mediasync_session）。"""
+        self.request(
+            "POST",
+            "/api/auth/login",
+            payload={"username": username, "password": password},
+            timeout=30,
+        )
 
     def request(
         self,
@@ -81,7 +96,7 @@ class LiveSmokeRunner:
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(url, data=body, method=method.upper(), headers=headers)
         try:
-            with urllib.request.urlopen(request, timeout=timeout or self.timeout_seconds) as response:
+            with self.opener.open(request, timeout=timeout or self.timeout_seconds) as response:
                 charset = response.headers.get_content_charset() or "utf-8"
                 text = response.read().decode(charset)
         except urllib.error.HTTPError as exc:
@@ -177,12 +192,18 @@ def extract_search_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def load_default_folder_id() -> str:
-    runtime_file = Path(__file__).resolve().parents[1] / "data" / "runtime_settings.json"
-    try:
-        payload = json.loads(runtime_file.read_text(encoding="utf-8"))
-    except Exception:
-        return "0"
-    return str(payload.get("pan115_default_folder_id") or "0")
+    # tests/ -> backend/ -> repo root/data/runtime_settings.json
+    candidates = [
+        Path(__file__).resolve().parents[2] / "data" / "runtime_settings.json",
+        Path(__file__).resolve().parents[1] / "data" / "runtime_settings.json",
+    ]
+    for runtime_file in candidates:
+        try:
+            payload = json.loads(runtime_file.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        return str(payload.get("pan115_default_folder_id") or "0")
+    return "0"
 
 
 def build_cleanup_fids(before_items: list[dict[str, Any]], after_items: list[dict[str, Any]]) -> list[str]:
@@ -309,9 +330,28 @@ def run_save_queue_smoke(runner: LiveSmokeRunner, save_cases: list[dict[str, Any
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run live smoke tests for subscribe/save queue workflows.")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="API base url, default: http://127.0.0.1:8000")
+    parser.add_argument(
+        "--base-url",
+        default=DEFAULT_BASE_URL,
+        help="API base url, default: http://127.0.0.1:5173",
+    )
     parser.add_argument("--folder-id", default=load_default_folder_id(), help="115 default folder id")
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS, help="Task timeout")
+    parser.add_argument(
+        "--username",
+        default=os.environ.get("MEDIASYNC_USER", "admin"),
+        help="Login username (default: admin or MEDIASYNC_USER)",
+    )
+    parser.add_argument(
+        "--password",
+        default=os.environ.get("MEDIASYNC_PASSWORD", "password"),
+        help="Login password (default: password or MEDIASYNC_PASSWORD)",
+    )
+    parser.add_argument(
+        "--skip-login",
+        action="store_true",
+        help="Skip login (only for auth-disabled local uvicorn)",
+    )
     args = parser.parse_args()
 
     runner = LiveSmokeRunner(
@@ -319,6 +359,8 @@ def main() -> int:
         folder_id=args.folder_id,
         timeout_seconds=args.timeout_seconds,
     )
+    if not args.skip_login:
+        runner.login(args.username, args.password)
 
     results = {
         "base_url": args.base_url,

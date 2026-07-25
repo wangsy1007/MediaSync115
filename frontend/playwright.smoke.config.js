@@ -1,11 +1,12 @@
 import { defineConfig, devices } from '@playwright/test'
 
 const frontendBaseUrl = process.env.PLAYWRIGHT_FRONTEND_BASE_URL || 'http://127.0.0.1:5173'
-const backendHealthUrl = process.env.PLAYWRIGHT_BACKEND_HEALTH_URL || 'http://127.0.0.1:8000/health'
+const backendHealthUrl = process.env.PLAYWRIGHT_BACKEND_HEALTH_URL || 'http://127.0.0.1:5173/healthz'
 const authStorageState = './test-results/.auth/smoke-user.json'
 
 export default defineConfig({
   testDir: './tests/smoke',
+  testMatch: '**/*.smoke.spec.js',
   timeout: 90_000,
   expect: {
     timeout: 20_000
