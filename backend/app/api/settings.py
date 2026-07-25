@@ -871,7 +871,10 @@ async def update_runtime_settings(
         if payload_keys & _STRM_SCHEDULER_SETTING_KEYS:
             await strm_scheduler_service.ensure_tasks()
         if payload_keys & _TG_BOT_SETTING_KEYS:
-            background_tasks.add_task(_restart_tg_bot_background)
+            from app.services.tg_bot import tg_bot_service
+
+            # 保存设置后合并重启，避免连续保存触发多个 polling 实例
+            tg_bot_service.request_restart()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1427,27 +1430,16 @@ async def get_tg_bot_status():
     return tg_bot_service.status()
 
 
-async def _restart_tg_bot_background() -> None:
-    from app.services.tg_bot import tg_bot_service
-
-    try:
-        await asyncio.wait_for(tg_bot_service.restart(), timeout=60.0)
-        logger.info("TG Bot background restart finished, running=%s", tg_bot_service.running)
-    except asyncio.TimeoutError:
-        logger.error("TG Bot background restart timed out")
-    except Exception:
-        logger.exception("TG Bot background restart failed")
-
-
 @router.post("/tg-bot/restart")
-async def restart_tg_bot(background_tasks: BackgroundTasks):
+async def restart_tg_bot():
     from app.services.tg_bot import tg_bot_service
 
-    background_tasks.add_task(_restart_tg_bot_background)
+    # 直接走服务内合并重启，避免 BackgroundTasks 堆积多个独立 restart
+    tg_bot_service.request_restart()
     return {
         "success": True,
         "accepted": True,
-        "message": "已在后台重启 Bot，请稍后点击「检测状态」确认",
+        "message": "已在后台重启 Bot（重复点击会自动合并），请稍后点击「检测状态」确认",
         "running": tg_bot_service.running,
         "last_error": tg_bot_service.last_error,
     }

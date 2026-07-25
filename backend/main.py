@@ -250,7 +250,8 @@ async def lifespan(app: FastAPI):
     from app.services.archive_service import archive_service
 
     await archive_service.recover_stale_state()
-    await tg_bot_service.start()
+    # 后台启动 TG Bot，避免 Telegram 网络抖动拖垮整体就绪；失败会自动 recovery 重试
+    tg_bot_service.request_start()
     yield
     await tg_bot_service.stop()
     await scheduler_manager.stop()

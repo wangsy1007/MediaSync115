@@ -3,13 +3,18 @@ import logging
 from typing import Any
 
 from telegram import Bot
-from telegram.error import NetworkError, TelegramError, TimedOut
+from telegram.error import Conflict, NetworkError, TelegramError, TimedOut
 from telegram.ext import Application
 
 logger = logging.getLogger(__name__)
 
 TG_BOT_START_TIMEOUT_SECONDS = 25.0
 TG_BOT_STOP_TIMEOUT_SECONDS = 15.0
+TG_BOT_START_MAX_ATTEMPTS = 5
+TG_BOT_START_RETRY_BASE_SECONDS = 2.0
+TG_BOT_START_RETRY_MAX_SECONDS = 30.0
+TG_BOT_RECOVERY_INTERVAL_SECONDS = 60.0
+TG_BOT_CONFLICT_COOLDOWN_SECONDS = 8.0
 
 
 def _normalize_notify_chat_id(raw: Any) -> int | None:
@@ -25,7 +30,12 @@ class TgBotService:
         self._app: Application | None = None
         self._running = False
         self._lock = asyncio.Lock()
+        self._restart_schedule_lock = asyncio.Lock()
         self._last_error: str = ""
+        self._restart_task: asyncio.Task | None = None
+        self._recovery_task: asyncio.Task | None = None
+        self._start_task: asyncio.Task | None = None
+        self._restart_requested = False
 
     @property
     def running(self) -> bool:
@@ -48,6 +58,8 @@ class TgBotService:
             proxy=proxy_url,
             connect_timeout=10.0,
             read_timeout=30.0,
+            write_timeout=30.0,
+            pool_timeout=10.0,
             httpx_kwargs={"trust_env": False},
         )
 
@@ -56,6 +68,7 @@ class TgBotService:
 
         proxy_url = self._resolve_telegram_proxy()
         request = self._build_httpx_request(proxy_url)
+        get_updates_request = self._build_httpx_request(proxy_url)
         if proxy_url:
             logger.info("TG Bot 使用代理: %s", proxy_url)
         else:
@@ -64,7 +77,7 @@ class TgBotService:
             Application.builder()
             .token(token)
             .request(request)
-            .get_updates_request(request)
+            .get_updates_request(get_updates_request)
         )
         app = builder.build()
         cfg = self._get_settings()
@@ -103,49 +116,120 @@ class TgBotService:
         except Exception:
             logger.exception("Error shutting down TG Bot application")
 
+    async def _clear_webhook(self, bot: Bot) -> None:
+        """轮询前清理 webhook，避免与历史 webhook / 其他实例残留冲突。"""
+        try:
+            await bot.delete_webhook(drop_pending_updates=True)
+        except Exception:
+            logger.warning("TG Bot delete_webhook failed", exc_info=True)
+
+    async def _finish_start_polling(self, app: Application) -> None:
+        await app.initialize()
+        await self._clear_webhook(app.bot)
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+
+    def _retry_delay(self, attempt: int) -> float:
+        delay = TG_BOT_START_RETRY_BASE_SECONDS * (2 ** max(0, attempt - 1))
+        return min(delay, TG_BOT_START_RETRY_MAX_SECONDS)
+
     async def start(self) -> None:
         async with self._lock:
-            if self._running:
-                return
+            await self._start_locked()
 
-            cfg = self._get_settings()
-            if not cfg["enabled"] or not cfg["token"]:
-                logger.info("TG Bot is disabled or token is empty, skipping start")
-                return
+    async def _start_locked(self) -> None:
+        if self._running:
+            return
 
+        cfg = self._get_settings()
+        if not cfg["enabled"] or not cfg["token"]:
+            logger.info("TG Bot is disabled or token is empty, skipping start")
+            self._last_error = ""
+            self._cancel_recovery()
+            return
+
+        last_message = ""
+        for attempt in range(1, TG_BOT_START_MAX_ATTEMPTS + 1):
             partial_app: Application | None = None
             try:
                 partial_app = self._build_application(cfg["token"])
                 self._app = partial_app
 
                 await asyncio.wait_for(
-                    self._finish_start(partial_app),
+                    self._finish_start_polling(partial_app),
                     timeout=TG_BOT_START_TIMEOUT_SECONDS,
                 )
                 self._running = True
                 self._last_error = ""
-                logger.info("TG Bot started successfully")
-            except (asyncio.TimeoutError, TimedOut):
-                await self._abort_start(
-                    partial_app,
-                    "TG Bot 启动超时，请检查 Token 与访问 Telegram 的网络，或在设置中配置可用代理后重启 Bot",
+                self._cancel_recovery()
+                logger.info("TG Bot started successfully (attempt %s)", attempt)
+                return
+            except Conflict as exc:
+                last_message = (
+                    "TG Bot 与其他 getUpdates 实例冲突（同一 Token 只能有一个轮询进程）。"
+                    "已自动清理 webhook 并稍后重试；请确认未在其他机器/容器使用同一 Token"
                 )
+                logger.warning(
+                    "TG Bot Conflict on start attempt %s/%s: %s",
+                    attempt,
+                    TG_BOT_START_MAX_ATTEMPTS,
+                    exc,
+                )
+                await self._abort_start(partial_app, last_message, schedule_recovery=False)
+                await asyncio.sleep(TG_BOT_CONFLICT_COOLDOWN_SECONDS)
+            except (asyncio.TimeoutError, TimedOut) as exc:
+                last_message = (
+                    "TG Bot 启动超时，请检查 Token 与访问 Telegram 的网络，"
+                    "或在设置中配置可用代理后重启 Bot"
+                )
+                logger.warning(
+                    "TG Bot timeout on start attempt %s/%s: %s",
+                    attempt,
+                    TG_BOT_START_MAX_ATTEMPTS,
+                    exc,
+                )
+                await self._abort_start(partial_app, last_message, schedule_recovery=False)
             except NetworkError as exc:
-                await self._abort_start(
-                    partial_app,
-                    f"TG Bot 无法连接 Telegram API：{exc}。如在 Docker/国内环境，请在「代理设置」中配置可访问 Telegram 的 HTTPS 代理",
+                last_message = (
+                    f"TG Bot 无法连接 Telegram API：{exc}。"
+                    "如在 Docker/国内环境，请在「代理设置」中配置可访问 Telegram 的 HTTPS 代理"
                 )
-            except TelegramError:
-                await self._abort_start(
-                    partial_app,
-                    "TG Bot 启动失败（Token 无效或 Telegram API 异常），请检查 Bot Token",
+                logger.warning(
+                    "TG Bot network error on start attempt %s/%s: %s",
+                    attempt,
+                    TG_BOT_START_MAX_ATTEMPTS,
+                    exc,
                 )
+                await self._abort_start(partial_app, last_message, schedule_recovery=False)
+            except TelegramError as exc:
+                last_message = (
+                    f"TG Bot 启动失败（Token 无效或 Telegram API 异常）：{exc}"
+                )
+                logger.error(
+                    "TG Bot telegram error on start attempt %s/%s: %s",
+                    attempt,
+                    TG_BOT_START_MAX_ATTEMPTS,
+                    exc,
+                )
+                await self._abort_start(partial_app, last_message, schedule_recovery=False)
+                # Token 无效时无需立刻打满重试，交给 recovery 低频自愈
+                break
             except Exception:
+                last_message = "TG Bot 启动出现未知错误，请查看服务日志"
                 await self._abort_start(
                     partial_app,
-                    "TG Bot 启动出现未知错误，请查看服务日志",
+                    last_message,
                     exc_info=True,
+                    schedule_recovery=False,
                 )
+
+            if attempt < TG_BOT_START_MAX_ATTEMPTS:
+                delay = self._retry_delay(attempt)
+                logger.info("TG Bot will retry start in %.1fs", delay)
+                await asyncio.sleep(delay)
+
+        self._last_error = last_message or "TG Bot 启动失败"
+        self._schedule_recovery()
 
     async def _abort_start(
         self,
@@ -153,6 +237,7 @@ class TgBotService:
         message: str,
         *args: Any,
         exc_info: bool = False,
+        schedule_recovery: bool = True,
     ) -> None:
         if exc_info:
             logger.exception(message, *args)
@@ -165,13 +250,47 @@ class TgBotService:
             await self._shutdown_app(partial_app)
         self._app = None
         self._running = False
+        if schedule_recovery:
+            self._schedule_recovery()
 
-    async def _finish_start(self, app: Application) -> None:
-        await app.initialize()
-        await app.start()
-        await app.updater.start_polling(drop_pending_updates=True)
+    def _cancel_recovery(self) -> None:
+        task = self._recovery_task
+        self._recovery_task = None
+        if task and not task.done():
+            task.cancel()
+
+    def _schedule_recovery(self) -> None:
+        """启动失败后后台周期重试，避免进程起来后永久处于未运行状态。"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        if self._recovery_task and not self._recovery_task.done():
+            return
+
+        async def _recover() -> None:
+            while True:
+                await asyncio.sleep(TG_BOT_RECOVERY_INTERVAL_SECONDS)
+                cfg = self._get_settings()
+                if not cfg["enabled"] or not cfg["token"]:
+                    self._last_error = ""
+                    return
+                if self._running:
+                    return
+                logger.info("TG Bot recovery: retrying start")
+                try:
+                    async with self._lock:
+                        await self._start_locked()
+                except Exception:
+                    logger.exception("TG Bot recovery attempt failed")
+                if self._running:
+                    return
+
+        self._recovery_task = loop.create_task(_recover())
 
     async def stop(self) -> None:
+        self._cancel_recovery()
         async with self._lock:
             if not self._running and not self._app:
                 return
@@ -182,11 +301,28 @@ class TgBotService:
             if not app:
                 return
 
+            token = ""
+            try:
+                token = str(self._get_settings().get("token") or "")
+            except Exception:
+                token = ""
+
             try:
                 await asyncio.wait_for(
                     self._shutdown_app(app),
                     timeout=TG_BOT_STOP_TIMEOUT_SECONDS,
                 )
+                # shutdown 后原 bot 会话可能已关闭，用独立客户端清理 webhook
+                if token:
+                    try:
+                        cleanup_bot = self._build_standalone_bot(token)
+                        async with cleanup_bot:
+                            await self._clear_webhook(cleanup_bot)
+                    except Exception:
+                        logger.warning(
+                            "TG Bot post-stop webhook cleanup failed",
+                            exc_info=True,
+                        )
                 self._last_error = ""
                 logger.info("TG Bot stopped")
             except asyncio.TimeoutError:
@@ -194,9 +330,48 @@ class TgBotService:
             except Exception:
                 logger.exception("Error stopping TG Bot")
 
+    async def _run_restart_loop(self) -> None:
+        while self._restart_requested:
+            self._restart_requested = False
+            await self.stop()
+            # 给 Telegram 侧释放上一次 getUpdates 会话的缓冲时间
+            await asyncio.sleep(TG_BOT_CONFLICT_COOLDOWN_SECONDS)
+            await self.start()
+
     async def restart(self) -> None:
-        await self.stop()
-        await self.start()
+        """串行重启：多次调用会合并为一次，避免连点导致双 polling。"""
+        self._restart_requested = True
+        async with self._restart_schedule_lock:
+            if self._restart_task and not self._restart_task.done():
+                logger.info("TG Bot restart already in progress, coalescing request")
+                task = self._restart_task
+            else:
+                task = asyncio.create_task(self._run_restart_loop())
+                self._restart_task = task
+        try:
+            await task
+        finally:
+            async with self._restart_schedule_lock:
+                if self._restart_task is task and task.done():
+                    self._restart_task = None
+
+    def request_start(self) -> None:
+        """非阻塞启动（供应用 lifespan 使用，避免阻塞健康检查）。"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._start_task and not self._start_task.done():
+            return
+        self._start_task = loop.create_task(self.start())
+
+    def request_restart(self) -> None:
+        """非阻塞触发重启（供设置保存后台任务使用）。"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self.restart())
 
     async def send_notification(self, text: str, parse_mode: str = "HTML") -> None:
         cfg = self._get_settings()
@@ -254,6 +429,9 @@ class TgBotService:
             "allowed_users": cfg.get("allowed_users", []),
             "last_error": self._last_error,
             "using_proxy": bool(self._resolve_telegram_proxy()),
+            "recovery_scheduled": bool(
+                self._recovery_task and not self._recovery_task.done()
+            ),
         }
 
 
