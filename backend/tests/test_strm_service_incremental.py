@@ -1,4 +1,5 @@
 import asyncio
+import os
 from unittest.mock import AsyncMock
 
 import pytest
@@ -258,3 +259,45 @@ async def test_cancel_generate_stops_running_incremental(monkeypatch, tmp_path) 
     with pytest.raises(asyncio.CancelledError):
         await task
     assert "手动停止" in service._last_generate_error
+
+
+def test_write_text_atomic_creates_nested_file(tmp_path) -> None:
+    target = tmp_path / "剧集" / "示例 (2026)" / "第1季" / "示例 (2026) - S01E02.strm"
+    StrmService._write_text_atomic(target, "http://example/play\n")
+    assert target.read_text(encoding="utf-8") == "http://example/play\n"
+    assert list(tmp_path.rglob("*.tmp")) == []
+
+
+def test_write_text_atomic_retries_transient_enoent(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "Movies" / "A.strm"
+    calls = {"n": 0}
+    real_replace = os.replace
+
+    def flaky_replace(src, dst):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise FileNotFoundError(2, "No such file or directory", str(src))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(
+        "app.services.strm_service.os.replace", flaky_replace
+    )
+    monkeypatch.setattr("app.services.strm_service.time.sleep", lambda *_: None)
+
+    StrmService._write_text_atomic(target, "url\n")
+    assert calls["n"] == 3
+    assert target.read_text(encoding="utf-8") == "url\n"
+
+
+@pytest.mark.asyncio
+async def test_flush_strm_writes_deduplicates_same_path(tmp_path) -> None:
+    service = StrmService()
+    target = tmp_path / "A.strm"
+    pending = [
+        (target, "old\n"),
+        (target, "new\n"),
+    ]
+    written = await service._flush_strm_writes({tmp_path}, pending)
+    assert written == 1
+    assert pending == []
+    assert target.read_text(encoding="utf-8") == "new\n"

@@ -55,6 +55,8 @@ MANIFEST_FILENAME = ".mediasync115-strm-manifest.json"
 DOWNLOAD_URL_CACHE_DEFAULT_TTL_SECONDS = 1800.0
 DOWNLOAD_URL_CACHE_MAX_ITEMS = 512
 STRM_WRITE_BATCH_SIZE = 32
+STRM_WRITE_CONCURRENCY = 4
+STRM_WRITE_RETRY = 5
 STRM_SCAN_CONCURRENCY = 4
 STRM_WRITE_LOG_EVERY = 50
 STRM_CANCEL_WAIT_SECONDS = 5.0
@@ -665,14 +667,19 @@ class StrmService:
             await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
         if not pending_writes:
             return 0
-        batch = list(pending_writes)
+        # 同一路径去重（后者覆盖），避免并发写同一目标文件
+        merged: dict[Path, str] = {}
+        for path, content in pending_writes:
+            merged[path] = content
         pending_writes.clear()
-        await asyncio.gather(
-            *(
-                asyncio.to_thread(self._write_text_atomic, path, content)
-                for path, content in batch
-            )
-        )
+        batch = list(merged.items())
+        semaphore = asyncio.Semaphore(STRM_WRITE_CONCURRENCY)
+
+        async def _write_one(path: Path, content: str) -> None:
+            async with semaphore:
+                await asyncio.to_thread(self._write_text_atomic, path, content)
+
+        await asyncio.gather(*(_write_one(path, content) for path, content in batch))
         return len(batch)
 
     async def _write_strm_files(
@@ -2469,15 +2476,35 @@ class StrmService:
 
     @staticmethod
     def _write_text_atomic(path: Path, content: str) -> None:
-        """同目录写临时文件后原子替换，避免中途失败留下半文件。"""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        try:
-            temp_path.write_text(content, encoding="utf-8")
-            os.replace(temp_path, path)
-        finally:
-            if temp_path.exists():
-                temp_path.unlink(missing_ok=True)
+        """同目录写临时文件后原子替换，避免中途失败留下半文件。
+
+        NAS/网络盘在高并发 mkdir + rename 时偶发 ENOENT，这里用唯一临时名并重试。
+        """
+        parent = path.parent
+        last_error: OSError | None = None
+        for attempt in range(1, STRM_WRITE_RETRY + 1):
+            temp_path = parent / (
+                f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:10]}.tmp"
+            )
+            try:
+                parent.mkdir(parents=True, exist_ok=True)
+                if not parent.is_dir():
+                    raise FileNotFoundError(f"STRM 目标目录不可用: {parent}")
+                temp_path.write_text(content, encoding="utf-8")
+                os.replace(temp_path, path)
+                return
+            except OSError as exc:
+                last_error = exc
+                if attempt >= STRM_WRITE_RETRY:
+                    break
+                time.sleep(0.02 * attempt)
+            finally:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        assert last_error is not None
+        raise last_error
 
     @classmethod
     async def _save_manifest_async(
