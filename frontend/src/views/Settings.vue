@@ -3079,9 +3079,12 @@ const pollPan115QrStatus = async (token) => {
   const normalizedToken = String(token || '').trim()
   if (!normalizedToken) return
   pollingPan115Qr.value = true
+  let scannedNotified = false
+  let consecutiveErrors = 0
   while (pan115QrState.active && pan115QrState.token === normalizedToken) {
     try {
       const { data } = await pan115Api.checkQrLogin(normalizedToken)
+      consecutiveErrors = 0
       pan115QrState.expiresAt = data.expires_at || pan115QrState.expiresAt
       if (data.authorized) {
         stopPan115QrPolling()
@@ -3102,19 +3105,45 @@ const pollPan115QrStatus = async (token) => {
         pan115QrState.qrUrl = ''
         pan115QrState.statusType = data.status === 'expired' ? 'warning' : 'info'
         pan115QrState.statusText = data.message || '二维码会话已结束'
+        if (data.status === 'expired' || data.status === 'canceled') {
+          ElMessage.warning(pan115QrState.statusText)
+        }
         break
       }
 
-      pan115QrState.statusType = data.status === 'scanned' ? 'warning' : 'info'
-      pan115QrState.statusText = data.message || '等待扫码确认'
+      const isScanned = data.status === 'scanned'
+      pan115QrState.statusType = isScanned ? 'warning' : 'info'
+      pan115QrState.statusText = data.message || (isScanned ? '已扫码，请在手机上确认登录' : '等待扫码确认')
+      if (isScanned && !scannedNotified) {
+        scannedNotified = true
+        ElMessage.warning('已扫码，请在手机上确认登录')
+      }
     } catch (error) {
+      consecutiveErrors += 1
+      const detail = error.response?.data?.detail
+      const detailText = typeof detail === 'string'
+        ? detail
+        : String(detail?.message || error.message || '二维码登录状态检测失败')
+      const statusCode = Number(error.response?.status || 0)
+      // 长轮询超时 / 临时网络错误：继续等待，避免扫码确认后轮询被打断
+      const retryable = !statusCode
+        || statusCode === 408
+        || statusCode === 429
+        || statusCode >= 500
+        || /timeout|timed out|网络|ECONNABORTED/i.test(detailText)
+      if (retryable && consecutiveErrors < 8) {
+        pan115QrState.statusType = 'info'
+        pan115QrState.statusText = '等待扫码确认（状态同步中…）'
+        await wait(1500)
+        continue
+      }
       stopPan115QrPolling()
       pan115QrState.statusType = 'danger'
-      pan115QrState.statusText = error.response?.data?.detail || '二维码登录状态检测失败'
+      pan115QrState.statusText = detailText
       ElMessage.error(pan115QrState.statusText)
       break
     }
-    await wait(2000)
+    await wait(1200)
   }
   pollingPan115Qr.value = false
 }

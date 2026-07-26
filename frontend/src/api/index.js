@@ -484,7 +484,11 @@ export const pan115Api = {
   getCookieInfo: () => api.get('/pan115/cookie'),
   listQrLoginApps: () => api.get('/pan115/login/qr/apps'),
   startQrLogin: (app = 'alipaymini') => api.post('/pan115/login/qr/start', { app }),
-  checkQrLogin: (token) => api.post('/pan115/login/qr/status', { token }),
+  // 115 get/status 为长轮询，状态检测需更长超时；错误由设置页自行处理
+  checkQrLogin: (token) => api.post('/pan115/login/qr/status', { token }, {
+    timeout: 45000,
+    silentError: true,
+  }),
   cancelQrLogin: (token) => api.post('/pan115/login/qr/cancel', { token }),
 
   // ==================== 用户信息 ====================
