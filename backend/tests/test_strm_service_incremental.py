@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from unittest.mock import AsyncMock
 
@@ -297,7 +298,64 @@ async def test_flush_strm_writes_deduplicates_same_path(tmp_path) -> None:
         (target, "old\n"),
         (target, "new\n"),
     ]
-    written = await service._flush_strm_writes({tmp_path}, pending)
+    written, errors = await service._flush_strm_writes({tmp_path}, pending)
     assert written == 1
+    assert errors == []
     assert pending == []
     assert target.read_text(encoding="utf-8") == "new\n"
+
+
+@pytest.mark.asyncio
+async def test_flush_strm_writes_continues_after_single_failure(
+    tmp_path, monkeypatch
+) -> None:
+    service = StrmService()
+    ok_path = tmp_path / "ok.strm"
+    bad_path = tmp_path / "bad.strm"
+    real_atomic = StrmService._write_text_atomic
+
+    def flaky_atomic(path, content):
+        if path == bad_path:
+            raise OSError("boom")
+        return real_atomic(path, content)
+
+    monkeypatch.setattr(StrmService, "_write_text_atomic", staticmethod(flaky_atomic))
+    written, errors = await service._flush_strm_writes(
+        {tmp_path},
+        [(bad_path, "x\n"), (ok_path, "y\n")],
+    )
+    assert written == 1
+    assert len(errors) == 1
+    assert ok_path.read_text(encoding="utf-8") == "y\n"
+    assert not bad_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_collect_missing_local_records_detects_deleted_strm(tmp_path) -> None:
+    service = StrmService()
+    existing = [
+        _indexed("keep", "Movies/Keep.mkv"),
+        _indexed("gone", "Movies/Gone.mkv"),
+    ]
+    keep_strm = tmp_path.joinpath("Movies", "Keep.strm")
+    keep_strm.parent.mkdir(parents=True, exist_ok=True)
+    keep_strm.write_text("url\n", encoding="utf-8")
+
+    missing = await service._collect_missing_local_records(
+        output_dir=tmp_path,
+        existing_files=existing,
+        already_scanned_fids=set(),
+    )
+    assert [item["fid"] for item in missing] == ["gone"]
+
+
+def test_save_manifest_always_writes_index_file(tmp_path) -> None:
+    manifest = tmp_path / ".mediasync115-strm-manifest.json"
+    StrmService._save_manifest(
+        manifest,
+        {"Movies/A.strm", "TV/B.strm"},
+        output_cid="cid-1",
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["output_cid"] == "cid-1"
+    assert payload["generated_files"] == ["Movies/A.strm", "TV/B.strm"]

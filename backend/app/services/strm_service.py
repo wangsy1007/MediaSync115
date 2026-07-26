@@ -662,11 +662,11 @@ class StrmService:
 
     async def _flush_strm_writes(
         self, dirs_needed: set[Path], pending_writes: list[tuple[Path, str]]
-    ) -> int:
+    ) -> tuple[int, list[str]]:
         for directory in dirs_needed:
             await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
         if not pending_writes:
-            return 0
+            return 0, []
         # 同一路径去重（后者覆盖），避免并发写同一目标文件
         merged: dict[Path, str] = {}
         for path, content in pending_writes:
@@ -674,13 +674,22 @@ class StrmService:
         pending_writes.clear()
         batch = list(merged.items())
         semaphore = asyncio.Semaphore(STRM_WRITE_CONCURRENCY)
+        written = 0
+        errors: list[str] = []
 
         async def _write_one(path: Path, content: str) -> None:
+            nonlocal written
             async with semaphore:
-                await asyncio.to_thread(self._write_text_atomic, path, content)
+                try:
+                    await asyncio.to_thread(self._write_text_atomic, path, content)
+                    written += 1
+                except Exception as exc:
+                    message = f"{path}: {exc}"
+                    errors.append(message)
+                    logger.warning("写入 STRM 文件失败: %s", message, exc_info=True)
 
         await asyncio.gather(*(_write_one(path, content) for path, content in batch))
-        return len(batch)
+        return written, errors
 
     async def _write_strm_files(
         self,
@@ -689,9 +698,10 @@ class StrmService:
         existing_by_fid: dict[str, StrmFileIndex],
         config_fingerprint: str,
         output_dir: Path,
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, list[str]]:
         written_count = 0
         unchanged_count = 0
+        write_errors: list[str] = []
         pending_writes: list[tuple[Path, str]] = []
         dirs_needed: set[Path] = set()
         total = len(scanned_files)
@@ -728,9 +738,11 @@ class StrmService:
                 dirs_needed.add(target_path.parent)
                 pending_writes.append((target_path, content))
                 if len(pending_writes) >= STRM_WRITE_BATCH_SIZE:
-                    written_count += await self._flush_strm_writes(
+                    flushed, errors = await self._flush_strm_writes(
                         dirs_needed, pending_writes
                     )
+                    written_count += flushed
+                    write_errors.extend(errors)
                     dirs_needed = set()
 
             if index % 20 == 0 or index == total:
@@ -761,7 +773,9 @@ class StrmService:
                 )
 
         if pending_writes or dirs_needed:
-            written_count += await self._flush_strm_writes(dirs_needed, pending_writes)
+            flushed, errors = await self._flush_strm_writes(dirs_needed, pending_writes)
+            written_count += flushed
+            write_errors.extend(errors)
 
         self._set_generate_progress(
             phase="writing",
@@ -771,19 +785,23 @@ class StrmService:
             unchanged=unchanged_count,
         )
         if total > 0:
+            finish_status = "warning" if write_errors else "info"
             await self._log_strm_step(
                 "strm.generate.write.finish",
                 (
                     f"STRM 文件写入完成：新建 {written_count} 个，"
                     f"跳过 {unchanged_count} 个"
+                    + (f"，失败 {len(write_errors)} 个" if write_errors else "")
                 ),
+                status=finish_status,
                 extra={
                     "total": total,
                     "written": written_count,
                     "unchanged": unchanged_count,
+                    "failed": len(write_errors),
                 },
             )
-        return written_count, unchanged_count
+        return written_count, unchanged_count, write_errors
 
     def _prepare_generate(self) -> tuple[str, Path]:
         output_cid = runtime_settings_service.get_archive_output_cid()
@@ -1172,6 +1190,24 @@ class StrmService:
                 )
             scanned_paths[relative_path] = item["fid"]
         existing_by_fid = {item.fid: item for item in existing_files}
+
+        # 增量时补扫本地缺失的 STRM：115 无变化的目录不会进入扫描集，否则删文件后无法补齐
+        if mode == "incremental":
+            missing_local = await self._collect_missing_local_records(
+                output_dir=output_dir,
+                existing_files=existing_files,
+                already_scanned_fids=set(scanned_by_fid),
+            )
+            if missing_local:
+                await self._log_strm_step(
+                    "strm.generate.missing_local",
+                    f"检测到本地缺失 STRM {len(missing_local)} 个，纳入本轮补写",
+                    extra={"missing_count": len(missing_local)},
+                )
+                for record in missing_local:
+                    scanned_files.append(record)
+                    scanned_by_fid[record["fid"]] = record
+
         stale_fids = self._select_stale_fids(
             existing_files=existing_files,
             scanned_fids=set(scanned_by_fid),
@@ -1179,6 +1215,9 @@ class StrmService:
             exact_fids=scan["exact_fids"],
             parent_cids=scan["parent_cids"],
         )
+        # 全量以本次扫描结果为准重建索引，避免旧索引残留导致后续增量异常
+        if mode == "full":
+            stale_fids = {item.fid for item in existing_files} - set(scanned_by_fid)
 
         await asyncio.to_thread(output_dir.mkdir, parents=True, exist_ok=True)
         manifest_path = output_dir / MANIFEST_FILENAME
@@ -1187,6 +1226,7 @@ class StrmService:
         )
         written_count = 0
         unchanged_count = 0
+        write_errors: list[str] = []
         removed_count = 0
         paths_to_remove: set[str] = set()
         for fid in stale_fids:
@@ -1199,7 +1239,12 @@ class StrmService:
                 paths_to_remove.add(self._strm_relative_path(old.relative_path))
 
         self._raise_if_generate_cancel_requested()
-        written_count, unchanged_count = await self._write_strm_files(
+        # 先确保 content_hash，即使写入失败也能落库索引供后续增量使用
+        for item in scanned_files:
+            if not item.get("content_hash"):
+                item["content_hash"] = self._record_content_hash(item)
+
+        written_count, unchanged_count, write_errors = await self._write_strm_files(
             scanned_files=scanned_files,
             existing_by_fid=existing_by_fid,
             config_fingerprint=config_fingerprint,
@@ -1207,24 +1252,28 @@ class StrmService:
         )
 
         self._set_generate_progress(phase="indexing")
-        final_records = {
-            item.fid: self._file_model_to_record(item)
-            for item in existing_files
-            if item.fid not in stale_fids
-        }
-        final_records.update(scanned_by_fid)
+        if mode == "full":
+            final_records = dict(scanned_by_fid)
+        else:
+            final_records = {
+                item.fid: self._file_model_to_record(item)
+                for item in existing_files
+                if item.fid not in stale_fids
+            }
+            final_records.update(scanned_by_fid)
         generated_files = {
             self._strm_relative_path(item["relative_path"])
             for item in final_records.values()
         }
         await self._log_strm_step(
             "strm.generate.index.start",
-            "开始更新 STRM 索引",
-            extra={"file_count": len(final_records)},
+            "开始更新 STRM 索引与清单文件",
+            extra={"file_count": len(final_records), "mode": mode},
         )
+        # 无论部分写文件是否失败，都必须落库索引 + 写清单，保证后续可增量
         await self._persist_index(
             output_cid=output_cid,
-            scanned_files=scanned_files,
+            scanned_files=list(final_records.values()) if mode == "full" else scanned_files,
             scanned_folders=scan["folders"],
             stale_fids=stale_fids,
             complete_prefixes=scan["complete_prefixes"],
@@ -1233,11 +1282,20 @@ class StrmService:
             or (state.root_snapshot_hash if state else ""),
             mode=mode,
             file_count=len(final_records),
+            rebuild_files=(mode == "full"),
         )
+        await self._save_manifest_async(manifest_path, generated_files, output_cid)
         await self._log_strm_step(
             "strm.generate.index.finish",
-            f"STRM 索引更新完成，当前共 {len(final_records)} 个文件",
-            extra={"file_count": len(final_records)},
+            (
+                f"STRM 索引与清单已更新，当前共 {len(final_records)} 个文件"
+                f"（清单 {MANIFEST_FILENAME}）"
+            ),
+            extra={
+                "file_count": len(final_records),
+                "manifest": str(manifest_path),
+                "write_failed": len(write_errors),
+            },
         )
         stale_paths = paths_to_remove - generated_files
         if mode == "full":
@@ -1258,7 +1316,9 @@ class StrmService:
                 extra={"removed_count": removed_count},
             )
         await asyncio.to_thread(self._cleanup_empty_dirs, output_dir)
-        await self._save_manifest_async(manifest_path, generated_files, output_cid)
+        # 清理空目录后再次落清单，避免清单被误删后丢失
+        if not await asyncio.to_thread(manifest_path.is_file):
+            await self._save_manifest_async(manifest_path, generated_files, output_cid)
 
         refresh_results: dict[str, Any] = {}
         if written_count + removed_count > 0:
@@ -1284,6 +1344,8 @@ class StrmService:
             "unchanged_count": unchanged_count,
             "removed_count": removed_count,
             "generated_file_count": len(generated_files),
+            "write_failed_count": len(write_errors),
+            "manifest_path": str(manifest_path),
             "refresh_results": refresh_results,
         }
 
@@ -1809,6 +1871,28 @@ class StrmService:
             "content_hash": item.content_hash,
         }
 
+    async def _collect_missing_local_records(
+        self,
+        *,
+        output_dir: Path,
+        existing_files: list[StrmFileIndex],
+        already_scanned_fids: set[str],
+    ) -> list[dict[str, str]]:
+        """找出索引中有、但本地 STRM 已缺失的条目，供增量补写。"""
+        missing: list[dict[str, str]] = []
+        for item in existing_files:
+            if item.fid in already_scanned_fids:
+                continue
+            relative = self._strm_relative_path(item.relative_path)
+            target = output_dir.joinpath(*PurePosixPath(relative).parts)
+            if await asyncio.to_thread(target.is_file):
+                continue
+            record = self._file_model_to_record(item)
+            if not record.get("content_hash"):
+                record["content_hash"] = self._record_content_hash(record)
+            missing.append(record)
+        return missing
+
     async def _persist_index(
         self,
         *,
@@ -1821,25 +1905,70 @@ class StrmService:
         root_snapshot_hash: str,
         mode: str,
         file_count: int,
+        rebuild_files: bool = False,
     ) -> None:
         async with async_session_maker() as session:
-            if stale_fids:
+            if rebuild_files:
                 await session.execute(
-                    delete(StrmFileIndex).where(
-                        StrmFileIndex.output_cid == output_cid,
-                        StrmFileIndex.fid.in_(stale_fids),
+                    delete(StrmFileIndex).where(StrmFileIndex.output_cid == output_cid)
+                )
+                await session.execute(
+                    delete(StrmFolderIndex).where(
+                        StrmFolderIndex.output_cid == output_cid
                     )
                 )
-            existing_file_models = {
-                item.fid: item
-                for item in (
-                    await session.scalars(
-                        select(StrmFileIndex).where(
-                            StrmFileIndex.output_cid == output_cid
+                await session.flush()
+                existing_file_models: dict[str, StrmFileIndex] = {}
+                indexed_folders: list[StrmFolderIndex] = []
+            else:
+                if stale_fids:
+                    await session.execute(
+                        delete(StrmFileIndex).where(
+                            StrmFileIndex.output_cid == output_cid,
+                            StrmFileIndex.fid.in_(stale_fids),
                         )
                     )
-                ).all()
-            }
+                existing_file_models = {
+                    item.fid: item
+                    for item in (
+                        await session.scalars(
+                            select(StrmFileIndex).where(
+                                StrmFileIndex.output_cid == output_cid
+                            )
+                        )
+                    ).all()
+                }
+                indexed_folders = list(
+                    (
+                        await session.scalars(
+                            select(StrmFolderIndex).where(
+                                StrmFolderIndex.output_cid == output_cid
+                            )
+                        )
+                    ).all()
+                )
+                if complete_prefixes:
+                    stale_folder_ids = [
+                        item.id
+                        for item in indexed_folders
+                        if any(
+                            self._path_in_prefix(item.relative_path, prefix)
+                            for prefix in complete_prefixes
+                        )
+                    ]
+                    if stale_folder_ids:
+                        await session.execute(
+                            delete(StrmFolderIndex).where(
+                                StrmFolderIndex.id.in_(stale_folder_ids)
+                            )
+                        )
+                        await session.flush()
+                        indexed_folders = [
+                            item
+                            for item in indexed_folders
+                            if item.id not in stale_folder_ids
+                        ]
+
             for item in scanned_files:
                 model = existing_file_models.get(item["fid"])
                 if model is None:
@@ -1851,39 +1980,11 @@ class StrmService:
                 model.parent_cid = item["parent_cid"]
                 model.sha1 = item.get("sha1") or None
                 model.utime = item.get("utime") or None
-                model.content_hash = item["content_hash"]
+                model.content_hash = item.get("content_hash") or self._record_content_hash(
+                    item
+                )
                 model.config_fingerprint = config_fingerprint
 
-            indexed_folders = list(
-                (
-                    await session.scalars(
-                        select(StrmFolderIndex).where(
-                            StrmFolderIndex.output_cid == output_cid
-                        )
-                    )
-                ).all()
-            )
-            if complete_prefixes:
-                stale_folder_ids = [
-                    item.id
-                    for item in indexed_folders
-                    if any(
-                        self._path_in_prefix(item.relative_path, prefix)
-                        for prefix in complete_prefixes
-                    )
-                ]
-                if stale_folder_ids:
-                    await session.execute(
-                        delete(StrmFolderIndex).where(
-                            StrmFolderIndex.id.in_(stale_folder_ids)
-                        )
-                    )
-                    await session.flush()
-                    indexed_folders = [
-                        item
-                        for item in indexed_folders
-                        if item.id not in stale_folder_ids
-                    ]
             existing_folder_models = {item.fid: item for item in indexed_folders}
             for item in scanned_folders:
                 model = existing_folder_models.get(item["fid"])
