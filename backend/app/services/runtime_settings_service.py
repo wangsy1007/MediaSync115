@@ -1148,7 +1148,7 @@ class RuntimeSettingsService:
 
     def get_strm_incremental_interval_minutes(self) -> int:
         try:
-            return max(1, int(self._data.get("strm_incremental_interval_minutes", 360)))
+            return max(3, int(self._data.get("strm_incremental_interval_minutes", 360)))
         except (TypeError, ValueError):
             return 360
 
@@ -1253,8 +1253,8 @@ class RuntimeSettingsService:
             and payload["strm_incremental_interval_minutes"] is not None
         ):
             interval = int(payload["strm_incremental_interval_minutes"])
-            if interval < 1:
-                raise ValueError("STRM 增量生成间隔不能少于 1 分钟")
+            if interval < 3:
+                raise ValueError("STRM 增量生成间隔不能少于 3 分钟")
             self._data["strm_incremental_interval_minutes"] = interval
         if (
             "strm_full_schedule_enabled" in payload
