@@ -1,5 +1,5 @@
 <template>
-  <div class="explore-section-page">
+  <div ref="pageRef" class="explore-section-page">
     <div class="page-header">
       <el-button text @click="goBack">返回探索</el-button>
       <div class="title-wrap">
@@ -20,6 +20,8 @@
         :key="`${item.id}-${item.rank}`"
         class="movie-card"
         :class="{ 'just-saved': item.justSaved }"
+        :data-item-key="buildExploreItemKey(item)"
+        :data-item-index="itemIndex"
         shadow="hover"
         :body-style="{ padding: '0' }"
         @click="handleItemClick(item)"
@@ -121,6 +123,10 @@ import {
 } from '@/utils/exploreSectionSource'
 import { createExploreLibraryBadgeSyncer } from '@/utils/exploreLibraryBadgeSync'
 import { buildExploreQueuePayload } from '@/utils/exploreQueuePayload'
+import {
+  consumeExploreSectionReturnContext,
+  saveExploreSectionReturnContext
+} from '@/utils/navigation'
 const resolveExploreSpeedMode = () => {
   if (typeof window === 'undefined') return 'extreme'
   try {
@@ -150,6 +156,7 @@ const tmdbConfigured = ref(true)
 const loadingMore = ref(false)
 const allItems = shallowRef([])
 const displayCount = ref(0)
+const pageRef = ref(null)
 const loadAnchorRef = ref(null)
 const remoteTotal = ref(0)
 const nextOffset = ref(0)
@@ -173,6 +180,8 @@ let autoLoadScheduled = false
 const prefetchedOffsets = new Set()
 const prefetchOffsetsInFlight = new Set()
 let activeSectionToken = 0
+let pendingReturnContext = null
+let restoringReturnContext = false
 const subscribedIdMap = ref(new Map())
 const subscribedDoubanIds = ref(new Set()) // 存储豆瓣ID订阅集合
 const subscribedImdbIds = ref(new Set()) // 存储IMDB ID订阅集合
@@ -188,6 +197,21 @@ const toValidTmdbId = (rawId) => {
   const id = Number(rawId)
   if (!Number.isFinite(id) || id <= 0) return null
   return Math.trunc(id)
+}
+
+/** 详情返回定位必须使用来源内的稳定业务 ID，不能依赖易变化的榜单排名。 */
+const buildExploreItemKey = (item) => {
+  const source = exploreSource.value
+  const mediaType = item?.media_type === 'tv' ? 'tv' : 'movie'
+  let itemId = ''
+  if (source === 'tmdb') {
+    itemId = String(item?.tmdb_id || item?.id || '').trim()
+  } else if (source === 'maoyan') {
+    itemId = String(item?.maoyan_id || item?.id || '').trim()
+  } else {
+    itemId = String(item?.douban_id || item?.id || '').trim()
+  }
+  return itemId ? `${source}:${mediaType}:${itemId}` : ''
 }
 
 const buildSubscribedKey = (mediaType, tmdbId) => {
@@ -526,6 +550,35 @@ const requestSectionBatch = async (sectionSource, sectionKey, start, { refresh =
   return task
 }
 
+const getPageScrollContainer = () => pageRef.value?.closest('.app-main') || null
+
+const getPageScrollTop = () => {
+  const scrollContainer = getPageScrollContainer()
+  if (scrollContainer) return scrollContainer.scrollTop
+  return typeof window === 'undefined' ? 0 : window.scrollY
+}
+
+const rememberExploreSectionReturn = (item) => {
+  const itemKey = buildExploreItemKey(item)
+  const sectionKey = String(route.params.key || '').trim()
+  if (!itemKey || !sectionKey) return
+  let itemIndex = allItems.value.indexOf(item)
+  if (itemIndex < 0) {
+    itemIndex = allItems.value.findIndex((candidate) => buildExploreItemKey(candidate) === itemKey)
+  }
+  itemIndex = Math.max(0, itemIndex)
+  saveExploreSectionReturnContext({
+    source: exploreSource.value,
+    sectionKey,
+    path: route.fullPath,
+    itemKey,
+    itemIndex,
+    loadedUntil: Math.max(nextOffset.value, allItems.value.length, itemIndex + 1),
+    displayCount: Math.max(displayCount.value, itemIndex + 1),
+    scrollY: getPageScrollTop()
+  })
+}
+
 const goBack = () => {
   router.push(`/explore/${exploreSource.value}`)
 }
@@ -534,7 +587,11 @@ const goToDoubanDetail = (item) => {
   const doubanId = String(item?.douban_id || item?.id || '').trim()
   if (!doubanId) return false
   const mediaType = item?.media_type === 'tv' ? 'tv' : 'movie'
-  router.push(`/douban/${mediaType}/${encodeURIComponent(doubanId)}`)
+  rememberExploreSectionReturn(item)
+  router.push({
+    path: `/douban/${mediaType}/${encodeURIComponent(doubanId)}`,
+    query: { from: route.fullPath }
+  })
   return true
 }
 
@@ -664,12 +721,19 @@ const handleItemClick = async (item) => {
     return
   }
 
+  rememberExploreSectionReturn(item)
   warmupPan115(routeInfo.mediaType, routeInfo.tmdbId)
   if (routeInfo.mediaType === 'tv') {
-    router.push(`/tv/${routeInfo.tmdbId}`)
+    router.push({
+      path: `/tv/${routeInfo.tmdbId}`,
+      query: { from: route.fullPath }
+    })
     return
   }
-  router.push(`/movie/${routeInfo.tmdbId}`)
+  router.push({
+    path: `/movie/${routeInfo.tmdbId}`,
+    query: { from: route.fullPath }
+  })
 }
 
 const handleExploreSubscribe = async (item) => {
@@ -863,6 +927,95 @@ const fetchNextBatch = async ({ refresh = false, silent = false } = {}) => {
   }
 }
 
+const takeExploreSectionReturnContext = () => {
+  if (pendingReturnContext) return pendingReturnContext
+  pendingReturnContext = consumeExploreSectionReturnContext(
+    exploreSource.value,
+    String(route.params.key || '').trim()
+  )
+  return pendingReturnContext
+}
+
+const restoreExploreSectionItems = async (context) => {
+  if (!context) return
+  const targetLoadedUntil = Math.max(context.loadedUntil, context.itemIndex + 1)
+  const maxAttempts = Math.ceil(targetLoadedUntil / API_BATCH_SIZE) + 2
+  let attempts = 0
+
+  while (
+    attempts < maxAttempts
+    && (nextOffset.value < targetLoadedUntil || allItems.value.length <= context.itemIndex)
+  ) {
+    if (fetchedOnce.value && !hasMoreRemote.value) break
+    const previousOffset = nextOffset.value
+    const previousLength = allItems.value.length
+    await fetchNextBatch({ silent: true })
+    attempts += 1
+    if (nextOffset.value <= previousOffset && allItems.value.length <= previousLength) break
+  }
+
+  const restoredItemIndex = allItems.value.findIndex(
+    (item) => buildExploreItemKey(item) === context.itemKey
+  )
+  displayCount.value = Math.min(
+    allItems.value.length,
+    Math.max(context.displayCount, context.itemIndex + 1, restoredItemIndex + 1)
+  )
+}
+
+const waitForRenderFrame = () => new Promise((resolve) => {
+  if (typeof requestAnimationFrame === 'undefined') {
+    resolve()
+    return
+  }
+  requestAnimationFrame(() => requestAnimationFrame(resolve))
+})
+
+const restoreExploreSectionPosition = async (context) => {
+  if (!context) return
+  await nextTick()
+  await waitForRenderFrame()
+
+  const cards = Array.from(pageRef.value?.querySelectorAll('[data-item-key]') || [])
+  const targetCard = cards.find((card) => (
+    card.dataset.itemKey === context.itemKey
+    && Number(card.dataset.itemIndex) === context.itemIndex
+  )) || cards.find((card) => card.dataset.itemKey === context.itemKey)
+
+  if (targetCard) {
+    targetCard.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' })
+    return
+  }
+
+  const scrollContainer = getPageScrollContainer()
+  if (scrollContainer) {
+    scrollContainer.scrollTop = context.scrollY
+  } else if (typeof window !== 'undefined') {
+    window.scrollTo({ top: context.scrollY, behavior: 'auto' })
+  }
+}
+
+const restoreKeptAliveSectionReturn = async () => {
+  if (loading.value || restoringReturnContext) return
+  const context = takeExploreSectionReturnContext()
+  if (!context) return
+
+  restoringReturnContext = true
+  try {
+    try {
+      await restoreExploreSectionItems(context)
+    } catch {
+      // 已有列表仍可按影片或离开时的滚动位置降级恢复。
+    }
+    await restoreExploreSectionPosition(context)
+  } finally {
+    pendingReturnContext = null
+    restoringReturnContext = false
+    setupLoadObserver()
+    schedulePrefetch()
+  }
+}
+
 const queuePrefetchBatch = (sectionSource, sectionKey, start, sectionToken) => {
   if (!sectionKey || start < 0) return
   if (prefetchedOffsets.has(start) || prefetchOffsetsInFlight.has(start)) return
@@ -1006,6 +1159,8 @@ const handleTmdbConfigured = async () => {
 const fetchSection = async ({ refresh = false } = {}) => {
   const sectionKey = route.params.key
   if (!sectionKey) return
+  const returnContext = refresh ? null : takeExploreSectionReturnContext()
+  let shouldRestorePosition = false
   activeSectionToken += 1
   loading.value = true
   loadError.value = ''
@@ -1014,28 +1169,32 @@ const fetchSection = async ({ refresh = false } = {}) => {
     const sectionSource = getEffectiveSectionSource()
     const configured = await checkTmdbConfigured()
     if (!configured) {
+      pendingReturnContext = null
       return
     }
     refreshSubscribedMap()
 
-    if (!refresh && hydrateFromCachedFirstBatch(sectionSource, sectionKey)) {
-      applySubscribedFlags()
-      schedulePrefetch()
-      await nextTick()
-      setupLoadObserver()
-      return
+    const hydratedFromCache = !refresh && hydrateFromCachedFirstBatch(sectionSource, sectionKey)
+    if (!hydratedFromCache) {
+      const appended = await fetchNextBatch({ refresh, silent: false })
+      if (appended > 0) {
+        displayCount.value = allItems.value.length
+      }
     }
-
-    const appended = await fetchNextBatch({ refresh, silent: false })
-    if (appended > 0) {
-      displayCount.value = allItems.value.length
+    if (returnContext) {
+      try {
+        await restoreExploreSectionItems(returnContext)
+      } catch (error) {
+        if (!allItems.value.length) throw error
+      }
+      shouldRestorePosition = true
     }
     prefetchCursor = Math.max(prefetchCursor, nextOffset.value)
     schedulePrefetch()
     await nextTick()
     applySubscribedFlags()
-    setupLoadObserver()
   } catch (error) {
+    pendingReturnContext = null
     if (!allItems.value.length) {
       resetSectionState()
       loadError.value = error.response?.data?.detail || error.message || '获取榜单失败'
@@ -1043,13 +1202,19 @@ const fetchSection = async ({ refresh = false } = {}) => {
     }
   } finally {
     loading.value = false
+    if (shouldRestorePosition) {
+      try {
+        await restoreExploreSectionPosition(returnContext)
+      } catch {
+        // 定位失败不应阻断榜单本身恢复。
+      } finally {
+        pendingReturnContext = null
+      }
+    }
+    setupLoadObserver()
     schedulePrefetch()
   }
 }
-
-watch(() => route.params.key, () => {
-  fetchSection()
-})
 
 watch(() => hasMoreItems.value, async () => {
   await nextTick()
@@ -1078,11 +1243,13 @@ onMounted(() => {
   fetchSection()
 })
 
-onActivated(() => {
+onActivated(async () => {
   if (!route.params.key) return
   if (!loading.value && !allItems.value.length && !loadError.value) {
-    fetchSection()
+    await fetchSection()
+    return
   }
+  await restoreKeptAliveSectionReturn()
 })
 
 onBeforeUnmount(() => {
