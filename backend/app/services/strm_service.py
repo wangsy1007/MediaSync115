@@ -57,6 +57,7 @@ DOWNLOAD_URL_CACHE_MAX_ITEMS = 512
 STRM_WRITE_BATCH_SIZE = 32
 STRM_SCAN_CONCURRENCY = 4
 STRM_WRITE_LOG_EVERY = 50
+STRM_CANCEL_WAIT_SECONDS = 5.0
 
 
 class StrmService:
@@ -85,12 +86,22 @@ class StrmService:
         }
         self._generate_progress: dict[str, Any] = {}
         self._strm_log_trace_id = ""
+        self._cancel_requested = False
 
     def _set_generate_progress(self, **fields: Any) -> None:
         self._generate_progress = {**self._generate_progress, **fields}
 
     def _clear_generate_progress(self) -> None:
         self._generate_progress = {}
+
+    def _raise_if_generate_cancel_requested(self) -> None:
+        if self._cancel_requested:
+            raise asyncio.CancelledError()
+
+    def _clear_pending_generate(self) -> None:
+        self._pending_mode = None
+        self._pending_scopes = []
+        self._pending_unscoped = False
 
     @staticmethod
     def _strm_trigger_label(trigger: str) -> str:
@@ -374,6 +385,8 @@ class StrmService:
                 "trigger": str(trigger or "manual"),
             }
 
+        if self._cancel_requested:
+            self._cancel_requested = False
         output_cid, output_dir = self._prepare_generate()
         task = asyncio.create_task(
             self._run_generate_task(
@@ -395,6 +408,73 @@ class StrmService:
             "scope_count": len(normalized_scopes),
             "output_cid": output_cid,
             "output_dir": str(output_dir),
+        }
+
+    async def cancel_generate(self) -> dict[str, Any]:
+        """停止正在进行的 STRM 生成（增量/全量），并清空排队补跑。"""
+        self._cancel_requested = True
+        self._clear_pending_generate()
+        task = self._generate_task
+        had_active_task = bool(task and not task.done())
+        mode = self._current_mode or "incremental"
+
+        if had_active_task and task is not None:
+            task.cancel()
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(task), timeout=STRM_CANCEL_WAIT_SECONDS
+                )
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError:
+                logger.warning("STRM 生成取消等待超时，已强制结束状态")
+            except Exception:
+                logger.exception("等待 STRM 生成取消时出错")
+
+        if self._generate_task and self._generate_task.done():
+            self._generate_task = None
+
+        # 若任务未走到 CancelledError 收尾，这里兜底修正状态
+        if had_active_task or self._lock.locked():
+            self._last_generate_finished_at = self._now_iso()
+            self._last_generate_error = "STRM 生成已手动停止"
+            self._clear_generate_progress()
+            try:
+                output_cid = runtime_settings_service.get_archive_output_cid()
+                output_dir = self._resolve_output_dir(
+                    runtime_settings_service.get_strm_output_dir()
+                )
+                if output_cid:
+                    await self._mark_state_failed(
+                        output_cid=output_cid,
+                        output_dir=output_dir,
+                        mode=mode or "incremental",
+                        error=RuntimeError("STRM 生成已手动停止"),
+                    )
+            except Exception:
+                logger.warning("取消 STRM 生成时更新状态失败", exc_info=True)
+            await self._log_strm_step(
+                "strm.generate.cancelled",
+                f"STRM {self._strm_mode_label(mode)}生成已手动停止",
+                status="failed",
+                extra={"mode": mode, "manual": True},
+            )
+
+        await self.reconcile_stale_running_state()
+        running = self._is_generate_running() or self._lock.locked()
+        if not running:
+            self._cancel_requested = False
+        return {
+            "success": True,
+            "cancelled": bool(had_active_task),
+            "running": running,
+            "mode": mode,
+            "message": (
+                "STRM 生成已停止"
+                if had_active_task
+                else "当前没有正在运行的 STRM 生成任务"
+            ),
+            "runtime": await self.get_runtime_status_async(),
         }
 
     async def generate_library(
@@ -484,6 +564,7 @@ class StrmService:
             )
 
             try:
+                self._raise_if_generate_cancel_requested()
                 summary = await self._generate(
                     output_cid=output_cid,
                     output_dir=output_dir,
@@ -491,6 +572,7 @@ class StrmService:
                     scopes=scopes,
                 )
                 while self._pending_mode:
+                    self._raise_if_generate_cancel_requested()
                     queued_mode, queued_scopes = self._take_pending()
                     queued_summary = await self._generate(
                         output_cid=output_cid,
@@ -523,7 +605,12 @@ class StrmService:
                 )
                 return {"success": True, **summary}
             except asyncio.CancelledError:
-                cancel_error = RuntimeError("STRM 生成任务被取消或执行超时")
+                manual = bool(self._cancel_requested)
+                cancel_error = RuntimeError(
+                    "STRM 生成已手动停止"
+                    if manual
+                    else "STRM 生成任务被取消或执行超时"
+                )
                 self._last_generate_finished_at = self._now_iso()
                 self._last_generate_error = str(cancel_error)
                 await self._mark_state_failed(
@@ -534,11 +621,16 @@ class StrmService:
                 )
                 await self._log_strm_step(
                     "strm.generate.cancelled",
-                    f"STRM {self._strm_mode_label(mode)}生成被取消或执行超时",
+                    (
+                        f"STRM {self._strm_mode_label(mode)}生成已手动停止"
+                        if manual
+                        else f"STRM {self._strm_mode_label(mode)}生成被取消或执行超时"
+                    ),
                     status="failed",
                     extra={
                         "trigger": self._last_generate_trigger,
                         "mode": mode,
+                        "manual": manual,
                         "error": str(cancel_error),
                     },
                 )
@@ -608,6 +700,8 @@ class StrmService:
         last_logged_at = 0
 
         for index, item in enumerate(scanned_files, start=1):
+            if index == 1 or index % 20 == 0:
+                self._raise_if_generate_cancel_requested()
             item["content_hash"] = self._record_content_hash(item)
             strm_relative = self._strm_relative_path(item["relative_path"])
             target_path = output_dir.joinpath(*PurePosixPath(strm_relative).parts)
@@ -760,8 +854,13 @@ class StrmService:
             self._generate_task = None
         try:
             task.result()
+        except asyncio.CancelledError:
+            pass
         except Exception:
             logger.exception("STRM 后台生成任务执行失败")
+        if self._cancel_requested:
+            self._clear_pending_generate()
+            return
         if self._pending_mode and self._generate_task is None:
             try:
                 mode, scopes = self._take_pending()
@@ -948,6 +1047,7 @@ class StrmService:
         mode: str = "incremental",
         scopes: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
+        self._raise_if_generate_cancel_requested()
         await ensure_tables_exist(
             "strm_file_index", "strm_folder_index", "strm_sync_state"
         )
@@ -1091,6 +1191,7 @@ class StrmService:
             if old and old.relative_path != item["relative_path"]:
                 paths_to_remove.add(self._strm_relative_path(old.relative_path))
 
+        self._raise_if_generate_cancel_requested()
         written_count, unchanged_count = await self._write_strm_files(
             scanned_files=scanned_files,
             existing_by_fid=existing_by_fid,
@@ -1193,10 +1294,12 @@ class StrmService:
         async def _walk(
             folder_cid: str, prefix: str, folder_parent_cid: str
         ) -> None:
+            self._raise_if_generate_cancel_requested()
             # 并发许可只保护单次目录列表请求，不能覆盖对子目录 gather 的等待。
             # 否则父目录会持有许可等待子目录，而深层子目录又在等待许可，最终
             # 所有许可都被父任务占满并形成递归死锁。
             async with scan_sem:
+                self._raise_if_generate_cancel_requested()
                 items = await self._list_folder_items(pan115, folder_cid)
             folders.append(
                 {
@@ -1254,6 +1357,7 @@ class StrmService:
         parent_cids: set[str] = set()
 
         for scope in scopes:
+            self._raise_if_generate_cancel_requested()
             fid = scope["fid"]
             target_cid = scope["target_cid"]
             prefix = scope["relative_prefix"]
@@ -1416,14 +1520,14 @@ class StrmService:
                 return True
         return False
 
-    @staticmethod
     async def _list_folder_items(
-        pan115: Pan115Service, cid: str
+        self, pan115: Pan115Service, cid: str
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         offset = 0
         limit = 200
         while True:
+            self._raise_if_generate_cancel_requested()
             response = await pan115.get_file_list(
                 cid=str(cid), offset=offset, limit=limit
             )

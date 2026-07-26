@@ -143,6 +143,14 @@
         <div class="config-actions">
           <el-button type="primary" :loading="saving" @click="saveConfig">保存配置</el-button>
           <el-button type="primary" :loading="generating && generatingMode === 'incremental'" :disabled="generating && generatingMode !== 'incremental'" @click="generateFiles('incremental')">增量生成</el-button>
+          <el-button
+            v-if="generating || runtime.generate_running"
+            type="warning"
+            :loading="cancelLoading"
+            @click="cancelGenerate"
+          >
+            停止生成
+          </el-button>
           <el-button type="danger" plain :loading="generating && generatingMode === 'full'" :disabled="generating && generatingMode !== 'full'" @click="confirmFullGenerate">全量生成</el-button>
           <el-button :loading="diagnosing" @click="diagnoseStrm">STRM 诊断</el-button>
         </div>
@@ -264,6 +272,7 @@ const refreshing = ref(false)
 const saving = ref(false)
 const generating = ref(false)
 const generatingMode = ref('')
+const cancelLoading = ref(false)
 const diagnosing = ref(false)
 const mountPaths = ref([])
 const suggestedBaseUrl = ref('')
@@ -474,8 +483,11 @@ const applyConfig = (data) => {
     generatingMode.value = nextRuntime.current_mode || nextRuntime.generate_mode || nextRuntime.last_generate_mode || generatingMode.value
   }
   if (wasGenerating && !runtime.generate_running) {
-    if (runtime.last_generate_error) {
-      ElMessage.error(runtime.last_generate_error)
+    const err = String(runtime.last_generate_error || '')
+    if (err.includes('手动停止') || err.includes('已停止')) {
+      // 停止按钮已提示，避免轮询再弹一次错误
+    } else if (err) {
+      ElMessage.error(err)
     } else if (runtime.last_generate_summary) {
       ElMessage.success(
         `STRM 后台生成完成：写入 ${runtime.last_generate_summary.written_count || 0} 个，删除 ${runtime.last_generate_summary.removed_count || 0} 个`
@@ -542,6 +554,27 @@ const generateFiles = async (mode = 'incremental') => {
     generating.value = false
     generatingMode.value = ''
     throw error
+  }
+}
+
+const cancelGenerate = async () => {
+  if (cancelLoading.value) return
+  cancelLoading.value = true
+  try {
+    const { data } = await strmApi.cancelGenerate()
+    if (data?.cancelled) {
+      ElMessage.warning(data.message || 'STRM 生成已停止')
+    } else {
+      ElMessage.info(data?.message || '当前没有正在运行的 STRM 生成任务')
+    }
+    generating.value = false
+    generatingMode.value = ''
+    await loadConfig()
+    stopPolling()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || error.message || '停止 STRM 生成失败')
+  } finally {
+    cancelLoading.value = false
   }
 }
 

@@ -210,3 +210,51 @@ async def test_cancelled_generate_marks_persistent_state_failed(
     assert "取消或执行超时" in str(mark_failed.await_args.kwargs["error"])
     assert service._last_generate_finished_at
     assert "取消或执行超时" in service._last_generate_error
+
+
+@pytest.mark.asyncio
+async def test_cancel_generate_stops_running_incremental(monkeypatch, tmp_path) -> None:
+    service = StrmService()
+    entered = asyncio.Event()
+
+    async def _blocked_generate(**_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(service, "_generate", _blocked_generate)
+    monkeypatch.setattr(service, "_mark_state_failed", AsyncMock())
+    monkeypatch.setattr(service, "_log_strm_step", AsyncMock())
+    monkeypatch.setattr(service, "reconcile_stale_running_state", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        service,
+        "get_runtime_status_async",
+        AsyncMock(return_value={"generate_running": False}),
+    )
+    monkeypatch.setattr(
+        runtime_settings_service, "get_archive_output_cid", lambda: "root"
+    )
+    monkeypatch.setattr(
+        runtime_settings_service, "get_strm_output_dir", lambda: str(tmp_path)
+    )
+
+    task = asyncio.create_task(
+        service._run_generate_task(
+            trigger="manual",
+            output_cid="root",
+            output_dir=tmp_path,
+            mode="incremental",
+            scopes=[],
+        )
+    )
+    service._generate_task = task
+    await entered.wait()
+
+    result = await service.cancel_generate()
+
+    assert result["cancelled"] is True
+    assert result["running"] is False
+    assert "停止" in result["message"]
+    assert service._pending_mode is None
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert "手动停止" in service._last_generate_error

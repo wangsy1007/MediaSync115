@@ -391,6 +391,7 @@ export const strmApi = {
   getConfig: () => api.get('/strm/config'),
   updateConfig: (payload) => api.put('/strm/config', payload),
   generate: (mode = 'incremental') => api.post('/strm/generate', { mode }, { timeout: 300000 }),
+  cancelGenerate: () => api.post('/strm/generate/cancel', null, { timeout: 30000 }),
   diagnose: () => api.get('/strm/diagnose', { timeout: 30000 })
 }
 

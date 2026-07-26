@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 from app.api.strm import (
     StrmGenerateRequest,
     _validate_strm_settings,
+    cancel_strm_generate,
     generate_strm_files,
 )
 from app.services.runtime_settings_service import RuntimeSettingsService
@@ -90,6 +91,23 @@ class TestStrmApi:
             )
 
         assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_cancel_generate_endpoint(self, monkeypatch) -> None:
+        cancel = AsyncMock(
+            return_value={
+                "success": True,
+                "cancelled": True,
+                "running": False,
+                "message": "STRM 生成已停止",
+            }
+        )
+        monkeypatch.setattr("app.api.strm.strm_service.cancel_generate", cancel)
+
+        result = await cancel_strm_generate()
+
+        cancel.assert_awaited_once()
+        assert result["cancelled"] is True
 
     def test_strm_schedule_config_validation(self) -> None:
         service = RuntimeSettingsService.__new__(RuntimeSettingsService)

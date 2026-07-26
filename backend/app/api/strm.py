@@ -181,6 +181,15 @@ async def generate_strm_files(
         _raise_strm_error(exc)
 
 
+@router.post("/generate/cancel")
+async def cancel_strm_generate():
+    """停止正在进行的 STRM 生成任务（含增量/全量）。"""
+    try:
+        return await strm_service.cancel_generate()
+    except Exception as exc:
+        _raise_strm_error(exc)
+
+
 @router.get("/diagnose")
 async def diagnose_strm(request: Request):
     try:
