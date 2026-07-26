@@ -860,7 +860,10 @@ class ExploreActionQueueService:
                 error = str(row.get("error") or "").strip()
                 transfer_failures.append(f"{source}: {error[:60] or 'failed'}")
             elif status == "empty":
-                parts.append(f"{source}: empty")
+                error = str(row.get("error") or "").strip()
+                parts.append(
+                    f"{source}: empty" + (f"({error[:40]})" if error else "")
+                )
             elif status == "success":
                 count = int(row.get("count") or 0)
                 parts.append(f"{source}: success" + (f"({count})" if count else ""))
@@ -870,6 +873,12 @@ class ExploreActionQueueService:
             return f"转存失败（{'; '.join(transfer_failures[:4])}）"
         if not parts:
             return "暂未找到可转存资源"
+        # 命中资源但无一可转存时，提示更明确（如 HDHive 锁定未解锁）
+        if any("未获取可转存链接" in str(row.get("error") or "") for row in attempts):
+            return (
+                "已搜到资源但无可转存链接（可能需 HDHive 积分解锁或开启离线下载）"
+                f"（{'; '.join(parts)}）"
+            )
         return f"暂未找到可转存资源（{'; '.join(parts)}）"
 
     async def _execute_save(self, task: dict[str, Any]) -> dict[str, Any]:
@@ -1056,7 +1065,7 @@ class ExploreActionQueueService:
                             .strip()
                             or "0"
                         )
-                        await pan115_service.offline_task_add(
+                        offline_result = await pan115_service.offline_task_add(
                             url=offline_url,
                             wp_path_id=offline_folder_id,
                         )
@@ -1070,6 +1079,10 @@ class ExploreActionQueueService:
                             resource_name=str(offline_url or "").strip() or None,
                             source="explore_save_offline",
                         )
+                        already_exists = bool(
+                            isinstance(offline_result, dict)
+                            and offline_result.get("already_exists")
+                        )
                         # 离线尚未落盘，不在此刻整目录绑定（避免误绑已有文件）
                         return {
                             "tmdb_id": tmdb_id,
@@ -1080,7 +1093,12 @@ class ExploreActionQueueService:
                             "attempts": source_attempts + transfer_attempts,
                             "save_mode": "offline",
                             "target_parent_id": offline_folder_id,
-                            "message": "已提交离线下载任务",
+                            "already_exists": already_exists,
+                            "message": (
+                                "离线任务已存在，无需重复添加"
+                                if already_exists
+                                else "已提交离线下载任务"
+                            ),
                         }
                     except Exception as exc:
                         transfer_attempts.append(

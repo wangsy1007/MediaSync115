@@ -649,6 +649,81 @@ class Pan115Service:
 
     # ==================== 离线下载 ====================
 
+    @staticmethod
+    def _extract_offline_already_exists_payload(
+        exc: BaseException,
+    ) -> Optional[Dict[str, Any]]:
+        """识别 115 离线任务「已存在」(errcode 10008)，返回可复用的成功载荷。"""
+        candidates: list[Any] = [exc]
+        args = getattr(exc, "args", ()) or ()
+        candidates.extend(list(args))
+        for attr in ("data", "response", "result", "payload"):
+            value = getattr(exc, attr, None)
+            if value is not None:
+                candidates.append(value)
+
+        payload: Dict[str, Any] | None = None
+        for item in candidates:
+            if isinstance(item, dict):
+                nested = item.get("data")
+                if isinstance(nested, dict):
+                    payload = nested
+                    break
+                payload = item
+                break
+
+        errcode = None
+        error_msg = ""
+        info_hash = ""
+        if isinstance(payload, dict):
+            errcode = payload.get("errcode", payload.get("errno"))
+            error_msg = str(
+                payload.get("error_msg")
+                or payload.get("error")
+                or payload.get("message")
+                or ""
+            ).strip()
+            info_hash = str(payload.get("info_hash") or "").strip()
+            if not info_hash and isinstance(payload.get("data"), dict):
+                info_hash = str(payload["data"].get("info_hash") or "").strip()
+
+        text = str(exc)
+        if errcode is None:
+            match = re.search(r"['\"]errcode['\"]\s*:\s*(\d+)", text)
+            if match:
+                errcode = int(match.group(1))
+        if not error_msg:
+            error_msg = text
+        if not info_hash:
+            hash_match = re.search(
+                r"['\"]info_hash['\"]\s*:\s*['\"]([a-fA-F0-9]{32,40})['\"]",
+                text,
+            )
+            if hash_match:
+                info_hash = hash_match.group(1)
+
+        try:
+            errcode_int = int(errcode) if errcode is not None else None
+        except (TypeError, ValueError):
+            errcode_int = None
+
+        already_exists = errcode_int == 10008 or (
+            ("已存在" in error_msg or "重复添加" in error_msg)
+            and ("任务" in error_msg or "地址" in error_msg or "10008" in text)
+        )
+        if not already_exists:
+            return None
+
+        return {
+            "state": True,
+            "already_exists": True,
+            "errcode": 10008,
+            "info_hash": info_hash,
+            "message": "离线任务已存在，无需重复添加",
+            "error_msg": "",
+            "url": str(getattr(exc, "url", "") or ""),
+        }
+
     async def offline_task_add(self, url: str, wp_path_id: str = "") -> Dict[str, Any]:
         """
         添加离线下载任务
@@ -658,13 +733,25 @@ class Pan115Service:
             wp_path_id: 保存目录ID
 
         Returns:
-            任务添加结果
+            任务添加结果。若任务已存在（errcode 10008），视为成功并返回 already_exists=True。
         """
         payload = {"url": url}
         if wp_path_id:
             payload["wp_path_id"] = wp_path_id
-        result = await self._async_call("clouddownload_task_add_url", payload)
-        return check_response(result)
+        try:
+            result = await self._async_call("clouddownload_task_add_url", payload)
+            return check_response(result)
+        except Exception as exc:
+            already = self._extract_offline_already_exists_payload(exc)
+            if already is not None:
+                already["url"] = url
+                logger.info(
+                    "离线任务已存在，按成功处理: info_hash=%s url=%s",
+                    already.get("info_hash") or "",
+                    url[:120],
+                )
+                return already
+            raise
 
     async def offline_task_list(self, page: int = 1) -> Dict[str, Any]:
         """
