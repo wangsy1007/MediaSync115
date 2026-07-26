@@ -3,8 +3,9 @@ import { ElMessage } from 'element-plus'
 import { pan115Api } from '@/api'
 import {
   buildPanShareRequest,
-  buildShareLinkFromUnlockPayload,
+  buildUnlockResourceFromPayload,
   sanitizeReceiveCode,
+  resolveOfflineDownloadLink,
 } from '@/utils/panShare'
 import {
   ensureHdhiveShareLink,
@@ -75,7 +76,11 @@ export const loadPan115SelectSaveFiles = async ({
   }
 
   if (!shareUrl) {
-    ElMessage.warning('该资源暂无分享链接')
+    if (resolveOfflineDownloadLink(row)) {
+      ElMessage.warning('该资源解锁后为离线链接（ED2K/磁力），不支持选集转存，请使用一键转存')
+    } else {
+      ElMessage.warning('该资源暂无分享链接')
+    }
     throw new SelectSaveAbortError()
   }
 
@@ -130,15 +135,34 @@ export const loadPan115SelectSaveFiles = async ({
   }
 }
 
-/** 解锁成功后写回清洗过的分享信息，避免杂质进入后续流程 */
+/** 解锁成功后写回清洗过的分享/离线信息，避免杂质进入后续流程 */
 export const applyUnlockedPanShareToRow = (row, payload = {}) => {
-  const shareLink = buildShareLinkFromUnlockPayload(payload, row)
+  const resource = buildUnlockResourceFromPayload(payload, row)
   const accessCode = sanitizeReceiveCode(payload?.access_code || '')
-  if (shareLink) row.share_link = shareLink
   if (accessCode) row.access_code = accessCode
-  row.pan115_savable = true
   row.hdhive_locked = false
   row.hdhive_lock_code = ''
   row.hdhive_lock_message = ''
-  return shareLink
+  row.pan115_savable = Boolean(resource.link)
+
+  if (resource.kind === 'ed2k') {
+    row.ed2k = resource.link
+    row.magnet = ''
+    row.share_link = ''
+    row.pan115_share_link = ''
+    return ''
+  }
+  if (resource.kind === 'magnet') {
+    row.magnet = resource.link
+    row.ed2k = ''
+    row.share_link = ''
+    row.pan115_share_link = ''
+    return ''
+  }
+  if (resource.link) {
+    row.share_link = resource.link
+    row.pan115_share_link = resource.link
+    row.ed2k = ''
+  }
+  return resource.link
 }

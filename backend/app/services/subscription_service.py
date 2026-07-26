@@ -2590,13 +2590,16 @@ class SubscriptionService:
             for item in (context.get("exclude_source_ids") or [])
             if str(item or "").strip()
         }
+        offline_enabled = (
+            runtime_settings_service.get_subscription_offline_transfer_enabled()
+        )
         for item in normalized_items:
             if not isinstance(item, dict):
                 continue
             if str(item.get("source_service") or "").strip().lower() != "hdhive":
                 continue
 
-            if self._extract_resource_url(item):
+            if self._item_has_transferable_url(item, offline_enabled=offline_enabled):
                 continue
 
             slug = str(item.get("slug") or "").strip()
@@ -2604,7 +2607,10 @@ class SubscriptionService:
                 continue
             unlock_points = self._safe_int(item.get("unlock_points"), default=0)
             locked = bool(item.get("hdhive_locked")) or (
-                unlock_points > 0 and not self._extract_resource_url(item)
+                unlock_points > 0
+                and not self._item_has_transferable_url(
+                    item, offline_enabled=offline_enabled
+                )
             )
             if not locked:
                 continue
@@ -2665,13 +2671,40 @@ class SubscriptionService:
             try:
                 unlock_result = await hdhive_service.unlock_resource(slug)
                 unlock_message = str(unlock_result.get("message") or "").strip()
-                share_link = self._normalize_share_url(
-                    str(unlock_result.get("share_link") or "").strip()
-                )
-                if share_link:
-                    item["pan115_share_link"] = share_link
-                    item["share_link"] = share_link
-                    item["pan115_savable"] = True
+                raw_link = str(
+                    unlock_result.get("share_link")
+                    or unlock_result.get("full_url")
+                    or ""
+                ).strip()
+                applied = False
+                unlock_kind = ""
+                if self._is_offline_url(raw_link):
+                    if offline_enabled:
+                        if raw_link.lower().startswith("ed2k://"):
+                            item["ed2k"] = raw_link
+                            unlock_kind = "ed2k"
+                        else:
+                            item["magnet"] = raw_link
+                            unlock_kind = "magnet"
+                        item["share_link"] = ""
+                        item["pan115_share_link"] = ""
+                        item["pan115_savable"] = False
+                        applied = True
+                    else:
+                        unlock_message = (
+                            unlock_message
+                            or "解锁结果为离线链接，但未启用订阅离线转存"
+                        )
+                else:
+                    share_link = self._normalize_share_url(raw_link)
+                    if self._is_pan115_share_url(share_link):
+                        item["pan115_share_link"] = share_link
+                        item["share_link"] = share_link
+                        item["pan115_savable"] = True
+                        unlock_kind = "pan115"
+                        applied = True
+
+                if applied:
                     context["budget_left"] = max(
                         0, int(context.get("budget_left", 0) or 0) - unlock_points
                     )
@@ -2690,6 +2723,7 @@ class SubscriptionService:
                             "payload": {
                                 "slug": slug,
                                 "unlock_points": unlock_points,
+                                "unlock_kind": unlock_kind,
                                 "budget_remaining_after": int(
                                     context.get("budget_left", 0) or 0
                                 ),
@@ -2713,7 +2747,13 @@ class SubscriptionService:
                             }
                         )
                         break
-                    if any(self._extract_resource_url(it) for it in normalized_items):
+                    if any(
+                        self._item_has_transferable_url(
+                            it, offline_enabled=offline_enabled
+                        )
+                        for it in normalized_items
+                        if isinstance(it, dict)
+                    ):
                         break
                 else:
                     context["consecutive_failed_count"] = (
@@ -4245,17 +4285,44 @@ class SubscriptionService:
         return url
 
     @staticmethod
+    def _is_offline_url(url: str) -> bool:
+        lowered = str(url or "").strip().lower()
+        return lowered.startswith("magnet:") or lowered.startswith("ed2k://")
+
+    @staticmethod
+    def _is_pan115_share_url(url: str) -> bool:
+        raw = SubscriptionService._normalize_share_url(str(url or "").strip())
+        if not raw:
+            return False
+        lowered = raw.lower()
+        if SubscriptionService._is_offline_url(lowered):
+            return False
+        if not lowered.startswith("http://") and not lowered.startswith("https://"):
+            return False
+        return any(
+            token in lowered
+            for token in (
+                "115.com/",
+                "115.com.cn/",
+                "115cdn.com/",
+                "anxia.com/",
+            )
+        )
+
+    @staticmethod
     def _extract_resource_url(item: dict[str, Any]) -> str:
         raw_url = str(
             item.get("pan115_share_link")
             or item.get("share_link")
             or item.get("shareLink")
-            or item.get("share_link")
             or item.get("share_url")
             or item.get("url")
             or ""
         ).strip()
-        return SubscriptionService._normalize_share_url(raw_url)
+        normalized = SubscriptionService._normalize_share_url(raw_url)
+        if SubscriptionService._is_pan115_share_url(normalized):
+            return normalized
+        return ""
 
     @staticmethod
     def _extract_offline_url(item: dict[str, Any]) -> str:
@@ -4268,7 +4335,29 @@ class SubscriptionService:
             val = str(item.get(key) or "").strip()
             if val and val.lower().startswith("ed2k://"):
                 return val
+        for key in (
+            "share_link",
+            "shareLink",
+            "share_url",
+            "full_url",
+            "pan115_share_link",
+            "url",
+        ):
+            val = str(item.get(key) or "").strip()
+            if SubscriptionService._is_offline_url(val):
+                return val
         return ""
+
+    @classmethod
+    def _item_has_transferable_url(
+        cls,
+        item: dict[str, Any],
+        *,
+        offline_enabled: bool = True,
+    ) -> bool:
+        if cls._extract_resource_url(item):
+            return True
+        return bool(offline_enabled and cls._extract_offline_url(item))
 
     @staticmethod
     def _extract_hash_from_offline_url(url: str) -> str:

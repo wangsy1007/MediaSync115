@@ -733,15 +733,25 @@ async def _search_115_resources(
                     if auto_unlock_hdhive:
                         try:
                             unlock_result = await hdhive_service.unlock_resource(slug)
-                            unlocked_link = str(unlock_result.get("share_link") or "").strip()
+                            unlocked_link = str(
+                                unlock_result.get("share_link")
+                                or unlock_result.get("full_url")
+                                or ""
+                            ).strip()
                             if unlocked_link:
-                                results.append({
+                                lowered = unlocked_link.lower()
+                                entry = {
                                     "title": row.get("resource_name") or row.get("title") or kw,
-                                    "share_link": unlocked_link,
                                     "size": row.get("size") or "",
                                     "quality": row.get("quality") or "",
                                     "source": "hdhive",
-                                })
+                                }
+                                if lowered.startswith("ed2k://") or lowered.startswith("magnet:"):
+                                    entry["share_link"] = ""
+                                    entry["offline_url"] = unlocked_link
+                                else:
+                                    entry["share_link"] = unlocked_link
+                                results.append(entry)
                         except Exception:
                             pass
                     results.append({
@@ -1012,52 +1022,80 @@ async def _save_115_resource(
         return
 
     res = resources[idx]
-    share_link = res.get("share_link", "")
+    share_link = str(res.get("share_link") or "").strip()
+    offline_url = str(res.get("offline_url") or "").strip()
     title = res.get("title", "未知")
 
-    if not share_link:
-        await query.edit_message_text("该资源没有分享链接。")
+    if not share_link and not offline_url:
+        await query.edit_message_text("该资源没有可转存链接。")
         return
 
-    await query.edit_message_text(
-        _with_current_poster(context, f"正在转存: {escape(title[:50])} ...")
-    )
+    # HDHive 解锁后可能直接返回 ed2k/磁力，走离线下载默认目录
+    if (not share_link) or offline_url.lower().startswith(("ed2k://", "magnet:")) or share_link.lower().startswith(("ed2k://", "magnet:")):
+        task_url = offline_url or share_link
+        await query.edit_message_text(
+            _with_current_poster(context, f"正在添加离线任务: {escape(title[:50])} ...")
+        )
+        try:
+            from app.services.pan115_service import pan115_service
+            from app.services.runtime_settings_service import runtime_settings_service
 
-    try:
-        from app.services.media_postprocess_service import media_postprocess_service
-        from app.services.pan115_service import pan115_service
-        from app.services.runtime_settings_service import runtime_settings_service
-
-        # Try to determine folder name from detail context
-        detail = context.user_data.get("current_detail") or {}
-        folder_name = detail.get("title") or title
-        if detail.get("year"):
-            folder_name = f"{folder_name} ({detail['year']})"
-
-        default_folder = runtime_settings_service.get_pan115_default_folder()
-        parent_id = default_folder["folder_id"]
-
-        result = await pan115_service.save_share_to_folder(
-            share_url=share_link,
-            folder_name=folder_name,
-            parent_id=parent_id,
+            offline_folder = runtime_settings_service.get_pan115_offline_folder()
+            result = await pan115_service.offline_task_add(
+                url=task_url,
+                wp_path_id=offline_folder["folder_id"],
+            )
+            if isinstance(result, dict) and result.get("state", False):
+                text = f"离线任务已添加: <b>{escape(title[:50])}</b>"
+            else:
+                error = (
+                    result.get("error_msg") or result.get("error") or "未知错误"
+                    if isinstance(result, dict)
+                    else str(result)
+                )
+                text = f"离线任务添加失败: {escape(str(error)[:200])}"
+        except Exception as e:
+            text = f"离线任务添加出错: {escape(str(e)[:200])}"
+    else:
+        await query.edit_message_text(
+            _with_current_poster(context, f"正在转存: {escape(title[:50])} ...")
         )
 
-        state = result.get("state", False) if isinstance(result, dict) else False
-        if state or (isinstance(result, dict) and not result.get("error")):
-            await media_postprocess_service.trigger_archive_after_transfer(
-                trigger="tg_bot_transfer"
+        try:
+            from app.services.media_postprocess_service import media_postprocess_service
+            from app.services.pan115_service import pan115_service
+            from app.services.runtime_settings_service import runtime_settings_service
+
+            # Try to determine folder name from detail context
+            detail = context.user_data.get("current_detail") or {}
+            folder_name = detail.get("title") or title
+            if detail.get("year"):
+                folder_name = f"{folder_name} ({detail['year']})"
+
+            default_folder = runtime_settings_service.get_pan115_default_folder()
+            parent_id = default_folder["folder_id"]
+
+            result = await pan115_service.save_share_to_folder(
+                share_url=share_link,
+                folder_name=folder_name,
+                parent_id=parent_id,
             )
-            text = f"转存成功: <b>{escape(title[:50])}</b>"
-        else:
-            error = (
-                result.get("error", "未知错误")
-                if isinstance(result, dict)
-                else str(result)
-            )
-            text = f"转存失败: {escape(str(error)[:200])}"
-    except Exception as e:
-        text = f"转存出错: {escape(str(e)[:200])}"
+
+            state = result.get("state", False) if isinstance(result, dict) else False
+            if state or (isinstance(result, dict) and not result.get("error")):
+                await media_postprocess_service.trigger_archive_after_transfer(
+                    trigger="tg_bot_transfer"
+                )
+                text = f"转存成功: <b>{escape(title[:50])}</b>"
+            else:
+                error = (
+                    result.get("error", "未知错误")
+                    if isinstance(result, dict)
+                    else str(result)
+                )
+                text = f"转存失败: {escape(str(error)[:200])}"
+        except Exception as e:
+            text = f"转存出错: {escape(str(e)[:200])}"
 
     tmdb_id = context.user_data.get("cached_115_tmdb_id", 0)
     media_type = context.user_data.get("cached_115_media_type", "movie")

@@ -56,6 +56,7 @@ const emit = defineEmits(['close'])
 const dialogTitle = computed(() => {
   if (props.state.phase === 'unlock') return 'HDHive 解锁中'
   if (props.state.phase === 'transfer') return '115 转存中'
+  if (props.state.phase === 'offline') return '115 离线下载中'
   if (props.state.status === 'success') return 'HDHive 解锁并转存成功'
   if (props.state.status === 'warning') return '转存提示'
   return 'HDHive 解锁后转存失败'
