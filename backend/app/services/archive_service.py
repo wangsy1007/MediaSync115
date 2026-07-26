@@ -2049,6 +2049,44 @@ class ArchiveService:
             "region_name": region_name,
         }
 
+    @staticmethod
+    def _extract_tmdb_item_year(item: dict[str, Any]) -> int | None:
+        for key in ("release_date", "first_air_date", "year"):
+            raw = str(item.get(key) or "").strip()
+            if len(raw) >= 4 and raw[:4].isdigit():
+                value = int(raw[:4])
+                if 1800 <= value <= 2100:
+                    return value
+        return None
+
+    @classmethod
+    def _rank_tmdb_items_by_year(
+        cls,
+        items: list[Any],
+        expected_year: int | None,
+    ) -> list[Any]:
+        """有解析年份时优先精确年，其次 ±1 年，避免冷门片名串到同名旧作。"""
+        normalized = [item for item in items if isinstance(item, dict)]
+        if not normalized or expected_year is None:
+            return normalized
+
+        exact: list[dict[str, Any]] = []
+        near: list[dict[str, Any]] = []
+        for item in normalized:
+            item_year = cls._extract_tmdb_item_year(item)
+            if item_year is None:
+                continue
+            if item_year == expected_year:
+                exact.append(item)
+            elif abs(item_year - expected_year) <= 1:
+                near.append(item)
+        if exact:
+            return exact
+        if near:
+            return near
+        # 有明确年份却完全对不上时，不要盲目用第一条错误结果
+        return []
+
     async def _search_tmdb_items(
         self, *, query: str, media_type: str, year: int | None
     ) -> list[Any]:
@@ -2060,7 +2098,11 @@ class ArchiveService:
         )
         items = result.get("results") if isinstance(result.get("results"), list) else []
         if items:
-            return items
+            if year is None:
+                return items
+            ranked = self._rank_tmdb_items_by_year(items, year)
+            # 年份检索已由 TMDB 过滤时，若条目缺日期字段则仍信任原结果
+            return ranked or items
         if year is None:
             return []
         result = await tmdb_service.search_by_media_type(
@@ -2069,7 +2111,11 @@ class ArchiveService:
             page=1,
             year=None,
         )
-        return result.get("results") if isinstance(result.get("results"), list) else []
+        fallback_items = (
+            result.get("results") if isinstance(result.get("results"), list) else []
+        )
+        # 无年份过滤的回退必须严格按解析年份筛选，避免 Cold War 串到同名旧作
+        return self._rank_tmdb_items_by_year(fallback_items, year)
 
     # ---------- 文件名解析 ----------
 
@@ -2090,32 +2136,61 @@ class ArchiveService:
         # 小写/数字与大写字母分界：22025Repack -> 22025.Repack
         text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", ".", text)
         # 字母与年份分界：Zootopia2025 -> Zootopia.2025
-        text = re.sub(r"(?<=[A-Za-z])(20\d{2})(?![0-9])", r".\1", text)
+        text = re.sub(r"(?<=[A-Za-z])(19\d{2}|20\d{2})(?![0-9])", r".\1", text)
+        # 中文与年份分界：冷战1994 -> 冷战.1994
+        text = re.sub(
+            r"(?<=[\u3400-\u9fff])(19\d{2}|20\d{2})(?![0-9])",
+            r".\1",
+            text,
+        )
         return text
 
     @staticmethod
-    def _find_year_match(name: str) -> tuple[re.Match[str] | None, str | None]:
-        best: tuple[int, str, re.Match[str]] | None = None
+    def _iter_year_matches(name: str, *, end: int | None = None) -> list[re.Match[str]]:
+        """收集文件名中的年份匹配（可限制在 end 之前）。"""
+        limit = len(name) if end is None else max(0, min(int(end), len(name)))
+        search_text = name[:limit]
+        matches: list[re.Match[str]] = []
+        seen_spans: set[tuple[int, int]] = set()
         for pattern in (
             r"(?<![A-Za-z0-9])(19\d{2}|20\d{2})(?![A-Za-z0-9])",
-            r"[.\-_](20\d{2})(?![A-Za-z0-9])",
-            r"(?<=[A-Za-z])(20\d{2})(?![A-Za-z0-9])",
+            r"[.\-_](19\d{2}|20\d{2})(?![A-Za-z0-9])",
+            r"(?<=[A-Za-z\u3400-\u9fff])(19\d{2}|20\d{2})(?![A-Za-z0-9])",
         ):
-            for match in re.finditer(pattern, name):
-                year = match.group(1)
-                if best is None or match.start() < best[0]:
-                    best = (match.start(), year, match)
-        if best is None:
+            for match in re.finditer(pattern, search_text):
+                span = match.span(1)
+                if span in seen_spans:
+                    continue
+                seen_spans.add(span)
+                matches.append(match)
+        matches.sort(key=lambda item: item.start(1))
+        return matches
+
+    @classmethod
+    def _find_year_match(
+        cls,
+        name: str,
+        *,
+        end: int | None = None,
+        prefer_last: bool = True,
+    ) -> tuple[re.Match[str] | None, str | None]:
+        """
+        提取发行年份。
+
+        资源名常见「片名年份 + 上映年份」，如 Cold.War.1994.2026.2160p。
+        默认取画质/剧集标记前的最后一个年份作为上映年，前面的年份保留在片名中。
+        """
+        matches = cls._iter_year_matches(name, end=end)
+        if not matches:
             return None, None
-        return best[2], best[1]
+        chosen = matches[-1] if prefer_last else matches[0]
+        return chosen, chosen.group(1)
 
     def parse_media_filename(self, filename: str) -> dict[str, Any]:
         ext_match = re.search(r"\.[^.]+$", filename)
         ext = ext_match.group(0) if ext_match else ""
         name = filename[: -len(ext)] if ext else filename
         name = self._prepare_filename_stem(name)
-
-        year_match, year = self._find_year_match(name)
 
         media_type = "movie"
         season = None
@@ -2135,9 +2210,6 @@ class ArchiveService:
                 episode = int(eg)
             break
 
-        if year_match and year_match.start() < title_end:
-            title_end = year_match.start()
-
         tech_match = TECH_CUT_RE.search(name)
         if tech_match and tech_match.start() < title_end:
             title_end = tech_match.start()
@@ -2148,6 +2220,11 @@ class ArchiveService:
             prefix = name[: zh_noise_match.start()].strip(" ._-")
             if prefix:
                 title_end = zh_noise_match.start()
+
+        # 在画质/剧集截断点之前取“最后一个年份”作为上映年
+        year_match, year = self._find_year_match(name, end=title_end, prefer_last=True)
+        if year_match and year_match.start() < title_end:
+            title_end = year_match.start()
 
         raw_title = name[:title_end] if title_end > 0 else name
         # 去掉片名前缀广告组 【xxx】 [xxx]
@@ -2190,15 +2267,15 @@ class ArchiveService:
             if match:
                 cut = min(cut, match.start())
                 break
-        year_match, _year = cls._find_year_match(stem)
-        if year_match:
-            cut = min(cut, year_match.start())
         tech_match = TECH_CUT_RE.search(stem)
         if tech_match:
             cut = min(cut, tech_match.start())
         zh_noise_match = ZH_NOISE_CUT_RE.search(stem)
         if zh_noise_match and stem[: zh_noise_match.start()].strip(" ._-"):
             cut = min(cut, zh_noise_match.start())
+        year_match, _year = cls._find_year_match(stem, end=cut, prefer_last=True)
+        if year_match:
+            cut = min(cut, year_match.start())
 
         head = stem[:cut]
         _add(head)

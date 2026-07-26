@@ -62,6 +62,37 @@ class TestArchiveService:
         assert parsed["query_title"] == "The Batman"
         assert parsed["year"] == "2022"
 
+    def test_parse_title_year_then_release_year(self) -> None:
+        """片名自带年份时，应取画质前最后一个年份作上映年"""
+        parsed = archive_service.parse_media_filename(
+            "Cold.War.1994.2026.2160p.WEB-DL.HQ.HDR.60FPS.H.265.DTS5.1-HiveWeb.mp4"
+        )
+        assert parsed["year"] == "2026"
+        assert parsed["query_title"] == "Cold War 1994"
+        candidates = archive_service._build_title_query_candidates(parsed)
+        assert "Cold War 1994" in candidates
+
+    def test_parse_chinese_title_year_then_release_year(self) -> None:
+        """中文片名粘连历史年份时，也应保留片名年份并识别上映年"""
+        parsed = archive_service.parse_media_filename(
+            "冷战1994.2026.2160p.WEB-DL.mkv"
+        )
+        assert parsed["year"] == "2026"
+        assert "冷战" in parsed["query_title"]
+        assert "1994" in parsed["query_title"]
+
+    def test_rank_tmdb_items_by_year_prefers_exact(self) -> None:
+        ranked = archive_service._rank_tmdb_items_by_year(
+            [
+                {"title": "寒战", "release_date": "2012-11-08"},
+                {"title": "冷战1994", "release_date": "2026-04-30"},
+                {"title": "冷战", "release_date": "1997-01-01"},
+            ],
+            2026,
+        )
+        assert len(ranked) == 1
+        assert ranked[0]["title"] == "冷战1994"
+
     def test_parse_glued_115_prefix_and_year(self) -> None:
         """115 前缀、粘连年份与发布组标签应能解析出片名"""
         parsed = archive_service.parse_media_filename(
