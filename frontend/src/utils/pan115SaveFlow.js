@@ -75,6 +75,7 @@ export const executePan115SaveToFolder = async ({
   parentId = '0',
   receiveCode = '',
   tmdbId = null,
+  mediaType = null,
   requestConfig = {},
 } = {}) => {
   const startedAt = Date.now()
@@ -87,6 +88,7 @@ export const executePan115SaveToFolder = async ({
       receiveCode,
       tmdbId,
       requestConfig,
+      mediaType,
     )
   } catch (error) {
     if (!isTransferConflict(error) && !isTransferGatewayTimeout(error)) {

@@ -945,6 +945,14 @@ class ExploreActionQueueService:
                         )
 
                         quality_filter = build_quality_filter_from_settings()
+                        from app.services.transfer_file_binding_service import (
+                            transfer_file_binding_service,
+                        )
+
+                        before_fids = await transfer_file_binding_service.list_video_fids(
+                            str(folder_id or ""),
+                            pan115=pan115_service,
+                        )
                         result = await pan115_service.save_share_directly(
                             share_link,
                             folder_id,
@@ -1003,6 +1011,18 @@ class ExploreActionQueueService:
                         resource_name=resource_label or None,
                         source="explore_save",
                     )
+                    bind_cid = str(folder_id or "").strip()
+                    if tmdb_id and bind_cid:
+                        await transfer_file_binding_service.bind_folder_files(
+                            folder_cid=bind_cid,
+                            tmdb_id=int(tmdb_id),
+                            media_type=media_type,
+                            display_title=title,
+                            source="explore_save",
+                            resource_name=resource_label or None,
+                            pan115=pan115_service,
+                            before_fids=before_fids,
+                        )
                     file_count = (
                         result.get("file_count") if isinstance(result, dict) else None
                     )
@@ -1050,6 +1070,7 @@ class ExploreActionQueueService:
                             resource_name=str(offline_url or "").strip() or None,
                             source="explore_save_offline",
                         )
+                        # 离线尚未落盘，不在此刻整目录绑定（避免误绑已有文件）
                         return {
                             "tmdb_id": tmdb_id,
                             "media_type": media_type,

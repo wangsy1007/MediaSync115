@@ -23,6 +23,7 @@ from app.services.transfer_guard_service import (
     transfer_guard_service,
 )
 from app.services.transfer_intent_service import transfer_intent_service
+from app.services.transfer_file_binding_service import transfer_file_binding_service
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ async def _register_transfer_intent_after_save(
     target_folder_id: str | None = None,
     source: str = "pan115_api",
 ) -> None:
-    """转存成功后登记意图，供归档命名与转存影视关联。"""
+    """转存成功后登记意图，并尽量写入 file_fid↔TMDB 硬绑定供归档使用。"""
     if not isinstance(result, dict):
         return
     if result.get("success") is False:
@@ -52,6 +53,29 @@ async def _register_transfer_intent_after_save(
         target_parent_id=parent_id,
         source=source,
     )
+    parsed_tmdb = int(tmdb_id) if tmdb_id and int(tmdb_id) > 0 else 0
+    if parsed_tmdb <= 0 or not folder_id:
+        return
+    try:
+        bound = await transfer_file_binding_service.bind_folder_files(
+            folder_cid=folder_id,
+            tmdb_id=parsed_tmdb,
+            media_type=media_type,
+            display_title=folder_name,
+            source=source,
+            resource_name=folder_name,
+            pan115=pan115_service,
+        )
+        if bound:
+            logger.info(
+                "转存文件绑定完成 source=%s folder=%s tmdb=%s count=%s",
+                source,
+                folder_id,
+                parsed_tmdb,
+                bound,
+            )
+    except Exception:
+        logger.warning("转存文件绑定失败 folder=%s tmdb=%s", folder_id, parsed_tmdb, exc_info=True)
 
 
 def _sanitize_receive_code(value: str) -> str:
@@ -213,6 +237,7 @@ class SaveShareToFolderRequest(BaseModel):
     parent_id: str = "0"
     receive_code: str = ""
     tmdb_id: Optional[int] = None
+    media_type: Optional[str] = None
 
 
 class ShareExtractFilesRequest(BaseModel):
@@ -230,6 +255,8 @@ class SaveShareFilesToFolderRequest(BaseModel):
     folder_name: str
     parent_id: str = "0"
     receive_code: str = ""
+    tmdb_id: Optional[int] = None
+    media_type: Optional[str] = None
 
 
 class UpdateCookieRequest(BaseModel):
@@ -1075,9 +1102,13 @@ async def save_share_to_folder(request: SaveShareToFolderRequest):
             last_error: Exception | None = None
             for attempt in range(4):
                 try:
-                    # 如果提供了 tmdb_id，说明这是一个剧集，进行查漏补缺式的转存
-                    if request.tmdb_id:
-                        # sync_tv_show 需要预先解析好的 target_folder_id
+                    media_type = str(request.media_type or "").strip().lower()
+                    if media_type not in ("tv", "movie"):
+                        # 兼容旧前端：仅传 tmdb_id 时按剧集补缺逻辑处理
+                        media_type = "tv" if request.tmdb_id else "movie"
+
+                    # 剧集 + tmdb：查漏补缺式转存到专用文件夹
+                    if request.tmdb_id and media_type == "tv":
                         target_folder_id = await service.get_or_create_folder(
                             transfer_parent_id, request.folder_name
                         )
@@ -1099,7 +1130,6 @@ async def save_share_to_folder(request: SaveShareToFolderRequest):
                         asyncio.create_task(_trigger_archive_if_enabled("transfer"))
                         return result
 
-                    # 没有 tmdb_id，走默认全量转存（save_share_to_folder 内部会创建文件夹）
                     from app.utils.resource_tags import build_quality_filter_from_settings
 
                     quality_filter = build_quality_filter_from_settings()
@@ -1109,13 +1139,14 @@ async def save_share_to_folder(request: SaveShareToFolderRequest):
                         transfer_parent_id,
                         request.receive_code,
                         quality_filter,
+                        media_type=media_type,
                     )
                     await _register_transfer_intent_after_save(
                         folder_name=request.folder_name,
                         result=result,
                         transfer_parent_id=transfer_parent_id,
                         tmdb_id=request.tmdb_id,
-                        media_type="movie",
+                        media_type=media_type,
                         source="detail_page",
                     )
                     asyncio.create_task(_trigger_archive_if_enabled("transfer"))
@@ -1289,10 +1320,15 @@ async def save_share_files_to_folder(request: SaveShareFilesToFolderRequest):
                         transfer_parent_id,
                         request.receive_code,
                     )
+                    media_type = str(request.media_type or "").strip().lower()
+                    if media_type not in ("tv", "movie"):
+                        media_type = "tv" if request.tmdb_id else "movie"
                     await _register_transfer_intent_after_save(
                         folder_name=request.folder_name,
                         result=result,
                         transfer_parent_id=transfer_parent_id,
+                        tmdb_id=request.tmdb_id,
+                        media_type=media_type,
                         source="detail_page_files",
                     )
                     asyncio.create_task(_trigger_archive_if_enabled("transfer"))

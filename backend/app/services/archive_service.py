@@ -15,6 +15,7 @@ from app.services.transfer_intent_service import (
     pick_preferred_chinese_title,
     transfer_intent_service,
 )
+from app.services.transfer_file_binding_service import transfer_file_binding_service
 from app.services.media_postprocess_service import media_postprocess_service
 from app.services.operation_log_service import operation_log_service
 from app.services.pan115_service import Pan115Service
@@ -543,11 +544,15 @@ class ArchiveService:
                     await self._trigger_strm_after_archive(summary, trigger)
                     return summary
 
-                # 阶段二：并发 TMDB 识别（纯网络请求，不涉及 115 操作）
+                # 阶段二：优先 file_fid↔TMDB 绑定，再回退文件名搜 TMDB
                 identify_tasks = []
                 for item in video_items:
                     parsed = self.parse_media_filename(item["name"])
                     identify_tasks.append((item, parsed))
+
+                binding_map = await transfer_file_binding_service.get_by_file_fids(
+                    [str(it.get("fid") or "") for it, _ in identify_tasks]
+                )
 
                 identified: list[dict[str, Any]] = []
                 identify_semaphore = asyncio.Semaphore(5)
@@ -556,15 +561,43 @@ class ArchiveService:
                     _item: dict[str, Any], _parsed: dict[str, Any]
                 ) -> dict[str, Any]:
                     async with identify_semaphore:
+                        fid = str(_item.get("fid") or "")
+                        binding = binding_map.get(fid)
+                        parsed = dict(_parsed or {})
                         try:
-                            matched = await self.identify_media(_parsed)
+                            matched = None
+                            if binding and binding.get("tmdb_id"):
+                                media_type = str(
+                                    binding.get("media_type")
+                                    or parsed.get("media_type")
+                                    or "movie"
+                                )
+                                parsed["media_type"] = (
+                                    "tv" if media_type == "tv" else "movie"
+                                )
+                                if binding.get("season") is not None:
+                                    parsed["season"] = int(binding["season"])
+                                if binding.get("episode") is not None:
+                                    parsed["episode"] = int(binding["episode"])
+                                matched = await self._identify_by_tmdb_id(
+                                    int(binding["tmdb_id"]),
+                                    parsed["media_type"],
+                                )
+                            if not matched:
+                                matched = await self.identify_media(parsed)
                             return {
                                 "item": _item,
-                                "parsed": _parsed,
+                                "parsed": parsed,
                                 "matched": matched,
+                                "binding": binding or {},
                             }
                         except Exception:
-                            return {"item": _item, "parsed": _parsed, "matched": None}
+                            return {
+                                "item": _item,
+                                "parsed": parsed,
+                                "matched": None,
+                                "binding": binding or {},
+                            }
 
                 identify_results = await asyncio.gather(
                     *[_identify_one(it, ps) for it, ps in identify_tasks],
@@ -939,8 +972,9 @@ class ArchiveService:
         subtitle_items: list[dict[str, Any]] | None = None,
         season_episode_cache: dict[str, set[tuple[int, int]]] | None = None,
     ) -> dict[str, Any]:
-        parsed = identify_info["parsed"]
+        parsed = dict(identify_info.get("parsed") or {})
         matched = identify_info["matched"]
+        binding = identify_info.get("binding") or {}
         if not matched:
             return {
                 "status": ArchiveStatus.FAILED.value,
@@ -952,6 +986,24 @@ class ArchiveService:
         fid = item["fid"]
         filename = item["name"]
 
+        # 绑定优先：补齐类型/季集，必要时再按绑定 TMDB 校正 matched
+        if binding.get("tmdb_id"):
+            if binding.get("media_type"):
+                parsed["media_type"] = (
+                    "tv" if str(binding.get("media_type")) == "tv" else "movie"
+                )
+            if binding.get("season") is not None:
+                parsed["season"] = int(binding["season"])
+            if binding.get("episode") is not None:
+                parsed["episode"] = int(binding["episode"])
+            if int(matched.get("tmdb_id") or 0) != int(binding["tmdb_id"]):
+                binding_matched = await self._identify_by_tmdb_id(
+                    int(binding["tmdb_id"]),
+                    str(parsed.get("media_type") or "movie"),
+                )
+                if binding_matched:
+                    matched = binding_matched
+
         transfer_context = await self._lookup_transfer_context(
             str(item.get("cid") or ""),
             fid,
@@ -960,6 +1012,10 @@ class ArchiveService:
             media_type=str(parsed.get("media_type") or "movie"),
             filename=filename,
         )
+        if binding.get("display_title"):
+            transfer_context["binding_display_title"] = str(
+                binding.get("display_title") or ""
+            ).strip()
         intent = transfer_context.get("intent") or {}
         if intent and not intent_matches_file(
             intent,
@@ -969,7 +1025,7 @@ class ArchiveService:
         ):
             transfer_context["intent"] = {}
             intent = {}
-        if intent.get("tmdb_id"):
+        if intent.get("tmdb_id") and not binding.get("tmdb_id"):
             intent_matched = await self._identify_by_tmdb_id(
                 int(intent["tmdb_id"]),
                 str(intent.get("media_type") or parsed.get("media_type") or "movie"),
@@ -1163,7 +1219,23 @@ class ArchiveService:
         )
 
         try:
-            matched = await self.identify_media(parsed)
+            binding = await transfer_file_binding_service.get_by_file_fid(fid)
+            matched = None
+            if binding and binding.get("tmdb_id"):
+                if binding.get("media_type"):
+                    parsed["media_type"] = (
+                        "tv" if str(binding.get("media_type")) == "tv" else "movie"
+                    )
+                if binding.get("season") is not None:
+                    parsed["season"] = int(binding["season"])
+                if binding.get("episode") is not None:
+                    parsed["episode"] = int(binding["episode"])
+                matched = await self._identify_by_tmdb_id(
+                    int(binding["tmdb_id"]),
+                    str(parsed.get("media_type") or "movie"),
+                )
+            if not matched:
+                matched = await self.identify_media(parsed)
             transfer_context = await self._lookup_transfer_context(
                 str(item.get("cid") or source_cid or ""),
                 fid,
@@ -1172,6 +1244,10 @@ class ArchiveService:
                 media_type=str(parsed.get("media_type") or "movie"),
                 filename=filename,
             )
+            if binding and binding.get("display_title"):
+                transfer_context["binding_display_title"] = str(
+                    binding.get("display_title") or ""
+                ).strip()
             intent = transfer_context.get("intent") or {}
             if intent and matched and not intent_matches_file(
                 intent,
@@ -1181,7 +1257,7 @@ class ArchiveService:
             ):
                 transfer_context["intent"] = {}
                 intent = {}
-            if intent.get("tmdb_id"):
+            if intent.get("tmdb_id") and not (binding and binding.get("tmdb_id")):
                 intent_matched = await self._identify_by_tmdb_id(
                     int(intent["tmdb_id"]),
                     str(intent.get("media_type") or parsed.get("media_type") or "movie"),
@@ -1488,6 +1564,7 @@ class ArchiveService:
         media_type = str(parsed.get("media_type") or "movie")
         intent = context.get("intent") or {}
         intent_title = str(intent.get("display_title") or "").strip()
+        binding_title = str(context.get("binding_display_title") or "").strip()
         source_filename = str(context.get("filename") or parsed.get("source_filename") or "")
 
         if intent_title and not intent_matches_file(
@@ -1511,6 +1588,7 @@ class ArchiveService:
 
         if media_type == "movie":
             return pick_preferred_chinese_title(
+                binding_title,
                 intent_title,
                 subscription_title,
                 subscription_title_by_tmdb,
@@ -1521,6 +1599,7 @@ class ArchiveService:
             )
 
         return pick_preferred_chinese_title(
+            binding_title,
             intent_title,
             subscription_title,
             subscription_title_by_tmdb,

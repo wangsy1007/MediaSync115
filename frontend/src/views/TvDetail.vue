@@ -1537,6 +1537,8 @@ const handleSaveToPan115 = async (item) => {
         folderId: defaultFolderId,
         resolveReceiveCode: resolvePanReceiveCode,
         unlockingSlugs: hdhiveUnlockingSlugs.value,
+        tmdbId: Number(tv.value?.id || route.params.id) || null,
+        mediaType: 'tv',
       })
       return
     }
@@ -1553,6 +1555,8 @@ const handleSaveToPan115 = async (item) => {
       folderName,
       parentId: defaultFolderId,
       receiveCode,
+      tmdbId: Number(tv.value?.id || route.params.id) || null,
+      mediaType: 'tv',
     })
 
     const saveSuccess = data?.success === true
@@ -1678,7 +1682,9 @@ const confirmSelectSave = async () => {
       selectedFiles.value,
       selectSaveForm.value.newFolderName,
       selectSaveForm.value.targetFolder,
-      selectSaveForm.value.receiveCode
+      selectSaveForm.value.receiveCode,
+      Number(tv.value?.id || route.params.id) || null,
+      'tv',
     )
     
     if (data?.success || data?.result?.success) {
@@ -1747,6 +1753,8 @@ const submitManualPanShare = async () => {
       folderName,
       parentId: defaultFolderId,
       receiveCode,
+      tmdbId: Number(tv.value?.id || route.params.id) || null,
+      mediaType: 'tv',
     })
     const saveSuccess = data?.success === true
       || data?.state === true

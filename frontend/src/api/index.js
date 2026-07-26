@@ -559,10 +559,17 @@ export const pan115Api = {
   saveShareAll: (shareCode, pid = '0', receiveCode = '') => 
     api.post('/pan115/share/save-all', null, { params: { share_code: shareCode, pid, receive_code: receiveCode } }),
   
-  saveShareToFolder: (shareUrl, folderName, parentId = '0', receiveCode = '', tmdbId = null, requestConfig = {}) =>
+  saveShareToFolder: (shareUrl, folderName, parentId = '0', receiveCode = '', tmdbId = null, requestConfig = {}, mediaType = null) =>
     api.post(
       '/pan115/share/save-to-folder',
-      { share_url: shareUrl, folder_name: folderName, parent_id: parentId, receive_code: receiveCode, tmdb_id: tmdbId },
+      {
+        share_url: shareUrl,
+        folder_name: folderName,
+        parent_id: parentId,
+        receive_code: receiveCode,
+        tmdb_id: tmdbId,
+        media_type: mediaType,
+      },
       { timeout: SAVE_OPERATION_TIMEOUT, ...requestConfig },
     ),
 
@@ -576,10 +583,18 @@ export const pan115Api = {
   extractShareFiles: (shareUrl, receiveCode = '') => 
     api.post('/pan115/share/extract-files', { share_url: shareUrl, receive_code: receiveCode }),
 
-  saveShareFilesToFolder: (shareUrl, fileIds, folderName, parentId = '0', receiveCode = '') =>
+  saveShareFilesToFolder: (shareUrl, fileIds, folderName, parentId = '0', receiveCode = '', tmdbId = null, mediaType = null) =>
     api.post(
       '/pan115/share/save-files-to-folder',
-      { share_url: shareUrl, file_ids: fileIds, folder_name: folderName, parent_id: parentId, receive_code: receiveCode },
+      {
+        share_url: shareUrl,
+        file_ids: fileIds,
+        folder_name: folderName,
+        parent_id: parentId,
+        receive_code: receiveCode,
+        tmdb_id: tmdbId,
+        media_type: mediaType,
+      },
       { timeout: SAVE_OPERATION_TIMEOUT }
     ),
 

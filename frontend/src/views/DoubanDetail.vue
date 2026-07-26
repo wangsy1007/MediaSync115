@@ -1352,6 +1352,8 @@ const submitManualPanShare = async () => {
       folderName,
       parentId: folderId,
       receiveCode,
+      tmdbId: mappedTmdbId.value || null,
+      mediaType: mediaType.value,
     })
     const success = data?.success === true || data?.state === true || data?.result?.success === true || data?.result?.state === true
     if (!success) throw new Error(data?.message || data?.error || data?.result?.error || '转存失败')
@@ -1407,6 +1409,8 @@ const savePan115Resource = async (row) => {
         folderId,
         resolveReceiveCode: resolvePanReceiveCode,
         unlockingSlugs: hdhiveUnlockingSlugs.value,
+        tmdbId: mappedTmdbId.value || null,
+        mediaType: mediaType.value,
       })
       return
     }
@@ -1424,6 +1428,8 @@ const savePan115Resource = async (row) => {
       folderName,
       parentId: folderId,
       receiveCode,
+      tmdbId: mappedTmdbId.value || null,
+      mediaType: mediaType.value,
     })
     const success = data?.success === true
       || data?.state === true
@@ -1541,7 +1547,9 @@ const confirmSelectSave = async () => {
       selectedFiles.value,
       selectSaveForm.value.newFolderName || (detail.value?.title || '豆瓣剧集'),
       selectSaveForm.value.targetFolder,
-      selectSaveForm.value.receiveCode
+      selectSaveForm.value.receiveCode,
+      mappedTmdbId.value || null,
+      mediaType.value,
     )
     const success = data?.success === true || data?.state === true || data?.result?.success === true || data?.result?.state === true
     if (!success) {

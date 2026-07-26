@@ -3598,10 +3598,12 @@ class SubscriptionService:
                     record.error_message = None
                     record.file_id = offline_folder_id
                     saved += 1
+                    # 离线任务尚未落盘，仅登记文件夹级 intent；文件绑定待归档扫描兜底
                     await self._register_transfer_intent_for_sub(
                         sub,
                         target_folder_id=offline_folder_id,
                         resource_name=record.resource_name,
+                        download_record_id=record.id,
                     )
                     await operation_log_service.log_background_event(
                         source_type="background_task",
@@ -3814,6 +3816,18 @@ class SubscriptionService:
                         )
                         continue
 
+                    from app.services.transfer_file_binding_service import (
+                        transfer_file_binding_service,
+                    )
+
+                    before_fids = await transfer_file_binding_service.list_video_fids(
+                        parent_folder_id, pan115=pan_service
+                    )
+                    name_hints = [
+                        str(item.get("name") or "").strip()
+                        for item in selected_items
+                        if str(item.get("name") or "").strip()
+                    ]
                     result = await pan_service.save_share_files_directly(
                         share_url=share_link,
                         file_ids=selected_file_ids,
@@ -3833,6 +3847,10 @@ class SubscriptionService:
                         sub,
                         target_parent_id=parent_folder_id,
                         resource_name=record.resource_name,
+                        download_record_id=record.id,
+                        before_fids=before_fids,
+                        name_hints=name_hints,
+                        pan115=pan_service,
                     )
                     await self._notify_transfer_success(
                         sub.title,
@@ -3928,6 +3946,13 @@ class SubscriptionService:
                             }
                             break
                 else:
+                    from app.services.transfer_file_binding_service import (
+                        transfer_file_binding_service,
+                    )
+
+                    before_fids = await transfer_file_binding_service.list_video_fids(
+                        parent_folder_id, pan115=pan_service
+                    )
                     result = await pan_service.save_share_directly(
                         share_url=share_link,
                         parent_id=parent_folder_id,
@@ -3944,6 +3969,9 @@ class SubscriptionService:
                         sub,
                         target_parent_id=parent_folder_id,
                         resource_name=record.resource_name,
+                        download_record_id=record.id,
+                        before_fids=before_fids,
+                        pan115=pan_service,
                     )
                     await self._notify_transfer_success(
                         sub.title,
@@ -4023,10 +4051,12 @@ class SubscriptionService:
                         record.completed_at = beijing_now()
                     record.error_message = None
                     saved += 1
+                    # 已在网盘：无法可靠定位本次文件，仅登记 intent
                     await self._register_transfer_intent_for_sub(
                         sub,
                         target_parent_id=parent_folder_id,
                         resource_name=record.resource_name,
+                        download_record_id=record.id,
                     )
                     await self._notify_transfer_success(
                         sub.title,
@@ -4855,13 +4885,21 @@ class SubscriptionService:
         target_folder_id: str | None = None,
         target_parent_id: str | None = None,
         resource_name: str | None = None,
+        download_record_id: int | None = None,
+        before_fids: set[str] | None = None,
+        name_hints: list[str] | None = None,
+        pan115: Any | None = None,
     ) -> None:
         from app.services.transfer_intent_service import transfer_intent_service
+        from app.services.transfer_file_binding_service import (
+            transfer_file_binding_service,
+        )
 
         media_type = "tv" if sub.media_type == MediaType.TV else "movie"
+        tmdb_id = getattr(sub, "tmdb_id", None)
         await transfer_intent_service.register_intent(
             display_title=str(sub.title or "").strip(),
-            tmdb_id=getattr(sub, "tmdb_id", None),
+            tmdb_id=tmdb_id,
             douban_id=str(getattr(sub, "douban_id", "") or "").strip() or None,
             media_type=media_type,
             target_folder_id=str(target_folder_id or "").strip() or None,
@@ -4869,6 +4907,39 @@ class SubscriptionService:
             resource_name=str(resource_name or "").strip() or None,
             source="subscription",
         )
+        bind_cid = (
+            str(target_folder_id or "").strip()
+            or str(target_parent_id or "").strip()
+        )
+        parsed_tmdb = int(tmdb_id) if tmdb_id and int(tmdb_id) > 0 else 0
+        if parsed_tmdb <= 0 or not bind_cid:
+            return
+        # 订阅多为公共监听目录直存：必须能 diff/按名定位，禁止整目录误绑
+        if before_fids is None and not name_hints:
+            return
+        try:
+            await transfer_file_binding_service.bind_folder_files(
+                folder_cid=bind_cid,
+                tmdb_id=parsed_tmdb,
+                media_type=media_type,
+                display_title=str(sub.title or "").strip(),
+                source="subscription",
+                download_record_id=download_record_id,
+                subscription_id=int(getattr(sub, "id", 0) or 0) or None,
+                resource_name=str(resource_name or "").strip() or None,
+                pan115=pan115,
+                before_fids=before_fids,
+                name_hints=name_hints,
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "订阅转存文件绑定失败 cid=%s tmdb=%s",
+                bind_cid,
+                parsed_tmdb,
+                exc_info=True,
+            )
 
     @staticmethod
     async def _notify_transfer_success(

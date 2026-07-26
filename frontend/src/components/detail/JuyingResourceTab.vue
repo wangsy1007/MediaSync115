@@ -169,6 +169,7 @@ const savePan115 = async (row) => {
       parentId,
       receiveCode: access.access_code || '',
       tmdbId: Number(props.tmdbId) || null,
+      mediaType: props.mediaType === 'tv' ? 'tv' : 'movie',
     })
     if (data?.success === false || data?.state === false) {
       throw new Error(data?.message || '转存失败')

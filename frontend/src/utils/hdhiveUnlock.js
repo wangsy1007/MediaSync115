@@ -208,6 +208,8 @@ export const runHdhivePan115SaveFlow = async ({
   unlockingSlugs = null,
   forceUnlock = false,
   unlockReason = '',
+  tmdbId = null,
+  mediaType = null,
 }) => {
   const resourceLabel = getHdhiveResourceLabel(row)
   const progress = openPan115ProgressDialog({ resourceLabel })
@@ -252,6 +254,8 @@ export const runHdhivePan115SaveFlow = async ({
       folderName,
       parentId: folderId,
       receiveCode,
+      tmdbId,
+      mediaType,
       requestConfig: { silentError: true },
     })
     const parsed = parsePan115SaveResponse(response?.data)
@@ -274,6 +278,8 @@ export const runHdhivePan115SaveFlow = async ({
         unlockingSlugs,
         forceUnlock: true,
         unlockReason: '115 返回“请输入访问码”，需要先进行 HDHive 解锁。',
+        tmdbId,
+        mediaType,
       })
     }
     await finishProgressDialog(progress, 'failed', detail)

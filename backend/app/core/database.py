@@ -52,6 +52,7 @@ MODEL_MODULES = (
     "app.models.person_follow",
     "app.models.strm_index",
     "app.models.transfer_intent",
+    "app.models.transfer_file_binding",
 )
 
 
