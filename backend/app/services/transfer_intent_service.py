@@ -12,31 +12,22 @@ from sqlalchemy import delete, select
 from app.core.database import async_session_maker
 from app.core.timezone_utils import beijing_now
 from app.models.transfer_intent import TransferIntent
+from app.utils.media_title_cleanup import (
+    clean_archive_display_title,
+    contains_cjk,
+    is_noisy_display_title,
+)
 
 logger = logging.getLogger(__name__)
 
-_CJK_RE = re.compile(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]")
-_YEAR_SUFFIX_RE = re.compile(r"\s*[\(（]\s*\d{4}\s*[\)）]\s*$")
 _RETENTION_DAYS = 90
 _MAX_ROWS = 2000
 _SHARED_PARENT_SCAN_LIMIT = 300
 
 
-def contains_cjk(text: str) -> bool:
-    return bool(_CJK_RE.search(str(text or "")))
-
-
 def normalize_transfer_display_title(raw: str) -> str:
     """从转存文件夹名/用户标题提取展示用中文片名。"""
-    text = str(raw or "").strip()
-    if not text:
-        return ""
-    text = _YEAR_SUFFIX_RE.sub("", text).strip(" ._-")
-    if contains_cjk(text):
-        match = re.search(r"[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af0-9A-Za-z·]+", text)
-        if match:
-            return match.group(0).strip(" ._-")
-    return text
+    return clean_archive_display_title(raw)
 
 
 def extract_chinese_title_from_text(raw: str) -> str:
@@ -44,18 +35,22 @@ def extract_chinese_title_from_text(raw: str) -> str:
     if not text:
         return ""
     normalized = normalize_transfer_display_title(text)
-    if normalized:
+    if normalized and not is_noisy_display_title(normalized):
         return normalized
+    # 回退：在原文里找未被判定为广告的中文块
     for match in re.finditer(r"[\u3400-\u9fff]{2,}", text):
-        return match.group(0).strip()
-    return ""
+        block = match.group(0).strip()
+        cleaned = clean_archive_display_title(block)
+        if cleaned and not is_noisy_display_title(cleaned):
+            return cleaned
+    return normalized
 
 
 def pick_preferred_chinese_title(*candidates: str) -> str:
     cleaned: list[str] = []
     for candidate in candidates:
-        value = str(candidate or "").strip()
-        if not value:
+        value = clean_archive_display_title(str(candidate or ""))
+        if not value or is_noisy_display_title(value):
             continue
         if value not in cleaned:
             cleaned.append(value)

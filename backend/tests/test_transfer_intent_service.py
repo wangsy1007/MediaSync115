@@ -14,6 +14,20 @@ class TestTransferIntentHelpers:
     def test_normalize_transfer_display_title_strips_year(self) -> None:
         assert normalize_transfer_display_title("浪浪山小妖怪 (2025)") == "浪浪山小妖怪"
 
+    def test_normalize_strips_ad_brackets_and_site_name(self) -> None:
+        assert (
+            normalize_transfer_display_title("【高清资源网】流浪地球2 4K杜比")
+            == "流浪地球2"
+        )
+
+    def test_normalize_strips_category_prefix_and_update_tail(self) -> None:
+        assert (
+            normalize_transfer_display_title(
+                "📺 电视剧：百花杀 (2026) 更新至8集 4K"
+            )
+            == "百花杀"
+        )
+
     def test_extract_chinese_title_from_release_name(self) -> None:
         title = extract_chinese_title_from_text(
             "浪浪山小妖怪.2025.2160p.WEB-DL.H265.mkv"
@@ -24,6 +38,12 @@ class TestTransferIntentHelpers:
         assert (
             pick_preferred_chinese_title("The Monkey King", "浪浪山小妖怪")
             == "浪浪山小妖怪"
+        )
+
+    def test_pick_preferred_skips_ad_title(self) -> None:
+        assert (
+            pick_preferred_chinese_title("【高清资源】", "流浪地球2", "The Wandering Earth")
+            == "流浪地球2"
         )
 
     def test_contains_cjk(self) -> None:

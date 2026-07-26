@@ -31,6 +31,7 @@ from app.services.archive_naming_config import (
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.tmdb_service import tmdb_service
 from app.utils.name_parser import name_parser
+from app.utils.media_title_cleanup import clean_archive_display_title
 
 from app.core.timezone_utils import beijing_now
 
@@ -1579,22 +1580,30 @@ class ArchiveService:
         resource_title = extract_chinese_title_from_text(
             str(context.get("resource_name") or "")
         )
-        subscription_title = str(context.get("subscription_title") or "").strip()
-        subscription_title_by_tmdb = str(
-            context.get("subscription_title_by_tmdb") or ""
-        ).strip()
-        tmdb_title = str(matched.get("title") or "").strip()
-        parsed_title = str(parsed.get("query_title") or "").strip()
+        # binding/intent/订阅/TMDB 也统一清洗，避免广告括号或画质尾巴进入归档名
+        binding_title = clean_archive_display_title(binding_title)
+        intent_title = clean_archive_display_title(intent_title)
+        subscription_title = clean_archive_display_title(
+            str(context.get("subscription_title") or "")
+        )
+        subscription_title_by_tmdb = clean_archive_display_title(
+            str(context.get("subscription_title_by_tmdb") or "")
+        )
+        tmdb_title = clean_archive_display_title(str(matched.get("title") or ""))
+        parsed_title = clean_archive_display_title(
+            str(parsed.get("query_title") or "")
+        )
 
         if media_type == "movie":
+            # 电影：绑定/意图/订阅优先；文件夹与资源名常带广告，放在 TMDB 之后作为兜底
             return pick_preferred_chinese_title(
                 binding_title,
                 intent_title,
                 subscription_title,
                 subscription_title_by_tmdb,
+                tmdb_title,
                 folder_title,
                 resource_title,
-                tmdb_title,
                 parsed_title,
             )
 

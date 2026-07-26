@@ -207,18 +207,36 @@ class TestArchiveService:
         )
         assert title == "流浪地球2"
 
-    def test_resolve_archive_display_title_prefers_intent_title(self) -> None:
+    def test_resolve_archive_display_title_strips_resource_ads(self) -> None:
         parsed = {
             "media_type": "movie",
-            "query_title": "Wrong English Title",
+            "query_title": "The Batman",
         }
-        matched = {"title": "错误匹配", "year": "2025"}
+        matched = {"title": "蝙蝠侠", "year": "2022"}
         title = archive_service._resolve_archive_display_title(
             parsed,
             matched,
             transfer_context={
-                "intent": {"display_title": "浪浪山小妖怪"},
+                "folder_name": "【高清剧集网】蝙蝠侠 4K杜比视界",
+                "resource_name": "【高清剧集网】The.Batman.2022.2160p.mkv",
+            },
+        )
+        assert title == "蝙蝠侠"
+
+    def test_resolve_archive_display_title_prefers_intent_title(self) -> None:
+        parsed = {
+            "media_type": "movie",
+            "query_title": "Wrong English Title",
+            "source_filename": "浪浪山小妖怪.2025.mkv",
+        }
+        matched = {"title": "错误匹配", "year": "2025", "tmdb_id": 12345}
+        title = archive_service._resolve_archive_display_title(
+            parsed,
+            matched,
+            transfer_context={
+                "intent": {"display_title": "浪浪山小妖怪", "tmdb_id": 12345},
                 "resource_name": "Some.English.Release.2025.mkv",
+                "filename": "浪浪山小妖怪.2025.mkv",
             },
         )
         assert title == "浪浪山小妖怪"
