@@ -106,11 +106,11 @@ Docker Hub 页面：
 https://hub.docker.com/r/wangsy1007/mediasync115
 ```
 
-当前提供 `latest` 和明确版本号 tag，例如 `1.3.1`；多架构镜像支持 linux/amd64 和 linux/arm64，Docker 客户端会按宿主机平台自动选择对应版本。
+当前提供 `latest` 和明确版本号 tag，例如 `1.3.3`；多架构镜像支持 linux/amd64 和 linux/arm64，Docker 客户端会按宿主机平台自动选择对应版本。
 
 推荐策略：
 - 日常部署和 NAS 手动更新用户：使用 `latest`
-- 想锁定版本不自动漂移：使用 `1.3.1`
+- 想锁定版本不自动漂移：使用 `1.3.3`
 
 ### 1. 准备数据目录
 
@@ -314,7 +314,7 @@ docker compose up -d
 ### 3. 版本选择建议
 
 - 使用 `latest`：适合绝大多数 NAS 用户，能更容易被平台识别到有更新
-- 使用固定版本 tag，例如 `1.3.1`：适合想锁版本的用户，但通常不会收到“新版本可更新”提示
+- 使用固定版本 tag，例如 `1.3.3`：适合想锁版本的用户，但通常不会收到“新版本可更新”提示
 
 ## 上线前验证（Pre-release Check）
 
@@ -358,12 +358,18 @@ chmod +x scripts/prerelease_check.sh
 
 ## Changelog
 
-`1.3.1` 重点更新：
-- 修复探索「更多」页榜单 source 错配导致卡片空白
-- 修复探索转存 HDHive 资源命中却无法转存
-- 转存队列执行期间延迟归档/STRM/订阅/Emby/飞牛同步，避免连续转存被打断
-- 修复归档扫描卡住后无法继续执行
-- 详情页转存/离线按钮增加点击即时提示
+`1.3.3` 重点更新：
+- 转存文件与 TMDB 一一绑定，归档优先按 file_fid 识别
+- STRM 增量/全量生成支持手动停止
+- 强化 Telegram Bot 启动重试、冲突恢复与重启合并
+- 修复 115 扫码确认后状态不刷新与登录成功无提示
+- 新增上线前一键回归脚本
+
+`1.3.2` 重点更新：
+- 修复 Python 3.12 下 p115client 依赖导致 115 二维码生成失败
+- 新增 DevCloud 部署支持
+- 修复 Windows 构建镜像时 start.sh CRLF 导致容器启动失败
+- compose.yaml 的 EMBY_PROXY_HOST 默认值调整为 host.docker.internal
 
 `1.3.0` 重点更新：
 - 日志页面支持自动刷新
