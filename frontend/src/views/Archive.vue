@@ -19,50 +19,80 @@
         <div class="card-title">归档配置</div>
       </template>
 
-      <el-form label-width="140px" class="config-form">
+      <el-form label-width="168px" class="config-form">
         <div class="config-grid">
           <el-form-item label="启用归档">
-            <el-switch v-model="config.archive_enabled" />
+            <div class="field-stack">
+              <div class="control-line">
+                <el-switch v-model="config.archive_enabled" />
+              </div>
+            </div>
           </el-form-item>
           <el-form-item label="转存后自动归档">
-            <el-switch v-model="config.archive_auto_on_transfer" />
-            <div class="form-hint">转存分享链接成功后自动触发归档扫描</div>
+            <div class="field-stack">
+              <div class="control-line">
+                <el-switch v-model="config.archive_auto_on_transfer" />
+              </div>
+              <p class="form-hint">转存分享链接成功后自动触发归档扫描</p>
+            </div>
           </el-form-item>
           <el-form-item label="离线完成后自动归档">
-            <el-switch v-model="config.archive_auto_on_offline" />
-            <div class="form-hint">离线下载完成后自动触发归档扫描</div>
+            <div class="field-stack">
+              <div class="control-line">
+                <el-switch v-model="config.archive_auto_on_offline" />
+              </div>
+              <p class="form-hint">离线下载完成后自动触发归档扫描</p>
+            </div>
           </el-form-item>
           <el-form-item label="归档后自动生成 STRM">
-            <el-switch v-model="config.strm_auto_after_archive" />
-            <div class="form-hint">归档成功后自动增量生成 STRM（需同时启用 STRM）；默认开启</div>
+            <div class="field-stack">
+              <div class="control-line">
+                <el-switch v-model="config.strm_auto_after_archive" />
+              </div>
+              <p class="form-hint">归档成功后自动增量生成 STRM（需同时启用 STRM）；默认开启</p>
+            </div>
           </el-form-item>
-          <el-form-item label="离线监控间隔">
+          <el-form-item label="离线监控间隔" class="config-item-inline">
             <el-input-number v-model="config.offline_monitor_interval_minutes" :min="1" :max="60" />
             <span class="suffix-text">分钟</span>
           </el-form-item>
-          <el-form-item label="兜底扫描间隔">
+          <el-form-item label="兜底扫描间隔" class="config-item-inline">
             <el-input-number v-model="config.archive_interval_minutes" :min="1" :max="1440" />
             <span class="suffix-text">分钟</span>
           </el-form-item>
 
           <el-form-item label="115 监听目录" class="grid-span-2">
-            <div class="folder-row">
-              <el-tag v-if="config.archive_watch_cid" closable type="info" @close="config.archive_watch_cid = ''; config.archive_watch_name = ''">
-                {{ config.archive_watch_name || config.archive_watch_cid }}
-              </el-tag>
-              <el-button size="small" @click="openPicker('watch')">选择目录</el-button>
+            <div class="field-stack">
+              <div class="folder-row">
+                <el-tag
+                  v-if="config.archive_watch_cid"
+                  closable
+                  type="info"
+                  @close="config.archive_watch_cid = ''; config.archive_watch_name = ''"
+                >
+                  {{ config.archive_watch_name || config.archive_watch_cid }}
+                </el-tag>
+                <el-button size="small" @click="openPicker('watch')">选择目录</el-button>
+              </div>
+              <p class="form-hint">离线下载完成的影视文件所在目录（只读扫描）</p>
             </div>
-            <div class="form-hint">离线下载完成的影视文件所在目录（只读扫描）</div>
           </el-form-item>
 
           <el-form-item label="115 输出目录" class="grid-span-2">
-            <div class="folder-row">
-              <el-tag v-if="config.archive_output_cid" closable type="info" @close="config.archive_output_cid = ''; config.archive_output_name = ''">
-                {{ config.archive_output_name || config.archive_output_cid }}
-              </el-tag>
-              <el-button size="small" @click="openPicker('output')">选择目录</el-button>
+            <div class="field-stack">
+              <div class="folder-row">
+                <el-tag
+                  v-if="config.archive_output_cid"
+                  closable
+                  type="info"
+                  @close="config.archive_output_cid = ''; config.archive_output_name = ''"
+                >
+                  {{ config.archive_output_name || config.archive_output_cid }}
+                </el-tag>
+                <el-button size="small" @click="openPicker('output')">选择目录</el-button>
+              </div>
+              <p class="form-hint">归档后的文件将整理到此目录下的一级/二级子目录中（可在下方自定义目录名）</p>
             </div>
-            <div class="form-hint">归档后的文件将整理到此目录下的一级/二级子目录中（可在下方自定义目录名）</div>
           </el-form-item>
         </div>
 
@@ -863,22 +893,77 @@ onBeforeUnmount(() => {
     .config-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px 20px;
+      column-gap: 28px;
+      row-gap: 2px;
+      align-items: start;
     }
-    .grid-span-2 { grid-column: span 2; }
-    .suffix-text { margin-left: 10px; color: var(--ms-text-secondary); }
-    .config-actions { margin-top: 12px; }
+
+    .grid-span-2 {
+      grid-column: span 2;
+    }
+
+    :deep(.el-form-item) {
+      margin-bottom: 16px;
+      align-items: flex-start;
+    }
+
+    :deep(.el-form-item__label) {
+      height: auto;
+      line-height: 32px;
+      white-space: nowrap;
+    }
+
+    :deep(.el-form-item__content) {
+      min-width: 0;
+      line-height: 32px;
+    }
+
+    .field-stack {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+      width: 100%;
+      min-width: 0;
+    }
+
+    .control-line {
+      display: flex;
+      align-items: center;
+      min-height: 32px;
+    }
+
+    .config-item-inline {
+      :deep(.el-form-item__content) {
+        display: inline-flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 10px;
+      }
+    }
+
+    .suffix-text {
+      color: var(--ms-text-secondary);
+      white-space: nowrap;
+    }
+
+    .config-actions {
+      margin-top: 4px;
+    }
   }
 
   .folder-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
+    min-height: 32px;
   }
 
   .form-hint {
-    margin-top: 4px;
+    margin: 0;
     font-size: 12px;
+    line-height: 1.45;
     color: var(--ms-text-secondary);
   }
 
