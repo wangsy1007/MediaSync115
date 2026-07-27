@@ -3,11 +3,54 @@
     <div class="page-header">
       <h2>日志中心</h2>
       <div class="page-actions">
-        <el-input-number v-model="filters.limit" :min="20" :max="500" :step="20" />
         <el-switch v-model="autoRefresh" active-text="自动刷新" />
         <el-button type="primary" :loading="loading" @click="handleSearch">刷新</el-button>
         <el-button type="danger" plain :loading="clearing" @click="handleClearLogs">清空日志</el-button>
       </div>
+    </div>
+
+    <div class="filter-bar">
+      <el-select
+        v-model="filters.module"
+        clearable
+        filterable
+        placeholder="全部分类"
+        class="filter-select"
+        @change="handleSearch"
+      >
+        <el-option
+          v-for="item in moduleOptions"
+          :key="item.value"
+          :label="item.label"
+          :value="item.value"
+        />
+      </el-select>
+
+      <el-select
+        v-model="filters.status"
+        clearable
+        placeholder="全部状态"
+        class="filter-select filter-select-sm"
+        @change="handleSearch"
+      >
+        <el-option
+          v-for="item in statusOptions"
+          :key="item.value"
+          :label="item.label"
+          :value="item.value"
+        />
+      </el-select>
+
+      <el-input-number
+        v-model="filters.limit"
+        :min="20"
+        :max="500"
+        :step="20"
+        controls-position="right"
+        class="filter-limit"
+        @change="handleSearch"
+      />
+      <span class="filter-hint">条/页</span>
     </div>
 
     <el-card>
@@ -25,11 +68,13 @@
             @click="toggleExpand(log.id)"
           >
             <span class="log-time">{{ formatTime(log.created_at) }}</span>
-            <el-tag v-if="log.module === 'play'" size="small" type="success" class="log-module">
-              播放
-            </el-tag>
-            <el-tag v-else-if="moduleLabels[log.module]" size="small" type="info" class="log-module">
-              {{ moduleLabels[log.module] }}
+            <el-tag
+              v-if="log.module"
+              size="small"
+              :type="log.module === 'play' ? 'success' : 'info'"
+              class="log-module"
+            >
+              {{ getModuleLabel(log.module) }}
             </el-tag>
             <el-tag :type="statusTagType(log.status)" size="small" class="log-status">
               {{ statusLabels[log.status] || log.status }}
@@ -70,16 +115,35 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { logsApi } from '@/api'
 
 const AUTO_REFRESH_MS = 5000
 
-const moduleLabels = {
+const MODULE_LABELS = {
   play: '播放',
   strm: 'STRM',
   scheduler: '调度',
+  subscriptions: '订阅',
+  pan115: '115网盘',
+  archive: '归档',
+  sync: '同步',
+  emby_sync: 'Emby 同步',
+  feiniu_sync: '飞牛同步',
+  tg_sync: 'TG 同步',
+  chart_subscription: '榜单订阅',
+  person_follow: '人物追更',
+  workflow: '工作流',
+  explore_queue: '探索队列',
+  hdhive: 'HDHive',
+  manual_transfer: '手动转存',
+  quark: '夸克',
+  auth: '认证',
+  settings: '设置',
+  search: '搜索',
+  tmdb: 'TMDB',
+  unknown: '未知',
 }
 
 const statusLabels = {
@@ -90,6 +154,8 @@ const statusLabels = {
   partial: '部分成功',
 }
 
+const STATUS_ORDER = ['success', 'failed', 'warning', 'info', 'partial']
+
 const loading = ref(false)
 const clearing = ref(false)
 const autoRefresh = ref(true)
@@ -97,10 +163,55 @@ const logs = ref([])
 const total = ref(0)
 const currentPage = ref(1)
 const expandedIds = ref(new Set())
+const availableModules = ref([])
+const availableStatuses = ref([])
 let refreshTimer = null
 
 const filters = ref({
-  limit: 100
+  module: '',
+  status: '',
+  limit: 100,
+})
+
+const getModuleLabel = (module) => {
+  const key = String(module || '').trim()
+  if (!key) return '-'
+  return MODULE_LABELS[key] || key
+}
+
+const moduleOptions = computed(() => {
+  const values = new Set([
+    ...Object.keys(MODULE_LABELS),
+    ...availableModules.value,
+  ])
+  return Array.from(values)
+    .filter(Boolean)
+    .sort((a, b) => getModuleLabel(a).localeCompare(getModuleLabel(b), 'zh-CN'))
+    .map((value) => ({
+      value,
+      label: getModuleLabel(value),
+    }))
+})
+
+const statusOptions = computed(() => {
+  const values = new Set([
+    ...STATUS_ORDER,
+    ...availableStatuses.value,
+  ])
+  return Array.from(values)
+    .filter(Boolean)
+    .sort((a, b) => {
+      const ai = STATUS_ORDER.indexOf(a)
+      const bi = STATUS_ORDER.indexOf(b)
+      if (ai === -1 && bi === -1) return a.localeCompare(b)
+      if (ai === -1) return 1
+      if (bi === -1) return -1
+      return ai - bi
+    })
+    .map((value) => ({
+      value,
+      label: statusLabels[value] || value,
+    }))
 })
 
 const statusTagType = (status) => {
@@ -147,14 +258,28 @@ const toggleExpand = (id) => {
   else set.add(id)
 }
 
+const fetchModules = async () => {
+  try {
+    const { data } = await logsApi.modules()
+    availableModules.value = Array.isArray(data?.modules) ? data.modules : []
+    availableStatuses.value = Array.isArray(data?.statuses) ? data.statuses : []
+  } catch {
+    // 分类选项加载失败时仍可用内置标签筛选
+  }
+}
+
 const fetchLogs = async ({ silent = false } = {}) => {
   if (!silent) loading.value = true
   try {
     const params = {
       limit: Number(filters.value.limit || 100),
       offset: (currentPage.value - 1) * Number(filters.value.limit || 100),
-      exclude_source_type: 'api'
+      exclude_source_type: 'api',
     }
+    const module = String(filters.value.module || '').trim()
+    const status = String(filters.value.status || '').trim()
+    if (module) params.module = module
+    if (status) params.status = status
 
     const { data } = await logsApi.list(params)
     logs.value = Array.isArray(data?.items) ? data.items : []
@@ -207,6 +332,7 @@ const handleClearLogs = async () => {
     total.value = 0
     currentPage.value = 1
     expandedIds.value.clear()
+    await fetchModules()
     ElMessage.success(`已清空 ${Number(data?.removed || 0)} 条日志`)
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '清空日志失败')
@@ -216,7 +342,7 @@ const handleClearLogs = async () => {
 }
 
 onMounted(async () => {
-  await fetchLogs()
+  await Promise.all([fetchModules(), fetchLogs()])
   startAutoRefresh()
 })
 
@@ -230,7 +356,7 @@ onBeforeUnmount(stopAutoRefresh)
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    margin-bottom: 16px;
+    margin-bottom: 12px;
 
     h2 {
       margin: 0;
@@ -242,7 +368,33 @@ onBeforeUnmount(stopAutoRefresh)
       display: flex;
       align-items: center;
       gap: 10px;
+      flex-wrap: wrap;
     }
+  }
+
+  .filter-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+
+  .filter-select {
+    width: 180px;
+  }
+
+  .filter-select-sm {
+    width: 140px;
+  }
+
+  .filter-limit {
+    width: 120px;
+  }
+
+  .filter-hint {
+    font-size: 13px;
+    color: var(--ms-text-secondary);
   }
 
   .empty-state {
@@ -360,6 +512,14 @@ onBeforeUnmount(stopAutoRefresh)
 
       .page-actions {
         justify-content: flex-start;
+      }
+    }
+
+    .filter-bar {
+      .filter-select,
+      .filter-select-sm,
+      .filter-limit {
+        width: 100%;
       }
     }
 
