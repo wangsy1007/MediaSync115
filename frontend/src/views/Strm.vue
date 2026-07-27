@@ -30,89 +30,133 @@
         </div>
       </template>
 
-      <el-form label-width="150px" class="config-form">
+      <el-form label-width="168px" class="config-form">
         <div class="config-grid">
           <el-form-item label="启用 STRM">
-            <el-switch v-model="config.strm_enabled" />
-          </el-form-item>
-
-          <el-form-item label="归档后自动生成">
-            <el-switch v-model="config.strm_auto_after_archive" :disabled="!config.strm_enabled" />
-            <div class="form-hint">归档成功（或跳过重复项）后自动增量生成 STRM，默认开启</div>
-          </el-form-item>
-
-          <el-form-item label="播放模式">
-            <el-select v-model="config.strm_redirect_mode" style="width: 220px">
-              <el-option label="302 直链播放" value="redirect" />
-              <el-option label="服务器代理" value="proxy" />
-            </el-select>
-            <div class="form-hint">302 直链会绑定当前播放器的 User-Agent；若 115 链接要求额外 Cookie（f=3），播放时会自动回退到代理。</div>
-          </el-form-item>
-
-          <el-form-item label="生成后刷新 Emby">
-            <el-switch v-model="config.strm_refresh_emby_after_generate" :disabled="!config.strm_enabled" />
-            <div class="form-hint">STRM 生成完成后触发 Emby 媒体库刷新</div>
-          </el-form-item>
-
-          <el-form-item label="生成后刷新飞牛">
-            <el-switch v-model="config.strm_refresh_feiniu_after_generate" :disabled="!config.strm_enabled" />
-            <div class="form-hint">STRM 生成完成后触发飞牛影视媒体库刷新</div>
+            <div class="field-stack">
+              <div class="control-line">
+                <el-switch v-model="config.strm_enabled" />
+              </div>
+            </div>
           </el-form-item>
 
           <el-form-item label="定时增量生成">
-            <el-switch v-model="config.strm_schedule_enabled" />
+            <div class="field-stack">
+              <div class="control-line">
+                <el-switch v-model="config.strm_schedule_enabled" />
+              </div>
+            </div>
           </el-form-item>
 
-          <el-form-item label="增量生成间隔">
-            <el-input-number
-              v-model="config.strm_incremental_interval_minutes"
-              :min="3"
-              :step="1"
-              :disabled="!config.strm_enabled"
-              style="width: 180px"
-            />
-            <span class="input-suffix">分钟</span>
-            <div class="form-hint">启用「定时增量生成」后按此间隔执行；最少 3 分钟</div>
+          <el-form-item label="归档后自动生成">
+            <div class="field-stack">
+              <div class="control-line">
+                <el-switch v-model="config.strm_auto_after_archive" :disabled="!config.strm_enabled" />
+              </div>
+              <p class="form-hint">归档成功（或跳过重复项）后自动增量生成 STRM，默认开启</p>
+            </div>
+          </el-form-item>
+
+          <el-form-item label="增量生成间隔" class="config-item-inline">
+            <div class="field-stack">
+              <div class="control-line control-line-inline">
+                <el-input-number
+                  v-model="config.strm_incremental_interval_minutes"
+                  :min="3"
+                  :step="1"
+                  :disabled="!config.strm_enabled"
+                  style="width: 180px"
+                />
+                <span class="input-suffix">分钟</span>
+              </div>
+              <p class="form-hint">启用「定时增量生成」后按此间隔执行；最少 3 分钟</p>
+            </div>
+          </el-form-item>
+
+          <el-form-item label="生成后刷新 Emby">
+            <div class="field-stack">
+              <div class="control-line">
+                <el-switch v-model="config.strm_refresh_emby_after_generate" :disabled="!config.strm_enabled" />
+              </div>
+              <p class="form-hint">STRM 生成完成后触发 Emby 媒体库刷新</p>
+            </div>
+          </el-form-item>
+
+          <el-form-item label="生成后刷新飞牛">
+            <div class="field-stack">
+              <div class="control-line">
+                <el-switch v-model="config.strm_refresh_feiniu_after_generate" :disabled="!config.strm_enabled" />
+              </div>
+              <p class="form-hint">STRM 生成完成后触发飞牛影视媒体库刷新</p>
+            </div>
+          </el-form-item>
+
+          <el-form-item label="播放模式" class="grid-span-2">
+            <div class="field-stack">
+              <div class="control-line">
+                <el-select v-model="config.strm_redirect_mode" style="width: 220px">
+                  <el-option label="302 直链播放" value="redirect" />
+                  <el-option label="服务器代理" value="proxy" />
+                </el-select>
+              </div>
+              <p class="form-hint">302 直链会绑定当前播放器的 User-Agent；若 115 链接要求额外 Cookie（f=3），播放时会自动回退到代理。</p>
+            </div>
           </el-form-item>
 
           <el-form-item label="STRM 输出目录" class="grid-span-2">
-            <el-select
-              v-model="config.strm_output_dir"
-              filterable
-              allow-create
-              default-first-option
-              placeholder="选择或输入目录路径"
-              style="width: 100%"
-            >
-              <el-option
-                v-for="item in mountPaths"
-                :key="item.path"
-                :label="item.writable ? `${item.path}（${item.label}，可写）` : `${item.path}（${item.label}，不可写）`"
-                :value="item.path"
-                :disabled="!item.writable"
-              />
-            </el-select>
-            <div class="form-hint">列表为容器内已挂载的可写路径，也可手动输入其他路径。Docker 部署时建议选 `/app/strm`。</div>
+            <div class="field-stack">
+              <el-select
+                v-model="config.strm_output_dir"
+                filterable
+                allow-create
+                default-first-option
+                placeholder="选择或输入目录路径"
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="item in mountPaths"
+                  :key="item.path"
+                  :label="item.writable ? `${item.path}（${item.label}，可写）` : `${item.path}（${item.label}，不可写）`"
+                  :value="item.path"
+                  :disabled="!item.writable"
+                />
+              </el-select>
+              <p class="form-hint">列表为容器内已挂载的可写路径，也可手动输入其他路径。Docker 部署时建议选 `/app/strm`。</p>
+            </div>
           </el-form-item>
 
           <el-form-item label="播放根地址" class="grid-span-2">
-            <el-input v-model="config.strm_base_url" :placeholder="suggestedBaseUrl || '例如：http://192.168.1.100:9008'" />
-            <div class="form-hint">STRM 播放地址使用端口 `9008`（或代理端口）。生成格式为 `/api/115/url/video.扩展名?pickcode=...`（旧 token 链接仍兼容）。</div>
+            <div class="field-stack">
+              <el-input v-model="config.strm_base_url" :placeholder="suggestedBaseUrl || '例如：http://192.168.1.100:9008'" />
+              <p class="form-hint">STRM 播放地址使用端口 `9008`（或代理端口）。生成格式为 `/api/115/url/video.扩展名?pickcode=...`（旧 token 链接仍兼容）。</p>
+            </div>
           </el-form-item>
 
           <el-form-item label="Emby 代理">
-            <el-switch v-model="config.strm_proxy_enabled" />
-            <div class="form-hint">启用后 STRM 文件将指向代理端口。Emby 客户端必须连接 `IP:8099`（不要用 8096），播放时才会 302 到 115 直链，服务器不再中转视频流量。</div>
+            <div class="field-stack">
+              <div class="control-line">
+                <el-switch v-model="config.strm_proxy_enabled" />
+              </div>
+              <p class="form-hint">启用后 STRM 文件将指向代理端口。Emby 客户端必须连接 `IP:8099`（不要用 8096），播放时才会 302 到 115 直链，服务器不再中转视频流量。</p>
+            </div>
           </el-form-item>
 
           <el-form-item v-if="config.strm_proxy_enabled" label="代理端口">
-            <el-input-number v-model="config.strm_proxy_port" :min="1024" :max="65535" :step="1" style="width: 160px" />
-            <div class="form-hint">默认为 8099。Emby 客户端请连接此端口的代理地址。</div>
+            <div class="field-stack">
+              <div class="control-line">
+                <el-input-number v-model="config.strm_proxy_port" :min="1024" :max="65535" :step="1" style="width: 160px" />
+              </div>
+              <p class="form-hint">默认为 8099。Emby 客户端请连接此端口的代理地址。</p>
+            </div>
           </el-form-item>
 
-          <el-form-item v-if="config.strm_proxy_enabled" label="优化首播速度">
-            <el-switch v-model="config.strm_early_redirect" />
-            <div class="form-hint">SmartStrm 风格：PlaybackInfo 阶段提前返回 115 CDN 直链，缩短 ISO/原盘起播等待（实验性，部分客户端可能不兼容）。</div>
+          <el-form-item v-if="config.strm_proxy_enabled" label="优化首播速度" class="grid-span-2">
+            <div class="field-stack">
+              <div class="control-line">
+                <el-switch v-model="config.strm_early_redirect" />
+              </div>
+              <p class="form-hint">SmartStrm 风格：PlaybackInfo 阶段提前返回 115 CDN 直链，缩短 ISO/原盘起播等待（实验性，部分客户端可能不兼容）。</p>
+            </div>
           </el-form-item>
         </div>
 
@@ -597,33 +641,73 @@ onBeforeUnmount(stopPolling)
   gap: 8px;
 }
 
-.config-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 20px;
-}
+.config-form {
+  .config-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 28px;
+    row-gap: 2px;
+    align-items: start;
+  }
 
-.grid-span-2 {
-  grid-column: span 2;
-}
+  .grid-span-2 {
+    grid-column: span 2;
+  }
 
-.config-actions {
-  margin-top: 8px;
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
+  :deep(.el-form-item) {
+    margin-bottom: 16px;
+    align-items: flex-start;
+  }
 
-.form-hint {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  line-height: 1.5;
-}
+  :deep(.el-form-item__label) {
+    height: auto;
+    line-height: 32px;
+    white-space: nowrap;
+  }
 
-.input-suffix {
-  margin-left: 8px;
-  color: var(--el-text-color-secondary);
+  :deep(.el-form-item__content) {
+    min-width: 0;
+    line-height: 32px;
+  }
+
+  .field-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .control-line {
+    display: flex;
+    align-items: center;
+    min-height: 32px;
+  }
+
+  .control-line-inline {
+    flex-wrap: nowrap;
+    gap: 10px;
+  }
+
+  .config-actions {
+    margin-top: 4px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .form-hint {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--el-text-color-secondary);
+  }
+
+  .input-suffix {
+    color: var(--el-text-color-secondary);
+    white-space: nowrap;
+  }
 }
 
 .status-grid {
