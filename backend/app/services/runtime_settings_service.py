@@ -1153,21 +1153,16 @@ class RuntimeSettingsService:
             return 360
 
     def get_strm_full_schedule_enabled(self) -> bool:
-        return bool(self._data.get("strm_full_schedule_enabled", False))
+        """每周全量定时已下线，始终返回 False。"""
+        return False
 
-    def get_strm_full_schedule_day(self) -> str:
-        value = str(self._data.get("strm_full_schedule_day") or "sun").lower()
-        return value if value in {"mon", "tue", "wed", "thu", "fri", "sat", "sun"} else "sun"
-
-    def get_strm_full_schedule_time(self) -> str:
-        value = str(self._data.get("strm_full_schedule_time") or "03:00").strip()
-        try:
-            hour, minute = (int(part) for part in value.split(":", 1))
-            if 0 <= hour <= 23 and 0 <= minute <= 59:
-                return f"{hour:02d}:{minute:02d}"
-        except (TypeError, ValueError):
-            pass
-        return "03:00"
+    def disable_strm_full_schedule(self) -> bool:
+        """持久化关闭每周全量定时配置；有变更时返回 True。"""
+        if not bool(self._data.get("strm_full_schedule_enabled", False)):
+            return False
+        self._data["strm_full_schedule_enabled"] = False
+        self._save()
+        return True
 
     def get_strm_config(self) -> dict[str, Any]:
         return {
@@ -1183,9 +1178,6 @@ class RuntimeSettingsService:
             "strm_early_redirect": self.get_strm_early_redirect(),
             "strm_schedule_enabled": self.get_strm_schedule_enabled(),
             "strm_incremental_interval_minutes": self.get_strm_incremental_interval_minutes(),
-            "strm_full_schedule_enabled": self.get_strm_full_schedule_enabled(),
-            "strm_full_schedule_day": self.get_strm_full_schedule_day(),
-            "strm_full_schedule_time": self.get_strm_full_schedule_time(),
         }
 
     def update_strm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1256,27 +1248,9 @@ class RuntimeSettingsService:
             if interval < 3:
                 raise ValueError("STRM 增量生成间隔不能少于 3 分钟")
             self._data["strm_incremental_interval_minutes"] = interval
-        if (
-            "strm_full_schedule_enabled" in payload
-            and payload["strm_full_schedule_enabled"] is not None
-        ):
-            self._data["strm_full_schedule_enabled"] = bool(
-                payload["strm_full_schedule_enabled"]
-            )
-        if "strm_full_schedule_day" in payload and payload["strm_full_schedule_day"] is not None:
-            day = str(payload["strm_full_schedule_day"]).strip().lower()
-            if day not in {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}:
-                raise ValueError("STRM 全量校准星期设置无效")
-            self._data["strm_full_schedule_day"] = day
-        if "strm_full_schedule_time" in payload and payload["strm_full_schedule_time"] is not None:
-            value = str(payload["strm_full_schedule_time"]).strip()
-            try:
-                hour, minute = (int(part) for part in value.split(":", 1))
-            except (TypeError, ValueError) as exc:
-                raise ValueError("STRM 全量校准时间格式应为 HH:MM") from exc
-            if not (0 <= hour <= 23 and 0 <= minute <= 59):
-                raise ValueError("STRM 全量校准时间格式应为 HH:MM")
-            self._data["strm_full_schedule_time"] = f"{hour:02d}:{minute:02d}"
+        # 每周全量定时已下线：忽略相关入参并强制关闭
+        if bool(self._data.get("strm_full_schedule_enabled", False)):
+            self._data["strm_full_schedule_enabled"] = False
 
         self._save()
         return self.get_strm_config()
@@ -1483,6 +1457,8 @@ class RuntimeSettingsService:
                 normalized[key] = value
 
         self._data = normalized
+        # 每周全量定时已下线，禁止通过批量配置重新开启
+        self._data["strm_full_schedule_enabled"] = False
         self._persist_env_backed_fields(env_updates)
         self._loaded_keys.update(self._data.keys())
         self._save()
@@ -1695,9 +1671,6 @@ class RuntimeSettingsService:
             "strm_early_redirect": self.get_strm_early_redirect(),
             "strm_schedule_enabled": self.get_strm_schedule_enabled(),
             "strm_incremental_interval_minutes": self.get_strm_incremental_interval_minutes(),
-            "strm_full_schedule_enabled": self.get_strm_full_schedule_enabled(),
-            "strm_full_schedule_day": self.get_strm_full_schedule_day(),
-            "strm_full_schedule_time": self.get_strm_full_schedule_time(),
             "llm_base_url": self.get_llm_base_url(),
             "llm_model": self.get_llm_model(),
             "llm_api_key_set": self.has_llm_api_key(),

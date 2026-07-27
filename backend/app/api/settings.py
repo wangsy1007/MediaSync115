@@ -143,9 +143,6 @@ class RuntimeSettingsRequest(BaseModel):
     llm_enabled: Optional[bool] = None
     strm_schedule_enabled: Optional[bool] = None
     strm_incremental_interval_minutes: Optional[int] = None
-    strm_full_schedule_enabled: Optional[bool] = None
-    strm_full_schedule_day: Optional[str] = None
-    strm_full_schedule_time: Optional[str] = None
 
 
 _SUBSCRIPTION_SCHEDULER_SETTING_KEYS = frozenset(
@@ -234,9 +231,6 @@ _STRM_SCHEDULER_SETTING_KEYS = frozenset(
     {
         "strm_schedule_enabled",
         "strm_incremental_interval_minutes",
-        "strm_full_schedule_enabled",
-        "strm_full_schedule_day",
-        "strm_full_schedule_time",
     }
 )
 class TgVerifyPasswordRequest(BaseModel):
@@ -768,18 +762,6 @@ def _validate_strm_schedule_settings(merged_settings: dict[str, Any]) -> None:
         raise HTTPException(status_code=400, detail="STRM 增量生成间隔必须是整数")
     if interval < 3:
         raise HTTPException(status_code=400, detail="STRM 增量生成间隔不能少于 3 分钟")
-
-    day = str(merged_settings.get("strm_full_schedule_day") or "sun").lower()
-    if day not in {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}:
-        raise HTTPException(status_code=400, detail="STRM 全量校准星期设置无效")
-
-    run_time = str(merged_settings.get("strm_full_schedule_time") or "03:00")
-    try:
-        hour, minute = (int(part) for part in run_time.split(":", 1))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="STRM 全量校准时间格式应为 HH:MM")
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        raise HTTPException(status_code=400, detail="STRM 全量校准时间格式应为 HH:MM")
 
 
 @router.put("/runtime")

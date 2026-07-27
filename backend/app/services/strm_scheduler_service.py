@@ -7,7 +7,7 @@ from app.services.runtime_settings_service import runtime_settings_service
 
 
 class StrmSchedulerService:
-    """维护 STRM 增量生成和每周全量校准任务。"""
+    """维护 STRM 增量生成定时任务，并停用已废弃的每周全量任务。"""
 
     async def ensure_tasks(self) -> None:
         await self._ensure_task(
@@ -20,20 +20,25 @@ class StrmSchedulerService:
             cron_expr=None,
             enabled=runtime_settings_service.get_strm_schedule_enabled(),
         )
+        await self._disable_full_schedule_task()
 
-        run_time = runtime_settings_service.get_strm_full_schedule_time()
-        hour, minute = (int(part) for part in run_time.split(":", 1))
-        await self._ensure_task(
-            job_key="system.generate_strm_full",
-            display_name="STRM 每周全量生成",
-            trigger_type="cron",
-            interval_seconds=None,
-            cron_expr=(
-                f"{minute} {hour} * * "
-                f"{runtime_settings_service.get_strm_full_schedule_day()}"
-            ),
-            enabled=runtime_settings_service.get_strm_full_schedule_enabled(),
-        )
+    async def _disable_full_schedule_task(self) -> None:
+        """移除每周全量生成定时任务（功能已下线，仅保留手动全量）。"""
+        runtime_settings_service.disable_strm_full_schedule()
+        async with async_session_maker() as db:
+            result = await db.execute(
+                select(SchedulerTask)
+                .where(SchedulerTask.job_key == "system.generate_strm_full")
+                .limit(1)
+            )
+            task = result.scalar_one_or_none()
+            if task is None:
+                return
+            task.enabled = False
+            task.state = "P"
+            await db.flush()
+            await scheduler_manager.remove_dynamic_job(task.id)
+            await db.commit()
 
     async def _ensure_task(
         self,

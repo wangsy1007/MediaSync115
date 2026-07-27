@@ -75,30 +75,6 @@
             <div class="form-hint">启用「定时增量生成」后按此间隔执行；最少 3 分钟</div>
           </el-form-item>
 
-          <el-form-item label="每周全量生成">
-            <el-switch v-model="config.strm_full_schedule_enabled" />
-          </el-form-item>
-
-          <el-form-item label="全量生成时间">
-            <div class="schedule-time-row">
-              <el-select
-                v-model="config.strm_full_schedule_day"
-                :disabled="!config.strm_full_schedule_enabled"
-                style="width: 110px"
-              >
-                <el-option v-for="item in weekOptions" :key="item.value" :label="item.label" :value="item.value" />
-              </el-select>
-              <el-time-select
-                v-model="config.strm_full_schedule_time"
-                start="00:00"
-                step="00:30"
-                end="23:30"
-                :disabled="!config.strm_full_schedule_enabled"
-                style="width: 130px"
-              />
-            </div>
-          </el-form-item>
-
           <el-form-item label="STRM 输出目录" class="grid-span-2">
             <el-select
               v-model="config.strm_output_dir"
@@ -278,15 +254,6 @@ const mountPaths = ref([])
 const suggestedBaseUrl = ref('')
 const diagnosis = ref(null)
 let pollingTimer = null
-const weekOptions = [
-  { label: '周一', value: 'mon' },
-  { label: '周二', value: 'tue' },
-  { label: '周三', value: 'wed' },
-  { label: '周四', value: 'thu' },
-  { label: '周五', value: 'fri' },
-  { label: '周六', value: 'sat' },
-  { label: '周日', value: 'sun' }
-]
 
 const config = reactive({
   strm_enabled: false,
@@ -301,9 +268,6 @@ const config = reactive({
   strm_early_redirect: true,
   strm_schedule_enabled: false,
   strm_incremental_interval_minutes: 360,
-  strm_full_schedule_enabled: false,
-  strm_full_schedule_day: 'sun',
-  strm_full_schedule_time: '03:00',
   archive_output_cid: '',
   archive_output_name: ''
 })
@@ -460,9 +424,6 @@ const applyConfig = (data) => {
   config.strm_early_redirect = data.strm_early_redirect !== false
   config.strm_schedule_enabled = !!data.strm_schedule_enabled
   config.strm_incremental_interval_minutes = Number(data.strm_incremental_interval_minutes) || 360
-  config.strm_full_schedule_enabled = !!data.strm_full_schedule_enabled
-  config.strm_full_schedule_day = data.strm_full_schedule_day || 'sun'
-  config.strm_full_schedule_time = data.strm_full_schedule_time || '03:00'
   config.archive_output_cid = data.archive_output_cid || ''
   config.archive_output_name = data.archive_output_name || ''
   mountPaths.value = Array.isArray(data.mount_paths) ? data.mount_paths : []
@@ -528,9 +489,6 @@ const saveConfig = async () => {
       strm_early_redirect: config.strm_early_redirect,
       strm_schedule_enabled: config.strm_schedule_enabled,
       strm_incremental_interval_minutes: Number(config.strm_incremental_interval_minutes) || 360,
-      strm_full_schedule_enabled: config.strm_full_schedule_enabled,
-      strm_full_schedule_day: config.strm_full_schedule_day,
-      strm_full_schedule_time: config.strm_full_schedule_time
     })
     applyConfig(data)
     ElMessage.success('STRM 配置已保存')
@@ -714,11 +672,6 @@ onBeforeUnmount(stopPolling)
 .input-suffix {
   margin-left: 8px;
   color: var(--el-text-color-secondary);
-}
-
-.schedule-time-row {
-  display: flex;
-  gap: 8px;
 }
 
 .status-grid {

@@ -28,9 +28,6 @@ class StrmConfigRequest(BaseModel):
     strm_early_redirect: Optional[bool] = None
     strm_schedule_enabled: Optional[bool] = None
     strm_incremental_interval_minutes: Optional[int] = None
-    strm_full_schedule_enabled: Optional[bool] = None
-    strm_full_schedule_day: Optional[str] = None
-    strm_full_schedule_time: Optional[str] = None
 
 
 class StrmGenerateRequest(BaseModel):
@@ -66,16 +63,10 @@ def _validate_strm_settings(payload: dict[str, object]) -> None:
         redirect_mode = "redirect"
 
     enabling_schedule = payload.get("strm_schedule_enabled") is True
-    enabling_full = payload.get("strm_full_schedule_enabled") is True
     schedule_enabled = (
         bool(payload["strm_schedule_enabled"])
         if "strm_schedule_enabled" in payload
         else runtime_settings_service.get_strm_schedule_enabled()
-    )
-    full_schedule_enabled = (
-        bool(payload["strm_full_schedule_enabled"])
-        if "strm_full_schedule_enabled" in payload
-        else runtime_settings_service.get_strm_full_schedule_enabled()
     )
     strm_enabled = bool(
         payload.get("strm_enabled", runtime_settings_service.get_strm_enabled())
@@ -91,21 +82,18 @@ def _validate_strm_settings(payload: dict[str, object]) -> None:
         raise HTTPException(
             status_code=400, detail="STRM 播放模式仅支持 redirect / proxy"
         )
-    if enabling_schedule or enabling_full or (
-        (schedule_enabled or full_schedule_enabled)
+    if enabling_schedule or (
+        schedule_enabled
         and {
             "strm_schedule_enabled",
-            "strm_full_schedule_enabled",
             "strm_incremental_interval_minutes",
-            "strm_full_schedule_day",
-            "strm_full_schedule_time",
             "strm_enabled",
             "strm_output_dir",
             "strm_base_url",
         }
         & set(payload.keys())
     ):
-        if schedule_enabled or full_schedule_enabled:
+        if schedule_enabled:
             if not strm_enabled:
                 raise HTTPException(
                     status_code=400, detail="启用 STRM 定时任务前请先启用 STRM"

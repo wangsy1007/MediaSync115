@@ -113,8 +113,7 @@ class TestStrmApi:
         service = RuntimeSettingsService.__new__(RuntimeSettingsService)
         service._data = {
             "strm_incremental_interval_minutes": 360,
-            "strm_full_schedule_day": "sun",
-            "strm_full_schedule_time": "03:00",
+            "strm_full_schedule_enabled": True,
         }
         service._save = lambda: None
 
@@ -122,7 +121,9 @@ class TestStrmApi:
             service.update_strm_config({"strm_incremental_interval_minutes": 2})
         service.update_strm_config({"strm_incremental_interval_minutes": 3})
         assert service.get_strm_incremental_interval_minutes() == 3
-        with pytest.raises(ValueError, match="星期"):
-            service.update_strm_config({"strm_full_schedule_day": "holiday"})
-        with pytest.raises(ValueError, match="HH:MM"):
-            service.update_strm_config({"strm_full_schedule_time": "25:00"})
+        assert service.get_strm_full_schedule_enabled() is False
+        assert service._data.get("strm_full_schedule_enabled") is False
+        cfg = service.get_strm_config()
+        assert "strm_full_schedule_enabled" not in cfg
+        assert "strm_full_schedule_day" not in cfg
+        assert "strm_full_schedule_time" not in cfg
