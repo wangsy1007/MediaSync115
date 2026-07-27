@@ -1504,38 +1504,6 @@
         </el-card>
       </el-tab-pane>
 
-      <el-tab-pane label="执行日志" name="taskLogs">
-        <el-card class="settings-card">
-          <template #header>
-            <div class="card-header">
-              <span>订阅执行日志</span>
-              <el-button text type="primary" :loading="loadingSubscriptionLogs" @click="fetchSubscriptionLogs">刷新</el-button>
-            </div>
-          </template>
-
-          <el-table :data="subscriptionLogs" size="small" v-loading="loadingSubscriptionLogs">
-            <el-table-column prop="started_at" label="开始时间" min-width="170" :formatter="formatBeijingTableCell" />
-            <el-table-column prop="channel" label="渠道" width="100" />
-            <el-table-column label="状态" width="100">
-              <template #default="{ row }">
-                <el-tag :type="row.status === 'success' ? 'success' : row.status === 'partial' ? 'warning' : 'danger'" size="small">
-                  {{ row.status }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="checked_count" label="检查订阅" width="100" />
-            <el-table-column prop="new_resource_count" label="新增资源" width="100" />
-            <el-table-column prop="failed_count" label="失败数" width="90" />
-            <el-table-column label="失败分组" min-width="240">
-              <template #default="{ row }">
-                <span>{{ formatFailureGroups(row.failure_groups) }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="message" label="摘要" min-width="260" />
-          </el-table>
-        </el-card>
-      </el-tab-pane>
-
       <el-tab-pane label="界面设置" name="ui">
         <el-card class="settings-card">
           <template #header>
@@ -2375,8 +2343,6 @@ const runningTaskId = ref('')
 const runningTaskMessage = ref('')
 const pansouHealthStatus = ref('')
 const checkingSourceStatus = ref(false)
-const subscriptionLogs = ref([])
-const loadingSubscriptionLogs = ref(false)
 const savingUpdateSettings = ref(false)
 const checkingUpdates = ref(false)
 
@@ -5082,29 +5048,6 @@ const handleSaveScheduler = async () => {
   }
 }
 
-const fetchSubscriptionLogs = async () => {
-  loadingSubscriptionLogs.value = true
-  try {
-    const { data } = await subscriptionApi.listLogs({ limit: 5 })
-    subscriptionLogs.value = Array.isArray(data) ? data : []
-  } catch (error) {
-    console.error('Failed to fetch subscription logs:', error)
-  } finally {
-    loadingSubscriptionLogs.value = false
-  }
-}
-
-const formatFailureGroups = (groups) => {
-  const summary = groups && typeof groups === 'object' ? groups : {}
-  const permission = Number(summary.permission || 0)
-  const risk = Number(summary.risk || 0)
-  const invalidLink = Number(summary.invalid_link || 0)
-  const other = Number(summary.other || 0)
-  const total = permission + risk + invalidLink + other
-  if (total <= 0) return '-'
-  return `权限 ${permission} / 风控 ${risk} / 链接失效 ${invalidLink} / 其他 ${other}`
-}
-
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const pollSubscriptionTask = async (taskId) => {
@@ -5175,7 +5118,6 @@ const handleRunAllChannels = async () => {
       const errorMessage = taskResult.task?.error || taskResult.task?.message || '执行全部渠道失败'
       ElMessage.error(errorMessage)
     }
-    await fetchSubscriptionLogs()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '执行全部渠道失败')
   } finally {
@@ -5449,9 +5391,6 @@ const ensureSettingsTabLoaded = (tab) => {
       break
     case 'chartSubscription':
       loadAvailableCharts()
-      break
-    case 'taskLogs':
-      fetchSubscriptionLogs()
       break
     case 'about':
       fetchAppInfo()
