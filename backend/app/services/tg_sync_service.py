@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.core.database import async_session_maker, ensure_tables_exist
 from app.models.models import TgSyncJob, TgSyncState
@@ -659,8 +659,15 @@ class TgSyncService:
             "job": await self.get_job(job.job_id),
         }
 
-    async def get_status(self) -> dict[str, Any]:
+    async def get_status(
+        self,
+        *,
+        jobs_limit: int = 15,
+        jobs_offset: int = 0,
+    ) -> dict[str, Any]:
         await self._ensure_tables()
+        page_size = max(1, min(int(jobs_limit or 15), 100))
+        page_offset = max(0, int(jobs_offset or 0))
         channels = runtime_settings_service.get_tg_channel_usernames() or []
         index_status = await tg_index_service.get_status(channels)
         async with async_session_maker() as db:
@@ -669,10 +676,12 @@ class TgSyncService:
                 .where(TgSyncJob.status.in_(("queued", "running", "cancelling")))
                 .order_by(TgSyncJob.started_at.desc(), TgSyncJob.id.desc())
             )
+            total_result = await db.execute(select(func.count(TgSyncJob.id)))
             latest_result = await db.execute(
                 select(TgSyncJob)
                 .order_by(TgSyncJob.started_at.desc(), TgSyncJob.id.desc())
-                .limit(20)
+                .offset(page_offset)
+                .limit(page_size)
             )
             running_jobs = [
                 self._serialize_job(item) for item in running_result.scalars().all()
@@ -680,6 +689,7 @@ class TgSyncService:
             latest_jobs = [
                 self._serialize_job(item) for item in latest_result.scalars().all()
             ]
+            latest_jobs_total = int(total_result.scalar() or 0)
 
         normalized_running_jobs: list[dict[str, Any]] = []
         for job in running_jobs:
@@ -715,6 +725,9 @@ class TgSyncService:
             "index": index_status,
             "running_jobs": normalized_running_jobs,
             "latest_jobs": normalized_latest_jobs,
+            "latest_jobs_total": latest_jobs_total,
+            "latest_jobs_limit": page_size,
+            "latest_jobs_offset": page_offset,
         }
 
     async def _prune_jobs(self, db) -> None:

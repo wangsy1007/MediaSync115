@@ -343,7 +343,7 @@ export const settingsApi = {
   tgStartQrLogin: () => api.post('/settings/tg/login/qr/start'),
   tgCheckQrLogin: (token) => api.post('/settings/tg/login/qr/status', { token }),
   tgLogout: () => api.post('/settings/tg/logout'),
-  getTgIndexStatus: () => api.get('/settings/tg/index/status'),
+  getTgIndexStatus: (params) => api.get('/settings/tg/index/status', { params }),
   refreshTgIndexStatus: () => api.post('/settings/tg/index/status/refresh'),
   startTgIndexBackfill: (rebuild = false) => api.post('/settings/tg/index/backfill/start', { rebuild }),
   runTgIndexIncremental: () => api.post('/settings/tg/index/incremental/run'),

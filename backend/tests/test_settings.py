@@ -171,7 +171,7 @@ class TestSettings:
         job_id = str(job["job_id"])
         await service._set_job(job_id, status="cancelling", message="TG 增量同步停止中")
 
-        status = await service.get_status()
+        status = await service.get_status(jobs_limit=15, jobs_offset=0)
         running_jobs = status.get("running_jobs") or []
         latest_jobs = status.get("latest_jobs") or []
 
@@ -179,6 +179,8 @@ class TestSettings:
         recovered = next(item for item in latest_jobs if str(item.get("job_id") or "") == job_id)
         assert recovered["status"] == "cancelled"
         assert recovered["message"] == "任务已停止"
+        assert int(status.get("latest_jobs_limit") or 0) == 15
+        assert int(status.get("latest_jobs_total") or 0) >= 1
 
     @pytest.mark.asyncio
     async def test_stop_tg_rebuild_job_is_supported(self) -> None:

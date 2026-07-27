@@ -930,6 +930,16 @@
             <el-table-column prop="started_at" label="开始时间" min-width="170" :formatter="formatBeijingTableCell" />
             <el-table-column prop="finished_at" label="结束时间" min-width="170" :formatter="formatBeijingTableCell" />
           </el-table>
+          <div class="tg-index-jobs-pager">
+            <el-pagination
+              background
+              layout="prev, pager, next, total"
+              :total="tgIndexStatus.latestJobsTotal"
+              :current-page="tgIndexJobsPage"
+              :page-size="tgIndexJobsPageSize"
+              @current-change="handleTgIndexJobsPageChange"
+            />
+          </div>
         </el-card>
       </el-tab-pane>
 
@@ -2646,8 +2656,11 @@ const tgIndexStatus = reactive({
   totalIndexed: 0,
   channels: [],
   runningJobs: [],
-  latestJobs: []
+  latestJobs: [],
+  latestJobsTotal: 0,
 })
+const tgIndexJobsPage = ref(1)
+const tgIndexJobsPageSize = 15
 let tgIndexStatusPollTimer = null
 
 const getTgIndexJobTypeLabel = (jobType) => {
@@ -4126,13 +4139,21 @@ const handleTgLogout = async () => {
 const fetchTgIndexStatus = async (showError = true) => {
   loadingTgIndexStatus.value = true
   try {
-    const { data } = await settingsApi.getTgIndexStatus()
+    const { data } = await settingsApi.getTgIndexStatus({
+      jobs_limit: tgIndexJobsPageSize,
+      jobs_offset: (Math.max(1, Number(tgIndexJobsPage.value) || 1) - 1) * tgIndexJobsPageSize,
+    })
     const status = data.status || {}
     const index = status.index || {}
     tgIndexStatus.totalIndexed = Number(index.total_indexed || 0)
     tgIndexStatus.channels = Array.isArray(index.channels) ? index.channels : []
     tgIndexStatus.runningJobs = Array.isArray(status.running_jobs) ? status.running_jobs : []
     tgIndexStatus.latestJobs = Array.isArray(status.latest_jobs) ? status.latest_jobs : []
+    tgIndexStatus.latestJobsTotal = Number(status.latest_jobs_total || 0)
+    const maxPage = Math.max(1, Math.ceil(tgIndexStatus.latestJobsTotal / tgIndexJobsPageSize) || 1)
+    if (tgIndexJobsPage.value > maxPage) {
+      tgIndexJobsPage.value = maxPage
+    }
     syncTgIndexTaskFlags()
     scheduleTgIndexStatusPolling()
   } catch (error) {
@@ -4143,6 +4164,11 @@ const fetchTgIndexStatus = async (showError = true) => {
   } finally {
     loadingTgIndexStatus.value = false
   }
+}
+
+const handleTgIndexJobsPageChange = async (page) => {
+  tgIndexJobsPage.value = Math.max(1, Number(page) || 1)
+  await fetchTgIndexStatus(false)
 }
 
 const handleRefreshTgIndexStatus = async () => {

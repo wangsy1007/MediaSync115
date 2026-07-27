@@ -10,7 +10,7 @@ import httpx
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -1320,9 +1320,15 @@ async def logout_tg():
 
 
 @router.get("/tg/index/status")
-async def get_tg_index_status():
+async def get_tg_index_status(
+    jobs_limit: int = Query(15, ge=1, le=100, description="任务列表每页条数"),
+    jobs_offset: int = Query(0, ge=0, le=100000, description="任务列表偏移量"),
+):
     try:
-        payload = await tg_sync_service.get_status()
+        payload = await tg_sync_service.get_status(
+            jobs_limit=jobs_limit,
+            jobs_offset=jobs_offset,
+        )
         return {
             "success": True,
             "status": payload,
