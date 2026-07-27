@@ -48,7 +48,16 @@ async def list_operation_logs(
     if exclude_source_type:
         where_clauses.append(OperationLog.source_type != exclude_source_type.strip())
     if module:
-        where_clauses.append(OperationLog.module == module.strip())
+        # 支持逗号分隔多模块（分类筛选：同一类日志合并查询）
+        modules = [
+            item.strip()
+            for item in str(module).split(",")
+            if item and item.strip()
+        ]
+        if len(modules) == 1:
+            where_clauses.append(OperationLog.module == modules[0])
+        elif modules:
+            where_clauses.append(OperationLog.module.in_(modules))
     if status:
         where_clauses.append(OperationLog.status == status.strip())
     if path:

@@ -11,30 +11,14 @@
 
     <div class="filter-bar">
       <el-select
-        v-model="filters.module"
+        v-model="filters.category"
         clearable
-        filterable
         placeholder="全部分类"
         class="filter-select"
         @change="handleSearch"
       >
         <el-option
-          v-for="item in moduleOptions"
-          :key="item.value"
-          :label="item.label"
-          :value="item.value"
-        />
-      </el-select>
-
-      <el-select
-        v-model="filters.status"
-        clearable
-        placeholder="全部状态"
-        class="filter-select filter-select-sm"
-        @change="handleSearch"
-      >
-        <el-option
-          v-for="item in statusOptions"
+          v-for="item in categoryOptions"
           :key="item.value"
           :label="item.label"
           :value="item.value"
@@ -71,13 +55,10 @@
             <el-tag
               v-if="log.module"
               size="small"
-              :type="log.module === 'play' ? 'success' : 'info'"
+              :type="resolveCategory(log.module).value === 'play' ? 'success' : 'info'"
               class="log-module"
             >
-              {{ getModuleLabel(log.module) }}
-            </el-tag>
-            <el-tag :type="statusTagType(log.status)" size="small" class="log-status">
-              {{ statusLabels[log.status] || log.status }}
+              {{ resolveCategory(log.module).label }}
             </el-tag>
             <span class="log-text">{{ log.message || '-' }}</span>
             <span class="log-duration" v-if="log.duration_ms">{{ log.duration_ms }}ms</span>
@@ -121,40 +102,39 @@ import { logsApi } from '@/api'
 
 const AUTO_REFRESH_MS = 5000
 
-const MODULE_LABELS = {
-  play: '播放',
-  strm: 'STRM',
-  scheduler: '调度',
-  subscriptions: '订阅',
-  pan115: '115网盘',
-  archive: '归档',
-  sync: '同步',
-  emby_sync: 'Emby 同步',
-  feiniu_sync: '飞牛同步',
-  tg_sync: 'TG 同步',
-  chart_subscription: '榜单订阅',
-  person_follow: '人物追更',
-  workflow: '工作流',
-  explore_queue: '探索队列',
-  hdhive: 'HDHive',
-  manual_transfer: '手动转存',
-  quark: '夸克',
-  auth: '认证',
-  settings: '设置',
-  search: '搜索',
-  tmdb: 'TMDB',
-  unknown: '未知',
-}
+/** 过滤用分类：同类模块合并为一类 */
+const LOG_CATEGORIES = [
+  { value: 'play', label: '播放', modules: ['play'] },
+  { value: 'strm', label: 'STRM', modules: ['strm'] },
+  { value: 'archive', label: '归档', modules: ['archive'] },
+  {
+    value: 'subscriptions',
+    label: '订阅',
+    modules: ['subscriptions', 'chart_subscription', 'person_follow'],
+  },
+  {
+    value: 'transfer',
+    label: '转存',
+    modules: ['pan115', 'manual_transfer', 'quark', 'hdhive', 'explore_queue'],
+  },
+  {
+    value: 'sync',
+    label: '同步',
+    modules: ['sync', 'emby_sync', 'feiniu_sync', 'tg_sync'],
+  },
+  {
+    value: 'scheduler',
+    label: '调度',
+    modules: ['scheduler', 'workflow'],
+  },
+  {
+    value: 'system',
+    label: '系统',
+    modules: ['settings', 'auth', 'search', 'tmdb', 'unknown'],
+  },
+]
 
-const statusLabels = {
-  success: '成功',
-  failed: '失败',
-  warning: '警告',
-  info: '信息',
-  partial: '部分成功',
-}
-
-const STATUS_ORDER = ['success', 'failed', 'warning', 'info', 'partial']
+const OTHER_CATEGORY = { value: 'other', label: '其他', modules: [] }
 
 const loading = ref(false)
 const clearing = ref(false)
@@ -164,61 +144,61 @@ const total = ref(0)
 const currentPage = ref(1)
 const expandedIds = ref(new Set())
 const availableModules = ref([])
-const availableStatuses = ref([])
 let refreshTimer = null
 
 const filters = ref({
-  module: '',
-  status: '',
+  category: '',
   limit: 100,
 })
 
-const getModuleLabel = (module) => {
+const moduleToCategory = (() => {
+  const map = new Map()
+  for (const category of LOG_CATEGORIES) {
+    for (const module of category.modules) {
+      map.set(module, category)
+    }
+  }
+  return map
+})()
+
+const resolveCategory = (module) => {
   const key = String(module || '').trim()
-  if (!key) return '-'
-  return MODULE_LABELS[key] || key
+  if (!key) return OTHER_CATEGORY
+  return moduleToCategory.get(key) || OTHER_CATEGORY
 }
 
-const moduleOptions = computed(() => {
-  const values = new Set([
-    ...Object.keys(MODULE_LABELS),
-    ...availableModules.value,
-  ])
-  return Array.from(values)
-    .filter(Boolean)
-    .sort((a, b) => getModuleLabel(a).localeCompare(getModuleLabel(b), 'zh-CN'))
-    .map((value) => ({
-      value,
-      label: getModuleLabel(value),
-    }))
+const categoryOptions = computed(() => {
+  const present = new Set(
+    availableModules.value.map((item) => String(item || '').trim()).filter(Boolean)
+  )
+  // 尚无日志时展示完整分类；有日志时只展示实际出现过的类别
+  const base = !present.size
+    ? LOG_CATEGORIES
+    : LOG_CATEGORIES.filter((category) =>
+        category.modules.some((module) => present.has(module))
+      )
+  const options = base.map((category) => ({
+    value: category.value,
+    label: category.label,
+  }))
+  const hasOther = [...present].some((module) => !moduleToCategory.has(module))
+  if (hasOther) {
+    options.push({ value: OTHER_CATEGORY.value, label: OTHER_CATEGORY.label })
+  }
+  return options
 })
 
-const statusOptions = computed(() => {
-  const values = new Set([
-    ...STATUS_ORDER,
-    ...availableStatuses.value,
-  ])
-  return Array.from(values)
-    .filter(Boolean)
-    .sort((a, b) => {
-      const ai = STATUS_ORDER.indexOf(a)
-      const bi = STATUS_ORDER.indexOf(b)
-      if (ai === -1 && bi === -1) return a.localeCompare(b)
-      if (ai === -1) return 1
-      if (bi === -1) return -1
-      return ai - bi
-    })
-    .map((value) => ({
-      value,
-      label: statusLabels[value] || value,
-    }))
-})
-
-const statusTagType = (status) => {
-  if (status === 'success') return 'success'
-  if (status === 'failed') return 'danger'
-  if (status === 'warning' || status === 'partial') return 'warning'
-  return 'info'
+const resolveCategoryModules = (categoryValue) => {
+  const key = String(categoryValue || '').trim()
+  if (!key) return []
+  if (key === OTHER_CATEGORY.value) {
+    const known = new Set(LOG_CATEGORIES.flatMap((item) => item.modules))
+    return availableModules.value
+      .map((item) => String(item || '').trim())
+      .filter((module) => module && !known.has(module))
+  }
+  const category = LOG_CATEGORIES.find((item) => item.value === key)
+  return category ? [...category.modules] : []
 }
 
 const formatTime = (val) => {
@@ -262,9 +242,8 @@ const fetchModules = async () => {
   try {
     const { data } = await logsApi.modules()
     availableModules.value = Array.isArray(data?.modules) ? data.modules : []
-    availableStatuses.value = Array.isArray(data?.statuses) ? data.statuses : []
   } catch {
-    // 分类选项加载失败时仍可用内置标签筛选
+    // 分类选项加载失败时仍可用内置分类筛选
   }
 }
 
@@ -276,14 +255,21 @@ const fetchLogs = async ({ silent = false } = {}) => {
       offset: (currentPage.value - 1) * Number(filters.value.limit || 100),
       exclude_source_type: 'api',
     }
-    const module = String(filters.value.module || '').trim()
-    const status = String(filters.value.status || '').trim()
-    if (module) params.module = module
-    if (status) params.status = status
-
-    const { data } = await logsApi.list(params)
-    logs.value = Array.isArray(data?.items) ? data.items : []
-    total.value = Number(data?.total || 0)
+    const modules = resolveCategoryModules(filters.value.category)
+    if (modules.length) {
+      params.module = modules.join(',')
+      const { data } = await logsApi.list(params)
+      logs.value = Array.isArray(data?.items) ? data.items : []
+      total.value = Number(data?.total || 0)
+    } else if (String(filters.value.category || '').trim()) {
+      // 选中分类但当前无对应模块（如「其他」为空）
+      logs.value = []
+      total.value = 0
+    } else {
+      const { data } = await logsApi.list(params)
+      logs.value = Array.isArray(data?.items) ? data.items : []
+      total.value = Number(data?.total || 0)
+    }
   } catch (error) {
     if (!silent) {
       ElMessage.error(error.response?.data?.detail || '日志获取失败')
@@ -381,11 +367,7 @@ onBeforeUnmount(stopAutoRefresh)
   }
 
   .filter-select {
-    width: 180px;
-  }
-
-  .filter-select-sm {
-    width: 140px;
+    width: 160px;
   }
 
   .filter-limit {
@@ -438,10 +420,6 @@ onBeforeUnmount(stopAutoRefresh)
     font-family: monospace;
     flex-shrink: 0;
     min-width: 60px;
-  }
-
-  .log-status {
-    flex-shrink: 0;
   }
 
   .log-module {
@@ -517,7 +495,6 @@ onBeforeUnmount(stopAutoRefresh)
 
     .filter-bar {
       .filter-select,
-      .filter-select-sm,
       .filter-limit {
         width: 100%;
       }
