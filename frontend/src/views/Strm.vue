@@ -143,19 +143,11 @@
 
       <div class="status-grid">
         <div class="status-item">
-          <span class="status-label">归档输出目录</span>
-          <span class="status-value">{{ config.archive_output_name || config.archive_output_cid || '未配置' }}</span>
-        </div>
-        <div class="status-item">
-          <span class="status-label">播放模式</span>
-          <span class="status-value">{{ redirectModeLabel }}</span>
-        </div>
-        <div class="status-item">
           <span class="status-label">生成进度</span>
           <span class="status-value">{{ generateProgressText }}</span>
         </div>
         <div class="status-item">
-          <span class="status-label">当前生成模式</span>
+          <span class="status-label">当前模式</span>
           <span class="status-value">{{ generateModeLabel }}</span>
         </div>
         <div class="status-item">
@@ -163,28 +155,8 @@
           <span class="status-value">{{ indexCountsText }}</span>
         </div>
         <div class="status-item">
-          <span class="status-label">最近增量生成</span>
-          <span class="status-value">{{ formatRuntimeTime(lastIncrementalAt) }}</span>
-        </div>
-        <div class="status-item">
-          <span class="status-label">最近全量生成</span>
-          <span class="status-value">{{ formatRuntimeTime(lastFullAt) }}</span>
-        </div>
-        <div class="status-item status-item-full">
-          <span class="status-label">输出目录</span>
-          <span class="status-value">{{ config.strm_output_dir || '未配置' }}</span>
-        </div>
-        <div class="status-item status-item-full">
-          <span class="status-label">播放地址模板</span>
-          <span class="status-value break-all">{{ playUrlTemplate }}</span>
-        </div>
-        <div class="status-item">
-          <span class="status-label">开始时间</span>
-          <span class="status-value">{{ runtime.last_generate_started_at ? formatBeijingTableCell(null, null, runtime.last_generate_started_at) : '-' }}</span>
-        </div>
-        <div class="status-item">
-          <span class="status-label">结束时间</span>
-          <span class="status-value">{{ runtime.last_generate_finished_at ? formatBeijingTableCell(null, null, runtime.last_generate_finished_at) : '-' }}</span>
+          <span class="status-label">最近生成</span>
+          <span class="status-value">{{ lastGenerateAtText }}</span>
         </div>
         <div class="status-item status-item-full">
           <span class="status-label">最近结果</span>
@@ -332,20 +304,6 @@ const normalizeRedirectMode = (mode) => (
   String(mode || '').trim().toLowerCase() === 'proxy' ? 'proxy' : 'redirect'
 )
 
-const redirectModeLabel = computed(() => (
-  config.strm_redirect_mode === 'proxy' ? '服务器代理' : '302 直链播放'
-))
-
-const playUrlTemplate = computed(() => {
-  if (!config.strm_base_url) return '未配置'
-  let base = config.strm_base_url.replace(/\/$/, '')
-  if (config.strm_proxy_enabled) {
-    const url = new URL(base)
-    base = `${url.protocol}//${url.hostname}:${config.strm_proxy_port || 8099}`
-  }
-  return `${base}/api/strm/play/<token>`
-})
-
 const summaryText = computed(() => {
   const summary = runtime.last_generate_summary
   if (!summary) return '暂无生成记录'
@@ -376,19 +334,13 @@ const indexCountsText = computed(() => {
   return directories == null ? `${files} 个文件` : `${files} 个文件，${directories} 个目录`
 })
 
-const lastIncrementalAt = computed(() => (
-  runtime.last_incremental_at
-  || runtime.last_incremental_finished_at
-  || (runtime.last_generate_summary?.mode === 'incremental' ? runtime.last_generate_finished_at : '')
-))
-const lastFullAt = computed(() => (
-  runtime.last_full_at
-  || runtime.last_full_finished_at
-  || (runtime.last_generate_summary?.mode === 'full' ? runtime.last_generate_finished_at : '')
-))
-const formatRuntimeTime = (value) => (
-  value ? formatBeijingTableCell(null, null, value) : '-'
-)
+const lastGenerateAtText = computed(() => {
+  const value = runtime.last_generate_finished_at
+    || runtime.last_incremental_at
+    || runtime.last_full_at
+    || ''
+  return value ? formatBeijingTableCell(null, null, value) : '-'
+})
 
 const getModeLabel = (mode) => (
   normalizeRedirectMode(mode) === 'proxy' ? '服务器代理' : '302 直链播放'
