@@ -2017,42 +2017,43 @@ function bindSettingsTabsDrag() {
   const scrollEl = root?.querySelector?.('.el-tabs__nav-scroll')
   if (!scrollEl) return
 
+  const DRAG_THRESHOLD = 8
+  let activePointerId = null
   let dragging = false
   let suppressClick = false
   let startX = 0
   let startScrollLeft = 0
 
   const onPointerDown = (e) => {
+    // 触控交给原生横向滚动，避免干扰点击切换
     if (e.pointerType === 'touch') return
     if (e.button != null && e.button !== 0) return
-    dragging = true
+    activePointerId = e.pointerId
+    dragging = false
     suppressClick = false
     startX = e.clientX
     startScrollLeft = scrollEl.scrollLeft
-    scrollEl.classList.add('is-dragging')
-    try {
-      scrollEl.setPointerCapture(e.pointerId)
-    } catch (_) {
-      /* ignore */
-    }
   }
 
   const onPointerMove = (e) => {
-    if (!dragging) return
+    if (activePointerId == null || e.pointerId !== activePointerId) return
     const dx = e.clientX - startX
-    if (Math.abs(dx) > 4) suppressClick = true
+    if (!dragging) {
+      if (Math.abs(dx) < DRAG_THRESHOLD) return
+      dragging = true
+      suppressClick = true
+      scrollEl.classList.add('is-dragging')
+    }
     scrollEl.scrollLeft = startScrollLeft - dx
   }
 
   const endDrag = (e) => {
-    if (!dragging) return
-    dragging = false
-    scrollEl.classList.remove('is-dragging')
-    try {
-      scrollEl.releasePointerCapture?.(e.pointerId)
-    } catch (_) {
-      /* ignore */
+    if (activePointerId == null || (e && e.pointerId !== activePointerId)) return
+    activePointerId = null
+    if (dragging) {
+      scrollEl.classList.remove('is-dragging')
     }
+    dragging = false
   }
 
   const onClickCapture = (e) => {
@@ -2070,20 +2071,24 @@ function bindSettingsTabsDrag() {
   }
 
   scrollEl.addEventListener('pointerdown', onPointerDown)
-  scrollEl.addEventListener('pointermove', onPointerMove)
-  scrollEl.addEventListener('pointerup', endDrag)
-  scrollEl.addEventListener('pointercancel', endDrag)
+  // 挂到 document，避免指针移出标题栏后拖动中断；未过阈值时不拦截点击
+  document.addEventListener('pointermove', onPointerMove)
+  document.addEventListener('pointerup', endDrag)
+  document.addEventListener('pointercancel', endDrag)
   scrollEl.addEventListener('click', onClickCapture, true)
   scrollEl.addEventListener('wheel', onWheel, { passive: false })
 
   unbindSettingsTabsDrag = () => {
     scrollEl.removeEventListener('pointerdown', onPointerDown)
-    scrollEl.removeEventListener('pointermove', onPointerMove)
-    scrollEl.removeEventListener('pointerup', endDrag)
-    scrollEl.removeEventListener('pointercancel', endDrag)
+    document.removeEventListener('pointermove', onPointerMove)
+    document.removeEventListener('pointerup', endDrag)
+    document.removeEventListener('pointercancel', endDrag)
     scrollEl.removeEventListener('click', onClickCapture, true)
     scrollEl.removeEventListener('wheel', onWheel)
     scrollEl.classList.remove('is-dragging')
+    activePointerId = null
+    dragging = false
+    suppressClick = false
   }
 }
 
