@@ -31,7 +31,7 @@
 | Tag | 说明 |
 |-----|------|
 | `latest` | 最新稳定版，推荐 NAS 及日常部署使用（NAS 更容易识别到「可更新」） |
-| `1.3.3` | 锁定版本，避免自动漂移 |
+| `1.3.4` | 锁定版本，避免自动漂移 |
 
 多架构镜像，`docker pull` 会按宿主机平台自动选择 `amd64` / `arm64`。
 
@@ -132,12 +132,11 @@ docker compose pull && docker compose up -d
 
 ---
 
-## 📝 更新记录（1.3.3）
+## 📝 更新记录（1.3.4）
 
-- 转存文件与 TMDB 一一绑定，归档优先按 file_fid 识别
-- STRM 增量/全量生成支持手动停止
-- 强化 Telegram Bot 启动重试、冲突恢复与重启合并
-- 修复 115 扫码确认后状态不刷新与登录成功无提示
-- 新增上线前一键回归脚本
+- HDHive ed2k 离线转存；115 离线任务已存在按成功处理
+- 归档标题清洗与发行年份解析优化；STRM 状态精简并移除每周全量定时
+- 日志分类筛选；设置页 Tab 可拖动；移动端标题统一为 MediaSync115
+- TG 索引任务分页；下载/归档/STRM 表单排版优化
 
 完整更新日志见 GitHub 仓库 [`CHANGELOG.md`](https://github.com/wangsy1007/MediaSync115/blob/master/CHANGELOG.md)。
