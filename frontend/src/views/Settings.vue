@@ -5518,6 +5518,12 @@ onBeforeUnmount(() => {
       }
     }
 
+    .tg-index-jobs-pager {
+      margin-top: 12px;
+      display: flex;
+      justify-content: flex-end;
+    }
+
     .cookie-status {
       .not-configured {
         color: var(--ms-text-muted);
