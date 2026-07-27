@@ -28,7 +28,7 @@
           </div>
           <div class="logo-text">
             <div class="logo-heading">
-              <span class="logo-title">MediaSync</span>
+              <span class="logo-title">MediaSync115</span>
               <span class="logo-badge">115</span>
             </div>
             <span class="logo-subtitle">Search • Save • Sync</span>
@@ -109,7 +109,7 @@
               <path d="M13 31V17h4.6l6.4 7.6 6.4-7.6H35v14h-4.3v-8l-5.9 6.8h-1.6L17.3 23v8H13Z" class="brand-letter" />
               <path d="M14 36h20" class="brand-track" />
             </svg>
-            <span class="compact-brand-text">MediaSync</span>
+            <span class="compact-brand-text">MediaSync115</span>
           </div>
         </header>
         <el-main class="app-main" :class="{ 'has-dock': isCompact }">

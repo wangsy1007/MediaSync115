@@ -2,7 +2,7 @@
   <div class="settings-page">
     <h2>系统设置</h2>
 
-    <el-tabs v-model="activeSettingsTab" class="settings-tabs" lazy>
+    <el-tabs ref="settingsTabsRef" v-model="activeSettingsTab" class="settings-tabs" lazy>
       <el-tab-pane label="账号安全" name="account">
         <el-card class="settings-card">
           <template #header>
@@ -1976,7 +1976,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, reactive, computed, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, reactive, computed, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowUp, ArrowDown, Close } from '@element-plus/icons-vue'
 import {
@@ -2003,9 +2003,95 @@ import {
 } from '@/utils/tmdb'
 
 const router = useRouter()
+const settingsTabsRef = ref(null)
 const activeSettingsTab = ref('pan115')
 const loadedSettingsTabs = ref(new Set())
 const officialUpdateRepository = 'wangsy1007/mediasync115'
+let unbindSettingsTabsDrag = null
+
+function bindSettingsTabsDrag() {
+  unbindSettingsTabsDrag?.()
+  unbindSettingsTabsDrag = null
+
+  const root = settingsTabsRef.value?.$el
+  const scrollEl = root?.querySelector?.('.el-tabs__nav-scroll')
+  if (!scrollEl) return
+
+  let dragging = false
+  let suppressClick = false
+  let startX = 0
+  let startScrollLeft = 0
+
+  const onPointerDown = (e) => {
+    if (e.pointerType === 'touch') return
+    if (e.button != null && e.button !== 0) return
+    dragging = true
+    suppressClick = false
+    startX = e.clientX
+    startScrollLeft = scrollEl.scrollLeft
+    scrollEl.classList.add('is-dragging')
+    try {
+      scrollEl.setPointerCapture(e.pointerId)
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  const onPointerMove = (e) => {
+    if (!dragging) return
+    const dx = e.clientX - startX
+    if (Math.abs(dx) > 4) suppressClick = true
+    scrollEl.scrollLeft = startScrollLeft - dx
+  }
+
+  const endDrag = (e) => {
+    if (!dragging) return
+    dragging = false
+    scrollEl.classList.remove('is-dragging')
+    try {
+      scrollEl.releasePointerCapture?.(e.pointerId)
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  const onClickCapture = (e) => {
+    if (!suppressClick) return
+    e.preventDefault()
+    e.stopPropagation()
+    suppressClick = false
+  }
+
+  const onWheel = (e) => {
+    if (scrollEl.scrollWidth <= scrollEl.clientWidth) return
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
+    e.preventDefault()
+    scrollEl.scrollLeft += e.deltaY
+  }
+
+  scrollEl.addEventListener('pointerdown', onPointerDown)
+  scrollEl.addEventListener('pointermove', onPointerMove)
+  scrollEl.addEventListener('pointerup', endDrag)
+  scrollEl.addEventListener('pointercancel', endDrag)
+  scrollEl.addEventListener('click', onClickCapture, true)
+  scrollEl.addEventListener('wheel', onWheel, { passive: false })
+
+  unbindSettingsTabsDrag = () => {
+    scrollEl.removeEventListener('pointerdown', onPointerDown)
+    scrollEl.removeEventListener('pointermove', onPointerMove)
+    scrollEl.removeEventListener('pointerup', endDrag)
+    scrollEl.removeEventListener('pointercancel', endDrag)
+    scrollEl.removeEventListener('click', onClickCapture, true)
+    scrollEl.removeEventListener('wheel', onWheel)
+    scrollEl.classList.remove('is-dragging')
+  }
+}
+
+function scrollActiveSettingsTabIntoView() {
+  const root = settingsTabsRef.value?.$el
+  const active = root?.querySelector?.('.el-tabs__item.is-active')
+  active?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+}
 const accountForm = ref({
   currentUsername: 'admin',
   newUsername: '',
@@ -5320,6 +5406,10 @@ onMounted(() => {
     refreshSourceConnectionStatus()
     ensureSettingsTabLoaded(activeSettingsTab.value)
   })
+  nextTick(() => {
+    bindSettingsTabsDrag()
+    scrollActiveSettingsTabIntoView()
+  })
 })
 
 const ensureSettingsTabLoaded = (tab) => {
@@ -5404,9 +5494,12 @@ const ensureSettingsTabLoaded = (tab) => {
 
 watch(activeSettingsTab, (tab) => {
   ensureSettingsTabLoaded(tab)
+  nextTick(scrollActiveSettingsTabIntoView)
 })
 
 onBeforeUnmount(() => {
+  unbindSettingsTabsDrag?.()
+  unbindSettingsTabsDrag = null
   stopPan115QrPolling()
   stopTgQrPolling()
   stopTgIndexStatusPolling()
@@ -5424,10 +5517,50 @@ onBeforeUnmount(() => {
 
     :deep(.el-tabs__nav-wrap) {
       scrollbar-width: none;
+
+      &::before,
+      &::after {
+        display: none;
+      }
+
+      &.is-scrollable {
+        padding: 0;
+      }
     }
 
     :deep(.el-tabs__nav-wrap::-webkit-scrollbar) {
       display: none;
+    }
+
+    :deep(.el-tabs__nav-prev),
+    :deep(.el-tabs__nav-next) {
+      display: none;
+    }
+
+    :deep(.el-tabs__nav-scroll) {
+      overflow-x: auto !important;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-x: contain;
+      scrollbar-width: none;
+      cursor: grab;
+
+      &.is-dragging {
+        cursor: grabbing;
+        user-select: none;
+      }
+
+      &::-webkit-scrollbar {
+        display: none;
+      }
+    }
+
+    :deep(.el-tabs__nav) {
+      transform: translateX(0) !important;
+    }
+
+    :deep(.el-tabs__item) {
+      touch-action: pan-x;
     }
   }
 
