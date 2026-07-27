@@ -63,25 +63,27 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="120" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button
-              type="primary"
-              size="small"
-              text
-              @click="handleRetryTask(row)"
-              :disabled="Number(row.status) !== -1"
-            >
-              重试
-            </el-button>
-            <el-button
-              type="danger"
-              size="small"
-              text
-              @click="handleDeleteTask(row)"
-            >
-              删除
-            </el-button>
+            <div class="task-ops">
+              <el-button
+                type="primary"
+                size="small"
+                text
+                @click="handleRetryTask(row)"
+                :disabled="Number(row.status) !== -1"
+              >
+                重试
+              </el-button>
+              <el-button
+                type="danger"
+                size="small"
+                text
+                @click="handleDeleteTask(row)"
+              >
+                删除
+              </el-button>
+            </div>
           </template>
         </el-table-column>
         </el-table>
@@ -516,6 +518,19 @@ onMounted(() => {
 
   .file-name {
     color: var(--ms-text-primary);
+  }
+
+  .task-ops {
+    display: inline-flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    white-space: nowrap;
+
+    :deep(.el-button + .el-button) {
+      margin-left: 0;
+    }
   }
 }
 
