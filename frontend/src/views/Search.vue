@@ -2338,7 +2338,6 @@ onBeforeUnmount(() => {
             gap: 10px;
             z-index: 3;
             opacity: 0;
-            /* 隐藏时整组不可点，避免透明按钮挡住海报点击 */
             pointer-events: none;
             transition: opacity 0.22s ease, transform 0.22s ease;
 
@@ -2347,6 +2346,7 @@ onBeforeUnmount(() => {
               width: 38px;
               height: 38px;
               padding: 0;
+              pointer-events: none;
             }
           }
 
@@ -2355,7 +2355,11 @@ onBeforeUnmount(() => {
           &.actions-revealed .explore-card-actions {
             opacity: 1;
             transform: translate(-50%, 0);
-            pointer-events: auto;
+            pointer-events: none;
+
+            .explore-action-btn {
+              pointer-events: auto;
+            }
           }
         }
 
@@ -2518,7 +2522,6 @@ onBeforeUnmount(() => {
         padding: 12px;
         background: rgba(17, 24, 39, 0.88);
         opacity: 0;
-        /* 隐藏时整组不可点，避免透明按钮挡住海报点击 */
         pointer-events: none;
         transition: opacity 0.2s ease;
 
@@ -2526,6 +2529,7 @@ onBeforeUnmount(() => {
           padding: 6px 12px;
           font-size: 12px;
           border-radius: 6px;
+          pointer-events: none;
 
           .el-icon {
             margin-right: 4px;
@@ -2538,7 +2542,11 @@ onBeforeUnmount(() => {
     &:focus-within .action-buttons,
     &.actions-revealed .action-buttons {
       opacity: 1;
-      pointer-events: auto;
+      pointer-events: none;
+
+      .action-btn {
+        pointer-events: auto;
+      }
     }
 
     .media-info {
@@ -2844,6 +2852,43 @@ onBeforeUnmount(() => {
           display: none;
         }
       }
+    }
+  }
+}
+
+@media (min-width: 769px) {
+  .explore-page {
+    .explore-section .recommend-group .recommend-card .poster-wrapper,
+    .media-card .poster-wrapper {
+      cursor: pointer;
+    }
+
+    .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions,
+    .media-card .poster-wrapper .action-buttons {
+      pointer-events: none !important;
+
+      .explore-action-btn,
+      .action-btn {
+        pointer-events: none;
+      }
+    }
+
+    .explore-section .recommend-group .recommend-card .poster-wrapper:hover .explore-card-actions,
+    .explore-section .recommend-group .recommend-card .poster-wrapper:focus-within .explore-card-actions,
+    .media-card .poster-wrapper:hover .action-buttons,
+    .media-card .poster-wrapper:focus-within .action-buttons {
+      pointer-events: none !important;
+
+      .explore-action-btn,
+      .action-btn {
+        pointer-events: auto;
+      }
+    }
+
+    .explore-section .recommend-group .recommend-card:focus-within:not(:hover) .poster-wrapper .explore-card-actions,
+    .media-card:focus-within:not(:hover) .poster-wrapper .action-buttons {
+      opacity: 0;
+      pointer-events: none !important;
     }
   }
 }

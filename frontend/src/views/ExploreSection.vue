@@ -1472,7 +1472,6 @@ onBeforeUnmount(() => {
         gap: 10px;
         z-index: 3;
         opacity: 0;
-        /* 隐藏时整组不可点，避免透明按钮挡住海报点击 */
         pointer-events: none;
         transition: opacity 0.22s ease, transform 0.22s ease;
 
@@ -1481,6 +1480,7 @@ onBeforeUnmount(() => {
           width: 38px;
           height: 38px;
           padding: 0;
+          pointer-events: none;
           box-shadow: 0 6px 18px rgba(0, 0, 0, 0.36);
         }
       }
@@ -1490,7 +1490,11 @@ onBeforeUnmount(() => {
       &.actions-revealed .explore-card-actions {
         opacity: 1;
         transform: translate(-50%, 0);
-        pointer-events: auto;
+        pointer-events: none;
+
+        .explore-action-btn {
+          pointer-events: auto;
+        }
       }
     }
 
@@ -1567,6 +1571,38 @@ onBeforeUnmount(() => {
   .explore-section-page .movie-card .poster-wrap .explore-card-actions .explore-action-btn {
     width: 36px;
     height: 36px;
+  }
+}
+
+@media (min-width: 769px) {
+  .explore-section-page .movie-card {
+    .poster-wrap {
+      cursor: pointer;
+
+      .explore-card-actions {
+        pointer-events: none !important;
+
+        .explore-action-btn {
+          pointer-events: none;
+        }
+      }
+
+      &:hover .explore-card-actions,
+      &:focus-within .explore-card-actions {
+        opacity: 1;
+        transform: translate(-50%, 0);
+        pointer-events: none !important;
+
+        .explore-action-btn {
+          pointer-events: auto;
+        }
+      }
+    }
+
+    &:focus-within:not(:hover) .poster-wrap .explore-card-actions {
+      opacity: 0;
+      pointer-events: none !important;
+    }
   }
 }
 

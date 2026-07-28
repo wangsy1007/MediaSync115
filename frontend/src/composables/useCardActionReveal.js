@@ -1,24 +1,31 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 
+const DESKTOP_CARD_MIN_WIDTH = '(min-width: 769px)'
+const ACTION_BUTTON_SELECTOR = '.explore-action-btn, .action-btn'
+
 /**
  * 移动端窄屏触控：第一次点海报展开订阅/转存，再点进入详情；点标题直接进详情。
- * PC / 宽屏：海报点击一律直接进详情（含触摸屏笔记本用鼠标或触控笔）。
+ * PC / 宽屏：海报任意位置一次点击进入详情；悬停仅展示操作按钮，不挡点击。
  */
 export function useCardActionReveal() {
   const revealedKey = ref('')
-  /** 是否处于「窄屏触控两段式」模式 */
   const isTouchUi = ref(false)
   const mediaQueries = []
   let lastPointerType = ''
+
+  const isDesktopCardUi = () => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return true
+    }
+    return window.matchMedia(DESKTOP_CARD_MIN_WIDTH).matches
+  }
 
   const syncTouchUi = () => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
       isTouchUi.value = false
       return
     }
-    // 宽屏一律视为桌面：不启用两段式，彻底避免 PC 要点两次
-    const narrow = window.matchMedia('(max-width: 768px)').matches
-    if (!narrow) {
+    if (isDesktopCardUi()) {
       isTouchUi.value = false
       return
     }
@@ -46,6 +53,11 @@ export function useCardActionReveal() {
     revealedKey.value = id
   }
 
+  const isActionButtonTarget = (event) => {
+    const target = event?.target
+    return target instanceof Element && Boolean(target.closest(ACTION_BUTTON_SELECTOR))
+  }
+
   const notePointer = (event) => {
     const type = event?.pointerType
     if (type) {
@@ -58,24 +70,25 @@ export function useCardActionReveal() {
   }
 
   const isDirectNavigatePointer = (event) => {
-    // 宽屏 / 桌面模式：永远直接进详情
-    if (!isTouchUi.value) return true
+    if (isDesktopCardUi()) return true
 
     notePointer(event)
     const type = String(
       event?.pointerType || lastPointerType || ''
     ).toLowerCase()
-    // 窄屏上若实际是鼠标点击，仍直接进详情
     if (type === 'mouse' || type === 'pen') return true
     if (type === 'touch') return false
-    return false
+    return !isTouchUi.value
   }
 
   /**
-   * 点海报：窄屏触控两段式；其余情况直接进详情。
+   * 点海报：PC 一次进详情；窄屏触控两段式。
    * @returns {boolean} 是否已触发导航
    */
   const handlePosterActivate = (key, onNavigate, event) => {
+    if (isActionButtonTarget(event)) {
+      return false
+    }
     if (isDirectNavigatePointer(event)) {
       clearRevealed()
       onNavigate?.()
@@ -128,7 +141,7 @@ export function useCardActionReveal() {
     syncTouchUi()
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
       for (const query of [
-        '(max-width: 768px)',
+        DESKTOP_CARD_MIN_WIDTH,
         '(any-hover: hover)',
         '(pointer: coarse)',
         '(any-pointer: fine)'
@@ -169,6 +182,7 @@ export function useCardActionReveal() {
     revealActions,
     clearRevealed,
     notePointer,
+    isDesktopCardUi,
     handlePosterActivate,
     handleDetailActivate,
     handleCardActivate

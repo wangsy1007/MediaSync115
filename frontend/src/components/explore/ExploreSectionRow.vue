@@ -690,7 +690,7 @@ onBeforeUnmount(() => {
         gap: 10px;
         z-index: 3;
         opacity: 0;
-        /* 隐藏时必须整组不可点；子按钮不能单独 pointer-events:auto，否则会挡住海报点击 */
+        /* 容器与子按钮默认均不可点，避免透明层挡住海报 */
         pointer-events: none;
         transition: opacity 0.22s ease, transform 0.22s ease;
 
@@ -699,6 +699,7 @@ onBeforeUnmount(() => {
           width: 38px;
           height: 38px;
           padding: 0;
+          pointer-events: none;
         }
       }
 
@@ -707,7 +708,11 @@ onBeforeUnmount(() => {
       &.actions-revealed .explore-card-actions {
         opacity: 1;
         transform: translate(-50%, 0);
-        pointer-events: auto;
+        pointer-events: none;
+
+        .explore-action-btn {
+          pointer-events: auto;
+        }
       }
     }
 
@@ -782,6 +787,38 @@ onBeforeUnmount(() => {
           -webkit-line-clamp: 1;
         }
       }
+    }
+  }
+}
+
+@media (min-width: 769px) {
+  .recommend-group .recommend-card {
+    .poster-wrapper {
+      cursor: pointer;
+
+      .explore-card-actions {
+        pointer-events: none !important;
+
+        .explore-action-btn {
+          pointer-events: none;
+        }
+      }
+
+      &:hover .explore-card-actions,
+      &:focus-within .explore-card-actions {
+        opacity: 1;
+        transform: translate(-50%, 0);
+        pointer-events: none !important;
+
+        .explore-action-btn {
+          pointer-events: auto;
+        }
+      }
+    }
+
+    &:focus-within:not(:hover) .poster-wrapper .explore-card-actions {
+      opacity: 0;
+      pointer-events: none !important;
     }
   }
 }
