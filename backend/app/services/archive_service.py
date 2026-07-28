@@ -44,6 +44,10 @@ ARCHIVE_STALE_TASK_MINUTES = 30
 # 页面拉取状态/任务列表时，超过该时长仍无更新的 processing 任务自动标记失败
 ARCHIVE_IDLE_PROCESSING_MINUTES = 5
 ARCHIVE_CANCEL_WAIT_SECONDS = 3.0
+# 识别阶段并发（TMDB 查询，不走 115 限速）
+ARCHIVE_IDENTIFY_CONCURRENCY = 8
+# 同一目标目录下批量移动的文件数（115 fs_move 支持多 fid）
+ARCHIVE_MOVE_BATCH_SIZE = 20
 
 VIDEO_EXTENSIONS = {
     ".mkv",
@@ -556,7 +560,11 @@ class ArchiveService:
                 )
 
                 identified: list[dict[str, Any]] = []
-                identify_semaphore = asyncio.Semaphore(5)
+                identify_semaphore = asyncio.Semaphore(ARCHIVE_IDENTIFY_CONCURRENCY)
+                tmdb_id_cache: dict[tuple[str, int], dict[str, Any] | None] = {}
+                tmdb_search_cache: dict[
+                    tuple[str, str, int | None], list[Any]
+                ] = {}
 
                 async def _identify_one(
                     _item: dict[str, Any], _parsed: dict[str, Any]
@@ -583,9 +591,14 @@ class ArchiveService:
                                 matched = await self._identify_by_tmdb_id(
                                     int(binding["tmdb_id"]),
                                     parsed["media_type"],
+                                    cache=tmdb_id_cache,
                                 )
                             if not matched:
-                                matched = await self.identify_media(parsed)
+                                matched = await self.identify_media(
+                                    parsed,
+                                    id_cache=tmdb_id_cache,
+                                    search_cache=tmdb_search_cache,
+                                )
                             return {
                                 "item": _item,
                                 "parsed": parsed,
@@ -627,13 +640,14 @@ class ArchiveService:
                 tv_skip_map = self._dedupe_tv_identified_items(identified)
                 season_episode_cache: dict[str, set[tuple[int, int]]] = {}
 
-                # 阶段三：串行处理每个文件（涉及 115 移动/重命名，必须走限速队列）
+                # 阶段三：准备目标目录 → 按目录批量移动 → 逐个重命名/字幕
                 folder_cache: dict[tuple[str, ...], str] = {}
                 processed_cids: set[str] = set()
                 identified_video_map: dict[str, dict[str, Any]] = {
                     str(ir["item"].get("fid", "")): ir for ir in identified
                 }
 
+                prepared_plans: list[dict[str, Any]] = []
                 for item in video_items:
                     self._raise_if_scan_cancel_requested()
                     fid = str(item.get("fid", ""))
@@ -648,16 +662,91 @@ class ArchiveService:
                         summary["skipped"] += 1
                         continue
 
-                    result = await self._process_identified(
+                    plan = await self._prepare_identified(
                         pan115,
                         item=item,
                         identify_info=identify_info,
                         output_cid=output_cid,
-                        trigger=trigger,
                         folder_cache=folder_cache,
-                        subtitle_items=subtitle_items,
                         season_episode_cache=season_episode_cache,
+                        id_cache=tmdb_id_cache,
                     )
+                    prepared_plans.append(plan)
+
+                # 按目标目录批量移动（同一目录一次 API 可带多个 fid）
+                ready_plans = [p for p in prepared_plans if p.get("ready")]
+                plans_by_target: dict[str, list[dict[str, Any]]] = {}
+                for plan in ready_plans:
+                    target_cid = str(plan.get("target_cid") or "").strip()
+                    if not target_cid:
+                        plan["ready"] = False
+                        plan["result"] = {
+                            "task_id": plan.get("task_id"),
+                            "status": ArchiveStatus.FAILED.value,
+                            "source_fid": plan.get("fid", ""),
+                            "source_filename": plan.get("filename", ""),
+                            "message": "目标目录无效",
+                        }
+                        continue
+                    plans_by_target.setdefault(target_cid, []).append(plan)
+
+                for target_cid, group in plans_by_target.items():
+                    self._raise_if_scan_cancel_requested()
+                    for start in range(0, len(group), ARCHIVE_MOVE_BATCH_SIZE):
+                        chunk = group[start : start + ARCHIVE_MOVE_BATCH_SIZE]
+                        fids = [str(p["fid"]) for p in chunk]
+                        try:
+                            await pan115.move_file(fids, target_cid)
+                            for plan in chunk:
+                                plan["moved"] = True
+                        except Exception as batch_exc:
+                            logger.warning(
+                                "批量移动失败（%s 个文件 → %s），回退逐个移动: %s",
+                                len(fids),
+                                target_cid,
+                                batch_exc,
+                            )
+                            for plan in chunk:
+                                self._raise_if_scan_cancel_requested()
+                                try:
+                                    await pan115.move_file(str(plan["fid"]), target_cid)
+                                    plan["moved"] = True
+                                except Exception as one_exc:
+                                    msg = str(one_exc) or "移动失败"
+                                    task_id = plan.get("task_id")
+                                    if task_id:
+                                        await self._mark_task_failed(task_id, msg)
+                                    plan["ready"] = False
+                                    plan["result"] = {
+                                        "task_id": task_id,
+                                        "status": ArchiveStatus.FAILED.value,
+                                        "source_fid": plan.get("fid", ""),
+                                        "source_filename": plan.get("filename", ""),
+                                        "message": msg,
+                                    }
+
+                for plan in prepared_plans:
+                    self._raise_if_scan_cancel_requested()
+                    if plan.get("result"):
+                        result = plan["result"]
+                    elif plan.get("ready") and plan.get("moved"):
+                        result = await self._finalize_identified(
+                            pan115,
+                            plan=plan,
+                            subtitle_items=subtitle_items,
+                            season_episode_cache=season_episode_cache,
+                        )
+                    elif plan.get("ready") and not plan.get("moved"):
+                        result = {
+                            "task_id": plan.get("task_id"),
+                            "status": ArchiveStatus.FAILED.value,
+                            "source_fid": plan.get("fid", ""),
+                            "source_filename": plan.get("filename", ""),
+                            "message": "文件移动未完成",
+                        }
+                    else:
+                        continue
+
                     summary["items"].append(result)
                     s = str(result.get("status") or "")
                     if s == ArchiveStatus.SUCCESS.value:
@@ -959,35 +1048,37 @@ class ArchiveService:
         cached.update(name_parser.iter_episode_keys(coverage))
 
     # ================================================================
-    #  阶段二：处理已识别的视频文件（移动 + 重命名 + 字幕）
+    #  阶段二：处理已识别的视频文件（准备目录 + 移动 + 重命名 + 字幕）
     # ================================================================
 
-    async def _process_identified(
+    async def _prepare_identified(
         self,
         pan115: Pan115Service,
         item: dict[str, Any],
         identify_info: dict[str, Any],
         output_cid: str,
-        trigger: str = "manual",
         folder_cache: dict[tuple[str, ...], str] | None = None,
-        subtitle_items: list[dict[str, Any]] | None = None,
         season_episode_cache: dict[str, set[tuple[int, int]]] | None = None,
+        id_cache: dict[tuple[str, int], dict[str, Any] | None] | None = None,
     ) -> dict[str, Any]:
+        """准备归档计划：识别校正、建目录、冲突检查；不执行移动。"""
         parsed = dict(identify_info.get("parsed") or {})
         matched = identify_info["matched"]
         binding = identify_info.get("binding") or {}
         if not matched:
             return {
-                "status": ArchiveStatus.FAILED.value,
-                "source_fid": item.get("fid", ""),
-                "source_filename": item.get("name", ""),
-                "message": "TMDB 未匹配",
+                "ready": False,
+                "result": {
+                    "status": ArchiveStatus.FAILED.value,
+                    "source_fid": item.get("fid", ""),
+                    "source_filename": item.get("name", ""),
+                    "message": "TMDB 未匹配",
+                },
             }
 
         fid = item["fid"]
         filename = item["name"]
 
-        # 绑定优先：补齐类型/季集，必要时再按绑定 TMDB 校正 matched
         if binding.get("tmdb_id"):
             if binding.get("media_type"):
                 parsed["media_type"] = (
@@ -1001,6 +1092,7 @@ class ArchiveService:
                 binding_matched = await self._identify_by_tmdb_id(
                     int(binding["tmdb_id"]),
                     str(parsed.get("media_type") or "movie"),
+                    cache=id_cache,
                 )
                 if binding_matched:
                     matched = binding_matched
@@ -1030,6 +1122,7 @@ class ArchiveService:
             intent_matched = await self._identify_by_tmdb_id(
                 int(intent["tmdb_id"]),
                 str(intent.get("media_type") or parsed.get("media_type") or "movie"),
+                cache=id_cache,
             )
             if intent_matched:
                 matched = intent_matched
@@ -1089,7 +1182,18 @@ class ArchiveService:
                 )
                 if conflict:
                     await self._mark_task_skipped(db_task.id, conflict)
-                    return self._build_archive_skip_result(item, conflict)
+                    return {
+                        "ready": False,
+                        "result": self._build_archive_skip_result(item, conflict),
+                    }
+                # 批量准备阶段提前占用集数，避免同批重复归档同一集
+                if season_episode_cache is not None:
+                    self._remember_archived_tv_episodes(
+                        parsed,
+                        filename,
+                        target_cid,
+                        season_episode_cache,
+                    )
             else:
                 target_cid = await self._ensure_movie_path(
                     pan115,
@@ -1113,8 +1217,6 @@ class ArchiveService:
                 target_path=target_desc,
             )
 
-            await pan115.move_file(fid, target_cid)
-
             new_filename = self._build_target_filename(
                 parsed,
                 matched,
@@ -1122,6 +1224,61 @@ class ArchiveService:
                 naming,
                 display_title=display_title,
             )
+            return {
+                "ready": True,
+                "moved": False,
+                "fid": fid,
+                "filename": filename,
+                "item": item,
+                "parsed": parsed,
+                "matched": matched,
+                "naming": naming,
+                "display_title": display_title,
+                "target_cid": target_cid,
+                "target_desc": target_desc,
+                "new_filename": new_filename,
+                "task_id": db_task.id,
+            }
+        except asyncio.CancelledError:
+            await self._mark_task_failed(db_task.id, "归档扫描已取消")
+            raise
+        except Exception as exc:
+            msg = str(exc) or "未知错误"
+            await self._mark_task_failed(db_task.id, msg)
+            logger.warning("归档准备 %s 失败: %s", filename, msg)
+            return {
+                "ready": False,
+                "result": {
+                    "task_id": db_task.id,
+                    "status": ArchiveStatus.FAILED.value,
+                    "source_fid": fid,
+                    "source_filename": filename,
+                    "message": msg,
+                },
+            }
+
+    async def _finalize_identified(
+        self,
+        pan115: Pan115Service,
+        *,
+        plan: dict[str, Any],
+        subtitle_items: list[dict[str, Any]] | None = None,
+        season_episode_cache: dict[str, set[tuple[int, int]]] | None = None,
+    ) -> dict[str, Any]:
+        """文件已移动后：重命名、字幕、标记成功。"""
+        fid = str(plan.get("fid") or "")
+        filename = str(plan.get("filename") or "")
+        parsed = dict(plan.get("parsed") or {})
+        matched = plan.get("matched") or {}
+        naming = plan.get("naming")
+        display_title = str(plan.get("display_title") or "")
+        target_cid = str(plan.get("target_cid") or "")
+        target_desc = str(plan.get("target_desc") or "")
+        new_filename = str(plan.get("new_filename") or filename)
+        task_id = plan.get("task_id")
+        item = plan.get("item") or {}
+
+        try:
             renamed = await self._rename_archived_file(
                 pan115, fid, filename, new_filename
             )
@@ -1138,8 +1295,9 @@ class ArchiveService:
                     display_title=display_title,
                 )
 
-            await self._mark_task_success(db_task.id)
-            if parsed["media_type"] == "tv" and season_episode_cache is not None:
+            if task_id:
+                await self._mark_task_success(task_id)
+            if parsed.get("media_type") == "tv" and season_episode_cache is not None:
                 self._remember_archived_tv_episodes(
                     parsed,
                     filename,
@@ -1156,14 +1314,14 @@ class ArchiveService:
                     + (f"（重命名为 {new_filename}）" if renamed else "")
                 ),
                 extra={
-                    "task_id": db_task.id,
+                    "task_id": task_id,
                     "target_desc": target_desc,
                     "renamed": renamed,
                     "new_filename": new_filename if renamed else "",
                 },
             )
             return {
-                "task_id": db_task.id,
+                "task_id": task_id,
                 "status": ArchiveStatus.SUCCESS.value,
                 "source_fid": fid,
                 "source_filename": filename,
@@ -1173,19 +1331,71 @@ class ArchiveService:
                 "new_filename": new_filename if renamed else filename,
             }
         except asyncio.CancelledError:
-            await self._mark_task_failed(db_task.id, "归档扫描已取消")
+            if task_id:
+                await self._mark_task_failed(task_id, "归档扫描已取消")
             raise
         except Exception as exc:
             msg = str(exc) or "未知错误"
-            await self._mark_task_failed(db_task.id, msg)
-            logger.warning("归档文件 %s 失败: %s", filename, msg)
+            if task_id:
+                await self._mark_task_failed(task_id, msg)
+            logger.warning("归档收尾 %s 失败: %s", filename, msg)
             return {
-                "task_id": db_task.id,
+                "task_id": task_id,
                 "status": ArchiveStatus.FAILED.value,
                 "source_fid": fid,
                 "source_filename": filename,
                 "message": msg,
             }
+
+    async def _process_identified(
+        self,
+        pan115: Pan115Service,
+        item: dict[str, Any],
+        identify_info: dict[str, Any],
+        output_cid: str,
+        trigger: str = "manual",
+        folder_cache: dict[tuple[str, ...], str] | None = None,
+        subtitle_items: list[dict[str, Any]] | None = None,
+        season_episode_cache: dict[str, set[tuple[int, int]]] | None = None,
+    ) -> dict[str, Any]:
+        """单文件完整归档（重试入口）：准备 → 移动 → 收尾。"""
+        del trigger  # 保留参数兼容调用方
+        plan = await self._prepare_identified(
+            pan115,
+            item=item,
+            identify_info=identify_info,
+            output_cid=output_cid,
+            folder_cache=folder_cache,
+            season_episode_cache=season_episode_cache,
+        )
+        if not plan.get("ready"):
+            return plan.get("result") or {
+                "status": ArchiveStatus.FAILED.value,
+                "source_fid": item.get("fid", ""),
+                "source_filename": item.get("name", ""),
+                "message": "归档准备失败",
+            }
+        try:
+            await pan115.move_file(str(plan["fid"]), str(plan["target_cid"]))
+            plan["moved"] = True
+        except Exception as exc:
+            msg = str(exc) or "移动失败"
+            task_id = plan.get("task_id")
+            if task_id:
+                await self._mark_task_failed(task_id, msg)
+            return {
+                "task_id": task_id,
+                "status": ArchiveStatus.FAILED.value,
+                "source_fid": plan.get("fid", ""),
+                "source_filename": plan.get("filename", ""),
+                "message": msg,
+            }
+        return await self._finalize_identified(
+            pan115,
+            plan=plan,
+            subtitle_items=subtitle_items,
+            season_episode_cache=season_episode_cache,
+        )
 
     # ================================================================
     #  处理单个视频文件（完整流程：识别 + 移动 + 重命名 + 字幕）
@@ -1879,6 +2089,22 @@ class ArchiveService:
         movie_root = str(subdirs.get("movie_root") or "电影")
         return f"{movie_root}/{category_name}/{title_folder}"
 
+    async def _cached_get_or_create_folder(
+        self,
+        pan115: Pan115Service,
+        parent_cid: str,
+        folder_name: str,
+        folder_cache: dict[tuple[str, ...], str] | None = None,
+    ) -> str:
+        """按 (父目录, 名称) 缓存中间目录 CID，避免同一次扫描重复 search/create。"""
+        key = ("folder", str(parent_cid), str(folder_name))
+        if folder_cache is not None and key in folder_cache:
+            return folder_cache[key]
+        cid = await pan115.get_or_create_folder(parent_cid, folder_name)
+        if folder_cache is not None:
+            folder_cache[key] = cid
+        return cid
+
     async def _ensure_movie_path(
         self,
         pan115: Pan115Service,
@@ -1894,9 +2120,15 @@ class ArchiveService:
         if folder_cache and cache_key in folder_cache:
             return folder_cache[cache_key]
 
-        movies_cid = await pan115.get_or_create_folder(root_cid, movie_root)
-        region_cid = await pan115.get_or_create_folder(movies_cid, region)
-        folder_cid = await pan115.get_or_create_folder(region_cid, title_folder)
+        movies_cid = await self._cached_get_or_create_folder(
+            pan115, root_cid, movie_root, folder_cache
+        )
+        region_cid = await self._cached_get_or_create_folder(
+            pan115, movies_cid, region, folder_cache
+        )
+        folder_cid = await self._cached_get_or_create_folder(
+            pan115, region_cid, title_folder, folder_cache
+        )
         if folder_cache is not None:
             folder_cache[cache_key] = folder_cid
         return folder_cid
@@ -1934,17 +2166,31 @@ class ArchiveService:
         if folder_cache and cache_key in folder_cache:
             return folder_cache[cache_key]
 
-        tv_cid = await pan115.get_or_create_folder(root_cid, tv_root)
-        genre_cid = await pan115.get_or_create_folder(tv_cid, genre)
-        title_cid = await pan115.get_or_create_folder(genre_cid, title_folder)
-        season_cid = await pan115.get_or_create_folder(title_cid, season_dir)
+        tv_cid = await self._cached_get_or_create_folder(
+            pan115, root_cid, tv_root, folder_cache
+        )
+        genre_cid = await self._cached_get_or_create_folder(
+            pan115, tv_cid, genre, folder_cache
+        )
+        title_cid = await self._cached_get_or_create_folder(
+            pan115, genre_cid, title_folder, folder_cache
+        )
+        season_cid = await self._cached_get_or_create_folder(
+            pan115, title_cid, season_dir, folder_cache
+        )
         if folder_cache is not None:
             folder_cache[cache_key] = season_cid
         return season_cid
 
     # ---------- TMDB 识别 ----------
 
-    async def identify_media(self, parsed: dict[str, Any]) -> dict[str, Any] | None:
+    async def identify_media(
+        self,
+        parsed: dict[str, Any],
+        *,
+        id_cache: dict[tuple[str, int], dict[str, Any] | None] | None = None,
+        search_cache: dict[tuple[str, str, int | None], list[Any]] | None = None,
+    ) -> dict[str, Any] | None:
         media_type = str(parsed.get("media_type") or "movie")
         year_val = parsed.get("year")
         year = int(year_val) if str(year_val or "").isdigit() else None
@@ -1956,7 +2202,10 @@ class ArchiveService:
         used_query = queries[0]
         for query_title in queries:
             items = await self._search_tmdb_items(
-                query=query_title, media_type=media_type, year=year
+                query=query_title,
+                media_type=media_type,
+                year=year,
+                cache=search_cache,
             )
             if items:
                 first = items[0] if isinstance(items[0], dict) else None
@@ -1969,50 +2218,33 @@ class ArchiveService:
         if not isinstance(tmdb_id, int):
             return None
 
-        detail = (
-            await tmdb_service.get_movie_detail(tmdb_id)
-            if media_type == "movie"
-            else await tmdb_service.get_tv_detail(tmdb_id)
+        cached = await self._identify_by_tmdb_id(
+            tmdb_id, media_type, cache=id_cache
         )
-        title = pick_preferred_chinese_title(
-            str(
-                detail.get("title")
-                or detail.get("name")
-                or first.get("title")
-                or first.get("name")
-                or used_query
-            ).strip()
-        )
-        release_date = str(
-            detail.get("release_date") or detail.get("first_air_date") or ""
-        ).strip()
-        year_text = (
-            release_date[:4]
-            if len(release_date) >= 4
-            else str(parsed.get("year") or "")
-        )
-        genre_name = self._extract_genre_name(detail, media_type)
-        subdirs = self._get_archive_subdirs()
-        region_name = (
-            self._extract_movie_region(detail, subdirs=subdirs)
-            if media_type == "movie"
-            else self._extract_tv_category(detail, subdirs=subdirs)
-        )
-
-        return {
-            "tmdb_id": tmdb_id,
-            "title": title,
-            "year": year_text,
-            "genre_name": genre_name,
-            "region_name": region_name,
-        }
+        if not cached:
+            return None
+        if not cached.get("title"):
+            cached["title"] = pick_preferred_chinese_title(
+                str(first.get("title") or first.get("name") or used_query).strip()
+            )
+        if not cached.get("year"):
+            cached["year"] = str(parsed.get("year") or "")
+        return cached
 
     async def _identify_by_tmdb_id(
-        self, tmdb_id: int, media_type: str
+        self,
+        tmdb_id: int,
+        media_type: str,
+        *,
+        cache: dict[tuple[str, int], dict[str, Any] | None] | None = None,
     ) -> dict[str, Any] | None:
         if not tmdb_id or int(tmdb_id) <= 0:
             return None
         normalized_type = "tv" if str(media_type or "") == "tv" else "movie"
+        cache_key = (normalized_type, int(tmdb_id))
+        if cache is not None and cache_key in cache:
+            cached = cache[cache_key]
+            return dict(cached) if isinstance(cached, dict) else None
         try:
             detail = (
                 await tmdb_service.get_movie_detail(int(tmdb_id))
@@ -2020,8 +2252,12 @@ class ArchiveService:
                 else await tmdb_service.get_tv_detail(int(tmdb_id))
             )
         except Exception:
+            if cache is not None:
+                cache[cache_key] = None
             return None
         if not isinstance(detail, dict) or not detail:
+            if cache is not None:
+                cache[cache_key] = None
             return None
 
         title = pick_preferred_chinese_title(
@@ -2041,13 +2277,16 @@ class ArchiveService:
             if normalized_type == "movie"
             else self._extract_tv_category(detail, subdirs=subdirs)
         )
-        return {
+        result = {
             "tmdb_id": int(tmdb_id),
             "title": title,
             "year": year_text,
             "genre_name": genre_name,
             "region_name": region_name,
         }
+        if cache is not None:
+            cache[cache_key] = dict(result)
+        return result
 
     @staticmethod
     def _extract_tmdb_item_year(item: dict[str, Any]) -> int | None:
@@ -2088,8 +2327,17 @@ class ArchiveService:
         return []
 
     async def _search_tmdb_items(
-        self, *, query: str, media_type: str, year: int | None
+        self,
+        *,
+        query: str,
+        media_type: str,
+        year: int | None,
+        cache: dict[tuple[str, str, int | None], list[Any]] | None = None,
     ) -> list[Any]:
+        cache_key = (str(media_type or "movie"), str(query or ""), year)
+        if cache is not None and cache_key in cache:
+            return list(cache[cache_key])
+
         result = await tmdb_service.search_by_media_type(
             query=query,
             media_type=media_type,
@@ -2099,11 +2347,18 @@ class ArchiveService:
         items = result.get("results") if isinstance(result.get("results"), list) else []
         if items:
             if year is None:
+                if cache is not None:
+                    cache[cache_key] = list(items)
                 return items
             ranked = self._rank_tmdb_items_by_year(items, year)
             # 年份检索已由 TMDB 过滤时，若条目缺日期字段则仍信任原结果
-            return ranked or items
+            resolved = ranked or items
+            if cache is not None:
+                cache[cache_key] = list(resolved)
+            return resolved
         if year is None:
+            if cache is not None:
+                cache[cache_key] = []
             return []
         result = await tmdb_service.search_by_media_type(
             query=query,
@@ -2115,7 +2370,10 @@ class ArchiveService:
             result.get("results") if isinstance(result.get("results"), list) else []
         )
         # 无年份过滤的回退必须严格按解析年份筛选，避免 Cold War 串到同名旧作
-        return self._rank_tmdb_items_by_year(fallback_items, year)
+        ranked = self._rank_tmdb_items_by_year(fallback_items, year)
+        if cache is not None:
+            cache[cache_key] = list(ranked)
+        return ranked
 
     # ---------- 文件名解析 ----------
 
