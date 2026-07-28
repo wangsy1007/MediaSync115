@@ -750,6 +750,10 @@ onBeforeUnmount(() => {
 
 @media (max-width: 768px) {
   .recommend-group {
+    .row-shell .side-scroll-btn {
+      display: none !important;
+    }
+
     .skeleton-row {
       gap: 10px;
     }
@@ -781,6 +785,10 @@ onBeforeUnmount(() => {
 }
 
 @media (hover: none) {
+  .recommend-group .row-shell .side-scroll-btn {
+    display: none !important;
+  }
+
   .recommend-group .recommend-card .poster-wrapper {
     .explore-card-actions {
       opacity: 0;
