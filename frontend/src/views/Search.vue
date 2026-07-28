@@ -137,7 +137,7 @@
             data-card-actions-host="1"
             shadow="hover"
           >
-            <div class="poster-wrapper" @click.stop="onSearchPosterActivate(item)">
+            <div class="poster-wrapper" @click.stop="onSearchPosterActivate(item, $event)">
               <img
                 :src="getPosterUrl(item.poster_path)"
                 :alt="item.name || item.title"
@@ -1148,7 +1148,7 @@ const endDrag = (event) => {
   const movedScrollDistance = row
     ? Math.abs(row.scrollLeft - dragState.value.startScrollLeft)
     : 0
-  if (dragState.value.moved && dragState.value.movedDistance > 16 && movedScrollDistance > 10) {
+  if (dragState.value.moved && dragState.value.movedDistance > 24 && movedScrollDistance > 16) {
     lastDragAt.value = Date.now()
   }
   dragState.value = {
@@ -1593,8 +1593,8 @@ const handleItemClick = (item) => {
 
 const { isActionsRevealed, handlePosterActivate, handleDetailActivate } = useCardActionReveal()
 
-const onSearchPosterActivate = (item) => {
-  handlePosterActivate(`${item?.source_service}-${item?.id}`, () => handleItemClick(item))
+const onSearchPosterActivate = (item, event) => {
+  handlePosterActivate(`${item?.source_service}-${item?.id}`, () => handleItemClick(item), event)
 }
 
 const onSearchDetailActivate = (item) => {
@@ -1610,7 +1610,23 @@ const warmupPan115Resources = (mediaType, tmdbId) => {
   searchApi.getMoviePan115(tmdbId).catch(() => {})
 }
 
+const normalizeMaoyanId = (value) => {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+  const stripped = raw.replace(/^maoyan:/i, '').trim()
+  return stripped || raw
+}
+
 const resolveExploreItemRoute = async (item) => {
+  const cachedTmdbId = toValidTmdbId(item?.resolved_tmdb_id || item?.tmdb_id)
+  const cachedType = item?.resolved_media_type || item?.media_type
+  if (cachedTmdbId && (exploreSource.value === 'tmdb' || item?.resolved_tmdb_id)) {
+    return {
+      media_type: cachedType === 'tv' ? 'tv' : 'movie',
+      tmdb_id: cachedTmdbId
+    }
+  }
+
   const directTmdbId = toValidTmdbId(item.tmdb_id)
   const directType = item.media_type === 'tv' ? 'tv' : 'movie'
   if (exploreSource.value === 'tmdb' && directTmdbId) {
@@ -1622,7 +1638,10 @@ const resolveExploreItemRoute = async (item) => {
       source: exploreSource.value,
       id: item.id,
       douban_id: exploreSource.value === 'douban' ? (item.douban_id || item.id) : '',
-      maoyan_id: exploreSource.value === 'maoyan' ? (item.maoyan_id || item.id) : '',
+      maoyan_id:
+        exploreSource.value === 'maoyan'
+          ? normalizeMaoyanId(item.maoyan_id || item.id)
+          : '',
       title: item.title || item.name || '',
       original_title: item.original_title || '',
       year: item.year || getYear(item) || '',
@@ -1642,6 +1661,19 @@ const resolveExploreItemRoute = async (item) => {
       data = retryResponse?.data || data
     }
 
+    // 猫眼条目偶发年份干扰匹配：失败后去掉 year 再试一次
+    if (
+      !data?.resolved &&
+      exploreSource.value === 'maoyan' &&
+      payload.year
+    ) {
+      const retryResponse = await searchApi.resolveExploreItem({
+        ...payload,
+        year: ''
+      })
+      data = retryResponse?.data || data
+    }
+
     const resolvedTmdbId = toValidTmdbId(data?.tmdb_id)
     if (!data?.resolved || !resolvedTmdbId) {
       return {
@@ -1651,6 +1683,9 @@ const resolveExploreItemRoute = async (item) => {
       }
     }
     const resolvedType = data.media_type === 'tv' ? 'tv' : 'movie'
+    item.resolved_tmdb_id = resolvedTmdbId
+    item.resolved_media_type = resolvedType
+    item.tmdb_id = resolvedTmdbId
     return { media_type: resolvedType, tmdb_id: resolvedTmdbId }
   } catch (error) {
     console.error('Failed to resolve explore item route:', error)
@@ -1663,29 +1698,32 @@ const resolveExploreItemRoute = async (item) => {
 }
 
 const handleExploreItemClick = async (item) => {
-  if (Date.now() - lastDragAt.value < 100) return
+  // 横向拖拽松手后的误触点击：缩短静默窗口，避免“点了没反应”
+  if (Date.now() - lastDragAt.value < 80) return
 
+  if (item?._resolvingRoute) return
   if (exploreSource.value === 'douban' && goToDoubanDetail(item)) {
     return
   }
-  
-  const routeInfo = await resolveExploreItemRoute(item)
-  if (!routeInfo?.tmdb_id) {
-    ElMessage.warning(getResolveFailureMessage(routeInfo?.reason))
-    return
-  }
 
-  const target = {
-    key: `${routeInfo.media_type}:${routeInfo.tmdb_id}`,
-    mediaType: routeInfo.media_type,
-    tmdbId: toValidTmdbId(routeInfo.tmdb_id)
+  item._resolvingRoute = true
+  try {
+    const routeInfo = await resolveExploreItemRoute(item)
+    if (!routeInfo?.tmdb_id) {
+      ElMessage.warning(getResolveFailureMessage(routeInfo?.reason))
+      return
+    }
+
+    const tmdbId = toValidTmdbId(routeInfo.tmdb_id)
+    if (!tmdbId) {
+      ElMessage.warning('未找到有效的 TMDB 详情 ID')
+      return
+    }
+
+    goToDetail(routeInfo.media_type, tmdbId)
+  } finally {
+    item._resolvingRoute = false
   }
-  if (!target.tmdbId) {
-    ElMessage.warning('未找到有效的 TMDB 详情 ID')
-    return
-  }
-  
-  goToDetail(routeInfo.media_type, routeInfo.tmdb_id)
 }
 
 const refreshFollowedPersonIds = async () => {

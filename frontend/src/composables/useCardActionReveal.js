@@ -6,22 +6,25 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
  * - 再点一次海报：进入详情
  * - 点标题区：直接进详情
  * - 点空白处：收起按钮
- * 桌面端点海报或标题均可进详情，悬停显示操作按钮。
+ * 桌面端 / 鼠标点击：直接进详情（含带触摸屏的 Windows 笔记本）。
  */
 export function useCardActionReveal() {
   const revealedKey = ref('')
   const isTouchUi = ref(false)
   const mediaQueries = []
+  let lastPointerType = ''
 
   const syncTouchUi = () => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
       isTouchUi.value = false
       return
     }
+    // 不要用 maxTouchPoints：很多 Windows 笔记本有触摸屏但主要用鼠标，
+    // 否则会把首次点击当成“展开按钮”而进不了详情。
     const noHover = window.matchMedia('(hover: none)').matches
     const coarse = window.matchMedia('(pointer: coarse)').matches
-    const maxTouchPoints = Number(navigator.maxTouchPoints || 0) > 0
-    isTouchUi.value = noHover || coarse || maxTouchPoints
+    const fine = window.matchMedia('(pointer: fine)').matches
+    isTouchUi.value = noHover || (coarse && !fine)
   }
 
   const cardKey = (value) => String(value ?? '')
@@ -41,12 +44,24 @@ export function useCardActionReveal() {
     revealedKey.value = id
   }
 
+  const isDirectNavigatePointer = (event) => {
+    const type = String(
+      event?.pointerType || lastPointerType || ''
+    ).toLowerCase()
+    // 鼠标 / 触控笔走桌面逻辑；纯触摸才走两段式
+    if (type === 'mouse' || type === 'pen') return true
+    if (type === 'touch') return false
+    return !isTouchUi.value
+  }
+
   /**
-   * 点海报：移动端首次展开操作，再次点击进入详情；桌面端直接进入详情。
+   * 点海报：触摸设备首次展开操作，再次点击进入详情；
+   * 鼠标或桌面端直接进入详情。
    * @returns {boolean} 是否已触发导航
    */
-  const handlePosterActivate = (key, onNavigate) => {
-    if (!isTouchUi.value) {
+  const handlePosterActivate = (key, onNavigate, event) => {
+    if (isDirectNavigatePointer(event)) {
+      clearRevealed()
       onNavigate?.()
       return true
     }
@@ -74,7 +89,11 @@ export function useCardActionReveal() {
   const handleCardActivate = handlePosterActivate
 
   const onDocumentPointerDown = (event) => {
+    if (event?.pointerType) {
+      lastPointerType = String(event.pointerType)
+    }
     if (!isTouchUi.value || !revealedKey.value) return
+    // 鼠标点击空白处时也收起；但鼠标点卡片会直接导航，不依赖此状态
     const target = event?.target
     if (!(target instanceof Element)) {
       clearRevealed()
@@ -87,7 +106,7 @@ export function useCardActionReveal() {
   onMounted(() => {
     syncTouchUi()
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-      for (const query of ['(hover: none)', '(pointer: coarse)']) {
+      for (const query of ['(hover: none)', '(pointer: coarse)', '(pointer: fine)']) {
         const media = window.matchMedia(query)
         const onChange = () => syncTouchUi()
         if (typeof media.addEventListener === 'function') {

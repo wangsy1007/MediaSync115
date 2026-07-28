@@ -56,7 +56,7 @@
           shadow="hover"
           :body-style="{ padding: '0' }"
         >
-          <div class="poster-wrapper" @click.stop="handlePosterClick(item)">
+          <div class="poster-wrapper" @click.stop="handlePosterClick(item, $event)">
             <img
               :key="item.poster_url || item.poster_path || item.id"
               :src="getPosterUrl(item.poster_url || item.poster_path, { compact: itemIndex >= PRIORITY_POSTER_COUNT })"
@@ -173,8 +173,8 @@ const { isActionsRevealed, handlePosterActivate, handleDetailActivate } = useCar
 const cardActionKey = (item) =>
   `${props.section?.key || 'section'}-${item?.id ?? ''}-${item?.rank ?? ''}`
 
-const handlePosterClick = (item) => {
-  handlePosterActivate(cardActionKey(item), () => emit('item-click', item))
+const handlePosterClick = (item, event) => {
+  handlePosterActivate(cardActionKey(item), () => emit('item-click', item), event)
 }
 
 const handleDetailClick = (item) => {

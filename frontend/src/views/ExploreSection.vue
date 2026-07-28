@@ -29,7 +29,7 @@
         shadow="hover"
         :body-style="{ padding: '0' }"
       >
-        <div class="poster-wrap" @click.stop="onPosterActivate(item)">
+        <div class="poster-wrap" @click.stop="onPosterActivate(item, $event)">
           <img
             :key="item.poster_url || item.poster_path || item.id"
             :src="getPosterUrl(item.poster_url || item.poster_path, { compact: itemIndex >= PRIORITY_POSTER_COUNT })"
@@ -657,7 +657,22 @@ const getResolveFailureMessage = (reason) => {
   return '未能唯一匹配到 TMDB 详情，请稍后重试'
 }
 
+const normalizeMaoyanId = (value) => {
+  const raw = String(value ?? '').trim()
+  if (!raw) return ''
+  const stripped = raw.replace(/^maoyan:/i, '').trim()
+  return stripped || raw
+}
+
 const resolveItemRoute = async (item) => {
+  const cachedTmdbId = toValidTmdbId(item?.resolved_tmdb_id || item?.tmdb_id)
+  if (cachedTmdbId && (exploreSource.value === 'tmdb' || item?.resolved_tmdb_id)) {
+    return {
+      mediaType: (item?.resolved_media_type || item?.media_type) === 'tv' ? 'tv' : 'movie',
+      tmdbId: cachedTmdbId
+    }
+  }
+
   const directTmdbId = toValidTmdbId(item.tmdb_id)
   const directType = item.media_type === 'tv' ? 'tv' : 'movie'
   if (exploreSource.value === 'tmdb' && directTmdbId) {
@@ -669,7 +684,10 @@ const resolveItemRoute = async (item) => {
       source: exploreSource.value,
       id: item.id,
       douban_id: exploreSource.value === 'douban' ? (item.douban_id || item.id) : '',
-      maoyan_id: exploreSource.value === 'maoyan' ? (item.maoyan_id || item.id) : '',
+      maoyan_id:
+        exploreSource.value === 'maoyan'
+          ? normalizeMaoyanId(item.maoyan_id || item.id)
+          : '',
       title: item.title || '',
       original_title: item.original_title || '',
       year: item.year || '',
@@ -689,6 +707,14 @@ const resolveItemRoute = async (item) => {
       data = retryResponse?.data || data
     }
 
+    if (!data?.resolved && exploreSource.value === 'maoyan' && payload.year) {
+      const retryResponse = await searchApi.resolveExploreItem({
+        ...payload,
+        year: ''
+      })
+      data = retryResponse?.data || data
+    }
+
     const resolvedTmdbId = toValidTmdbId(data?.tmdb_id)
     if (!data?.resolved || !resolvedTmdbId) {
       return {
@@ -698,6 +724,9 @@ const resolveItemRoute = async (item) => {
       }
     }
     const resolvedType = data.media_type === 'tv' ? 'tv' : 'movie'
+    item.resolved_tmdb_id = resolvedTmdbId
+    item.resolved_media_type = resolvedType
+    item.tmdb_id = resolvedTmdbId
     return { mediaType: resolvedType, tmdbId: resolvedTmdbId }
   } catch {
     return {
@@ -717,10 +746,10 @@ const warmupPan115 = (mediaType, tmdbId) => {
   searchApi.getMoviePan115(tmdbId).catch(() => {})
 }
 
-const onPosterActivate = (item) => {
+const onPosterActivate = (item, event) => {
   handlePosterActivate(buildExploreItemKey(item) || item?.id, () => {
     handleItemClick(item)
-  })
+  }, event)
 }
 
 const onDetailActivate = (item) => {
@@ -728,29 +757,35 @@ const onDetailActivate = (item) => {
 }
 
 const handleItemClick = async (item) => {
+  if (item?._resolvingRoute) return
   if (exploreSource.value === 'douban' && goToDoubanDetail(item)) {
     return
   }
 
-  const routeInfo = await resolveItemRoute(item)
-  if (!routeInfo?.tmdbId) {
-    ElMessage.warning(getResolveFailureMessage(routeInfo?.reason))
-    return
-  }
+  item._resolvingRoute = true
+  try {
+    const routeInfo = await resolveItemRoute(item)
+    if (!routeInfo?.tmdbId) {
+      ElMessage.warning(getResolveFailureMessage(routeInfo?.reason))
+      return
+    }
 
-  rememberExploreSectionReturn(item)
-  warmupPan115(routeInfo.mediaType, routeInfo.tmdbId)
-  if (routeInfo.mediaType === 'tv') {
+    rememberExploreSectionReturn(item)
+    warmupPan115(routeInfo.mediaType, routeInfo.tmdbId)
+    if (routeInfo.mediaType === 'tv') {
+      router.push({
+        path: `/tv/${routeInfo.tmdbId}`,
+        query: { from: route.fullPath }
+      })
+      return
+    }
     router.push({
-      path: `/tv/${routeInfo.tmdbId}`,
+      path: `/movie/${routeInfo.tmdbId}`,
       query: { from: route.fullPath }
     })
-    return
+  } finally {
+    item._resolvingRoute = false
   }
-  router.push({
-    path: `/movie/${routeInfo.tmdbId}`,
-    query: { from: route.fullPath }
-  })
 }
 
 const handleExploreSubscribe = async (item) => {
