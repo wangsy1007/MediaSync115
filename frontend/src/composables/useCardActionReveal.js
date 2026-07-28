@@ -1,20 +1,25 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 
 /**
- * 移动端影视卡片：先点一次展开订阅/转存，再点按钮操作；
- * 已展开时再点卡片本体则进入详情。桌面端（可 hover）不拦截导航。
+ * 移动端影视卡片交互：
+ * - 点海报：展开/收起订阅与转存按钮（不进详情）
+ * - 点标题区：直接进详情
+ * 桌面端点海报或标题均可进详情，悬停显示操作按钮。
  */
 export function useCardActionReveal() {
   const revealedKey = ref('')
   const isTouchUi = ref(false)
-  let hoverMedia = null
+  const mediaQueries = []
 
   const syncTouchUi = () => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
       isTouchUi.value = false
       return
     }
-    isTouchUi.value = window.matchMedia('(hover: none)').matches
+    const noHover = window.matchMedia('(hover: none)').matches
+    const coarse = window.matchMedia('(pointer: coarse)').matches
+    const maxTouchPoints = Number(navigator.maxTouchPoints || 0) > 0
+    isTouchUi.value = noHover || coarse || maxTouchPoints
   }
 
   const cardKey = (value) => String(value ?? '')
@@ -35,27 +40,32 @@ export function useCardActionReveal() {
   }
 
   /**
-   * @param {string|number} key
-   * @param {() => void} onNavigate 进入详情
+   * 点海报：移动端只展开/收起操作；桌面端进入详情。
    * @returns {boolean} 是否已触发导航
    */
-  const handleCardActivate = (key, onNavigate) => {
+  const handlePosterActivate = (key, onNavigate) => {
     if (!isTouchUi.value) {
       onNavigate?.()
       return true
     }
     const id = cardKey(key)
-    if (!id) {
-      onNavigate?.()
-      return true
-    }
+    if (!id) return false
     if (revealedKey.value === id) {
-      onNavigate?.()
-      return true
+      revealedKey.value = ''
+      return false
     }
     revealedKey.value = id
     return false
   }
+
+  /** 点标题区：始终进入详情。 */
+  const handleDetailActivate = (onNavigate) => {
+    clearRevealed()
+    onNavigate?.()
+  }
+
+  /** @deprecated 兼容旧调用，等同 handlePosterActivate */
+  const handleCardActivate = handlePosterActivate
 
   const onDocumentPointerDown = (event) => {
     if (!isTouchUi.value || !revealedKey.value) return
@@ -71,28 +81,30 @@ export function useCardActionReveal() {
   onMounted(() => {
     syncTouchUi()
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-      hoverMedia = window.matchMedia('(hover: none)')
-      const onChange = () => syncTouchUi()
-      if (typeof hoverMedia.addEventListener === 'function') {
-        hoverMedia.addEventListener('change', onChange)
-      } else if (typeof hoverMedia.addListener === 'function') {
-        hoverMedia.addListener(onChange)
+      for (const query of ['(hover: none)', '(pointer: coarse)']) {
+        const media = window.matchMedia(query)
+        const onChange = () => syncTouchUi()
+        if (typeof media.addEventListener === 'function') {
+          media.addEventListener('change', onChange)
+        } else if (typeof media.addListener === 'function') {
+          media.addListener(onChange)
+        }
+        mediaQueries.push({ media, onChange })
       }
-      hoverMedia._onChange = onChange
     }
     document.addEventListener('pointerdown', onDocumentPointerDown, true)
   })
 
   onBeforeUnmount(() => {
     document.removeEventListener('pointerdown', onDocumentPointerDown, true)
-    if (hoverMedia?._onChange) {
-      if (typeof hoverMedia.removeEventListener === 'function') {
-        hoverMedia.removeEventListener('change', hoverMedia._onChange)
-      } else if (typeof hoverMedia.removeListener === 'function') {
-        hoverMedia.removeListener(hoverMedia._onChange)
+    for (const entry of mediaQueries) {
+      if (typeof entry.media.removeEventListener === 'function') {
+        entry.media.removeEventListener('change', entry.onChange)
+      } else if (typeof entry.media.removeListener === 'function') {
+        entry.media.removeListener(entry.onChange)
       }
     }
-    hoverMedia = null
+    mediaQueries.length = 0
   })
 
   return {
@@ -101,6 +113,8 @@ export function useCardActionReveal() {
     isActionsRevealed,
     revealActions,
     clearRevealed,
+    handlePosterActivate,
+    handleDetailActivate,
     handleCardActivate
   }
 }

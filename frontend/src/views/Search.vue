@@ -136,9 +136,8 @@
             :body-style="{ padding: '0' }"
             data-card-actions-host="1"
             shadow="hover"
-            @click="onSearchCardActivate(item)"
           >
-            <div class="poster-wrapper">
+            <div class="poster-wrapper" @click.stop="onSearchPosterActivate(item)">
               <img
                 :src="getPosterUrl(item.poster_path)"
                 :alt="item.name || item.title"
@@ -206,7 +205,7 @@
                 </el-button>
               </div>
             </div>
-            <div class="media-info">
+            <div class="media-info" @click.stop="onSearchDetailActivate(item)">
               <h3 class="title">{{ item.name || item.title }}</h3>
               <p class="year">
                 <span>{{ getYear(item) || '-' }}</span>
@@ -1592,10 +1591,14 @@ const handleItemClick = (item) => {
   }
 }
 
-const { isActionsRevealed, handleCardActivate } = useCardActionReveal()
+const { isActionsRevealed, handlePosterActivate, handleDetailActivate } = useCardActionReveal()
 
-const onSearchCardActivate = (item) => {
-  handleCardActivate(`${item?.source_service}-${item?.id}`, () => handleItemClick(item))
+const onSearchPosterActivate = (item) => {
+  handlePosterActivate(`${item?.source_service}-${item?.id}`, () => handleItemClick(item))
+}
+
+const onSearchDetailActivate = (item) => {
+  handleDetailActivate(() => handleItemClick(item))
 }
 
 const warmupPan115Resources = (mediaType, tmdbId) => {
@@ -2489,6 +2492,7 @@ onBeforeUnmount(() => {
 
     .media-info {
       padding: 14px;
+      cursor: pointer;
 
       .title {
         margin: 0 0 6px;
@@ -2800,12 +2804,25 @@ onBeforeUnmount(() => {
       pointer-events: none;
     }
 
+    .media-card:hover .poster-wrapper .action-buttons,
+    .media-card:focus-within .poster-wrapper .action-buttons {
+      opacity: 0;
+      pointer-events: none;
+    }
+
     .media-card.actions-revealed .poster-wrapper .action-buttons {
       opacity: 1;
       pointer-events: auto;
     }
 
     .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 10px);
+    }
+
+    .explore-section .recommend-group .recommend-card:hover .poster-wrapper .explore-card-actions,
+    .explore-section .recommend-group .recommend-card:focus-within .poster-wrapper .explore-card-actions {
       opacity: 0;
       pointer-events: none;
       transform: translate(-50%, 10px);

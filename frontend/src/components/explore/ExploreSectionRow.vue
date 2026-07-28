@@ -55,9 +55,8 @@
           data-card-actions-host="1"
           shadow="hover"
           :body-style="{ padding: '0' }"
-          @click="handleCardClick(item)"
         >
-          <div class="poster-wrapper">
+          <div class="poster-wrapper" @click.stop="handlePosterClick(item)">
             <img
               :key="item.poster_url || item.poster_path || item.id"
               :src="getPosterUrl(item.poster_url || item.poster_path, { compact: itemIndex >= PRIORITY_POSTER_COUNT })"
@@ -102,7 +101,7 @@
               </el-button>
             </div>
           </div>
-          <div class="card-info">
+          <div class="card-info" @click.stop="handleDetailClick(item)">
             <h4 class="title">{{ item.title }}</h4>
           </div>
         </el-card>
@@ -169,13 +168,17 @@ const props = defineProps({
 
 const emit = defineEmits(['item-click', 'subscribe', 'save', 'merge-emby-status', 'merge-feiniu-status', 'open-section'])
 
-const { isActionsRevealed, handleCardActivate } = useCardActionReveal()
+const { isActionsRevealed, handlePosterActivate, handleDetailActivate } = useCardActionReveal()
 
 const cardActionKey = (item) =>
   `${props.section?.key || 'section'}-${item?.id ?? ''}-${item?.rank ?? ''}`
 
-const handleCardClick = (item) => {
-  handleCardActivate(cardActionKey(item), () => emit('item-click', item))
+const handlePosterClick = (item) => {
+  handlePosterActivate(cardActionKey(item), () => emit('item-click', item))
+}
+
+const handleDetailClick = (item) => {
+  handleDetailActivate(() => emit('item-click', item))
 }
 
 const HOME_SECTION_LIMIT = 12
@@ -708,6 +711,7 @@ onBeforeUnmount(() => {
 
     .card-info {
       padding: 12px 14px 14px;
+      cursor: pointer;
 
       .title {
         margin: 0;
@@ -783,6 +787,13 @@ onBeforeUnmount(() => {
       pointer-events: none;
       transform: translate(-50%, 10px);
     }
+  }
+
+  .recommend-group .recommend-card:hover .poster-wrapper .explore-card-actions,
+  .recommend-group .recommend-card:focus-within .poster-wrapper .explore-card-actions {
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 10px);
   }
 
   .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions {

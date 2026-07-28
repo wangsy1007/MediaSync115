@@ -28,9 +28,8 @@
         data-card-actions-host="1"
         shadow="hover"
         :body-style="{ padding: '0' }"
-        @click="onCardActivate(item)"
       >
-        <div class="poster-wrap">
+        <div class="poster-wrap" @click.stop="onPosterActivate(item)">
           <img
             :key="item.poster_url || item.poster_path || item.id"
             :src="getPosterUrl(item.poster_url || item.poster_path, { compact: itemIndex >= PRIORITY_POSTER_COUNT })"
@@ -75,7 +74,7 @@
             </el-button>
           </div>
         </div>
-        <div class="card-info">
+        <div class="card-info" @click.stop="onDetailActivate(item)">
           <h4>{{ item.title }}</h4>
         </div>
       </el-card>
@@ -199,7 +198,7 @@ const queueActiveSaveKeys = ref(new Set())
 let exploreQueuePollTimer = null
 let exploreQueuePolling = false
 
-const { isActionsRevealed, handleCardActivate } = useCardActionReveal()
+const { isActionsRevealed, handlePosterActivate, handleDetailActivate } = useCardActionReveal()
 
 const toValidTmdbId = (rawId) => {
   const id = Number(rawId)
@@ -718,10 +717,14 @@ const warmupPan115 = (mediaType, tmdbId) => {
   searchApi.getMoviePan115(tmdbId).catch(() => {})
 }
 
-const onCardActivate = (item) => {
-  handleCardActivate(buildExploreItemKey(item) || item?.id, () => {
+const onPosterActivate = (item) => {
+  handlePosterActivate(buildExploreItemKey(item) || item?.id, () => {
     handleItemClick(item)
   })
+}
+
+const onDetailActivate = (item) => {
+  handleDetailActivate(() => handleItemClick(item))
 }
 
 const handleItemClick = async (item) => {
@@ -1447,6 +1450,7 @@ onBeforeUnmount(() => {
 
     .card-info {
       padding: 10px;
+      cursor: pointer;
 
       h4 {
         margin: 0;
@@ -1522,6 +1526,13 @@ onBeforeUnmount(() => {
 
 @media (hover: none) {
   .explore-section-page .movie-card .poster-wrap .explore-card-actions {
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 10px);
+  }
+
+  .explore-section-page .movie-card:hover .poster-wrap .explore-card-actions,
+  .explore-section-page .movie-card:focus-within .poster-wrap .explore-card-actions {
     opacity: 0;
     pointer-events: none;
     transform: translate(-50%, 10px);
