@@ -21,6 +21,9 @@
         class="movie-card"
         :class="{
           'just-saved': item.justSaved,
+          'route-resolving': isRouteResolving(item),
+          'card-ui-mobile': isMobileCardUi,
+          'card-ui-desktop': !isMobileCardUi,
           'actions-revealed': isActionsRevealed(buildExploreItemKey(item) || item.id)
         }"
         :data-item-key="buildExploreItemKey(item)"
@@ -49,6 +52,9 @@
             :in-emby="item.isInEmby"
             :in-feiniu="item.isInFeiniu"
           />
+          <div v-if="isRouteResolving(item)" class="route-resolving-mask">
+            <el-icon class="is-loading"><Loading /></el-icon>
+          </div>
           <div class="explore-card-actions">
             <el-button
               class="explore-action-btn"
@@ -110,7 +116,7 @@ import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, reactive, 
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { searchApi, subscriptionApi } from '@/api'
-import { Star, FolderAdd } from '@element-plus/icons-vue'
+import { Star, FolderAdd, Loading } from '@element-plus/icons-vue'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import TmdbSetupPrompt from '@/components/explore/TmdbSetupPrompt.vue'
 
@@ -198,7 +204,14 @@ const queueActiveSaveKeys = ref(new Set())
 let exploreQueuePollTimer = null
 let exploreQueuePolling = false
 
-const { isActionsRevealed, handlePosterActivate, handleDetailActivate } = useCardActionReveal()
+const { isMobileCardUi, isActionsRevealed, handlePosterClick, handleDetailClick } = useCardActionReveal()
+
+/** 正在解析 TMDB 路由的条目 key（解析期间在卡片上显示 loading，避免用户以为“点了没反应”而重复点击） */
+const resolvingItemKey = ref('')
+const isRouteResolving = (item) => {
+  const key = String(buildExploreItemKey(item) || item?.id || '')
+  return Boolean(key) && resolvingItemKey.value === key
+}
 
 const toValidTmdbId = (rawId) => {
   const id = Number(rawId)
@@ -758,22 +771,25 @@ const warmupPan115 = (mediaType, tmdbId) => {
 }
 
 const onPosterActivate = (item, event) => {
-  handlePosterActivate(buildExploreItemKey(item) || item?.id, () => {
+  handlePosterClick(buildExploreItemKey(item) || item?.id, () => {
     handleItemClick(item)
   }, event)
 }
 
 const onDetailActivate = (item) => {
-  handleDetailActivate(() => handleItemClick(item))
+  handleDetailClick(() => handleItemClick(item))
 }
 
 const handleItemClick = async (item) => {
-  if (item?._resolvingRoute) return
+  // 注意：allItems 是 shallowRef，条目上的普通属性不具备响应性，
+  // 因此解析中状态必须放在独立的 ref 上，否则无法驱动 loading 反馈。
+  const resolveKey = String(buildExploreItemKey(item) || item?.id || '')
+  if (resolveKey && resolvingItemKey.value === resolveKey) return
   if (exploreSource.value === 'douban' && goToDoubanDetail(item)) {
     return
   }
 
-  item._resolvingRoute = true
+  resolvingItemKey.value = resolveKey
   try {
     const routeInfo = await resolveItemRoute(item)
     if (!routeInfo?.tmdbId) {
@@ -795,7 +811,9 @@ const handleItemClick = async (item) => {
       query: { from: route.fullPath }
     })
   } finally {
-    item._resolvingRoute = false
+    if (resolvingItemKey.value === resolveKey) {
+      resolvingItemKey.value = ''
+    }
   }
 }
 
@@ -1422,6 +1440,10 @@ onBeforeUnmount(() => {
       animation: card-save-flash 1.5s ease;
     }
 
+    &.route-resolving {
+      cursor: progress;
+    }
+
     .poster-wrap {
       position: relative;
       aspect-ratio: 2 / 3;
@@ -1462,6 +1484,24 @@ onBeforeUnmount(() => {
         object-fit: cover;
       }
 
+      .route-resolving-mask {
+        position: absolute;
+        inset: 0;
+        z-index: 6;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        /* 仅作反馈，不参与命中测试，避免遮挡海报点击 */
+        pointer-events: none;
+        background: rgba(4, 16, 30, 0.52);
+        backdrop-filter: blur(2px);
+
+        .el-icon {
+          font-size: 26px;
+          color: #fff;
+        }
+      }
+
       .explore-card-actions {
         position: absolute;
         left: 50%;
@@ -1484,10 +1524,17 @@ onBeforeUnmount(() => {
           box-shadow: 0 6px 18px rgba(0, 0, 0, 0.36);
         }
       }
+    }
 
-      &:hover .explore-card-actions,
-      &:focus-within .explore-card-actions,
-      &.actions-revealed .explore-card-actions {
+    &.card-ui-desktop .poster-wrap {
+      cursor: pointer;
+
+      .explore-card-actions {
+        display: none;
+      }
+
+      &:hover .explore-card-actions {
+        display: flex;
         opacity: 1;
         transform: translate(-50%, 0);
         pointer-events: none;
@@ -1495,6 +1542,22 @@ onBeforeUnmount(() => {
         .explore-action-btn {
           pointer-events: auto;
         }
+      }
+    }
+
+    &.card-ui-mobile .poster-wrap:hover .explore-card-actions {
+      opacity: 0;
+      transform: translate(-50%, 10px);
+      pointer-events: none;
+    }
+
+    &.card-ui-mobile.actions-revealed .poster-wrap .explore-card-actions {
+      opacity: 1;
+      transform: translate(-50%, 0);
+      pointer-events: none;
+
+      .explore-action-btn {
+        pointer-events: auto;
       }
     }
 
@@ -1571,67 +1634,6 @@ onBeforeUnmount(() => {
   .explore-section-page .movie-card .poster-wrap .explore-card-actions .explore-action-btn {
     width: 36px;
     height: 36px;
-  }
-}
-
-@media (min-width: 769px) {
-  .explore-section-page .movie-card {
-    .poster-wrap {
-      cursor: pointer;
-
-      .explore-card-actions {
-        pointer-events: none !important;
-
-        .explore-action-btn {
-          pointer-events: none;
-        }
-      }
-
-      &:hover .explore-card-actions,
-      &:focus-within .explore-card-actions {
-        opacity: 1;
-        transform: translate(-50%, 0);
-        pointer-events: none !important;
-
-        .explore-action-btn {
-          pointer-events: auto;
-        }
-      }
-    }
-
-    &:focus-within:not(:hover) .poster-wrap .explore-card-actions {
-      opacity: 0;
-      pointer-events: none !important;
-    }
-  }
-}
-
-@media (hover: none) {
-  .explore-section-page .movie-card .poster-wrap .explore-card-actions,
-  .explore-section-page .movie-card .poster-wrap .explore-card-actions * {
-    pointer-events: none !important;
-  }
-
-  .explore-section-page .movie-card .poster-wrap .explore-card-actions {
-    opacity: 0;
-    transform: translate(-50%, 10px);
-  }
-
-  .explore-section-page .movie-card:hover .poster-wrap .explore-card-actions,
-  .explore-section-page .movie-card:focus-within .poster-wrap .explore-card-actions {
-    opacity: 0;
-    pointer-events: none !important;
-    transform: translate(-50%, 10px);
-  }
-
-  .explore-section-page .movie-card.actions-revealed .poster-wrap .explore-card-actions,
-  .explore-section-page .movie-card.actions-revealed .poster-wrap .explore-card-actions * {
-    pointer-events: auto !important;
-  }
-
-  .explore-section-page .movie-card.actions-revealed .poster-wrap .explore-card-actions {
-    opacity: 1;
-    transform: translate(-50%, 0);
   }
 }
 </style>

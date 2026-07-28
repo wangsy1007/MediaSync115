@@ -1,44 +1,43 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 
-const DESKTOP_CARD_MIN_WIDTH = '(min-width: 769px)'
+/** 与布局断点一致：≤768 走移动端两段式，≥769 走 PC 一次进详情 */
+const MOBILE_CARD_MAX_WIDTH = '(max-width: 768px)'
 const ACTION_BUTTON_SELECTOR = '.explore-action-btn, .action-btn'
 
 /**
- * 移动端窄屏触控：第一次点海报展开订阅/转存，再点进入详情；点标题直接进详情。
- * PC / 宽屏：海报任意位置一次点击进入详情；悬停仅展示操作按钮，不挡点击。
+ * 影视卡片点击交互（PC / 移动端分离）：
+ *
+ * PC（宽屏）：
+ * - 点海报 / 标题 → 直接进入详情
+ * - 悬停展示订阅 / 转存按钮，点按钮执行对应操作
+ *
+ * 移动端（窄屏）：
+ * - 第一次点海报 → 展开订阅 / 转存
+ * - 再点一次海报 → 进入详情
+ * - 点标题 → 直接进入详情
  */
 export function useCardActionReveal() {
   const revealedKey = ref('')
-  const isTouchUi = ref(false)
+  const isMobileCardUi = ref(false)
   const mediaQueries = []
-  let lastPointerType = ''
 
-  const isDesktopCardUi = () => {
+  const syncMobileCardUi = () => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      return true
-    }
-    return window.matchMedia(DESKTOP_CARD_MIN_WIDTH).matches
-  }
-
-  const syncTouchUi = () => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      isTouchUi.value = false
+      isMobileCardUi.value = false
       return
     }
-    if (isDesktopCardUi()) {
-      isTouchUi.value = false
-      return
-    }
-    const noAnyHover = !window.matchMedia('(any-hover: hover)').matches
-    const coarseOnly =
-      window.matchMedia('(pointer: coarse)').matches &&
-      !window.matchMedia('(any-pointer: fine)').matches
-    isTouchUi.value = noAnyHover || coarseOnly
+    isMobileCardUi.value = window.matchMedia(MOBILE_CARD_MAX_WIDTH).matches
   }
 
   const cardKey = (value) => String(value ?? '')
 
+  const isActionButtonTarget = (event) => {
+    const target = event?.target
+    return target instanceof Element && Boolean(target.closest(ACTION_BUTTON_SELECTOR))
+  }
+
   const isActionsRevealed = (key) => {
+    if (!isMobileCardUi.value) return false
     const id = cardKey(key)
     return Boolean(id) && revealedKey.value === id
   }
@@ -47,53 +46,23 @@ export function useCardActionReveal() {
     revealedKey.value = ''
   }
 
-  const revealActions = (key) => {
-    const id = cardKey(key)
-    if (!id) return
-    revealedKey.value = id
-  }
-
-  const isActionButtonTarget = (event) => {
-    const target = event?.target
-    return target instanceof Element && Boolean(target.closest(ACTION_BUTTON_SELECTOR))
-  }
-
-  const notePointer = (event) => {
-    const type = event?.pointerType
-    if (type) {
-      lastPointerType = String(type)
-      return
-    }
-    if (event?.type === 'mousedown' || typeof event?.button === 'number') {
-      lastPointerType = 'mouse'
-    }
-  }
-
-  const isDirectNavigatePointer = (event) => {
-    if (isDesktopCardUi()) return true
-
-    notePointer(event)
-    const type = String(
-      event?.pointerType || lastPointerType || ''
-    ).toLowerCase()
-    if (type === 'mouse' || type === 'pen') return true
-    if (type === 'touch') return false
-    return !isTouchUi.value
-  }
-
   /**
-   * 点海报：PC 一次进详情；窄屏触控两段式。
+   * 点海报。
    * @returns {boolean} 是否已触发导航
    */
-  const handlePosterActivate = (key, onNavigate, event) => {
+  const handlePosterClick = (key, onNavigate, event) => {
     if (isActionButtonTarget(event)) {
       return false
     }
-    if (isDirectNavigatePointer(event)) {
+
+    // PC：完全不使用两段式，一次进入详情
+    if (!isMobileCardUi.value) {
       clearRevealed()
       onNavigate?.()
       return true
     }
+
+    // 移动端：两段式
     const id = cardKey(key)
     if (!id) {
       onNavigate?.()
@@ -108,18 +77,14 @@ export function useCardActionReveal() {
     return false
   }
 
-  /** 点标题区：始终进入详情。 */
-  const handleDetailActivate = (onNavigate) => {
+  /** 点标题：始终进入详情 */
+  const handleDetailClick = (onNavigate) => {
     clearRevealed()
     onNavigate?.()
   }
 
-  /** @deprecated 兼容旧调用，等同 handlePosterActivate */
-  const handleCardActivate = handlePosterActivate
-
   const onDocumentPointerDown = (event) => {
-    notePointer(event)
-    if (!isTouchUi.value || !revealedKey.value) return
+    if (!isMobileCardUi.value || !revealedKey.value) return
     const target = event?.target
     if (!(target instanceof Element)) {
       clearRevealed()
@@ -129,42 +94,32 @@ export function useCardActionReveal() {
     clearRevealed()
   }
 
-  const onDocumentMouseDown = (event) => {
-    if (!event?.pointerType) {
-      lastPointerType = 'mouse'
+  const onViewportChange = () => {
+    syncMobileCardUi()
+    if (!isMobileCardUi.value) {
+      clearRevealed()
     }
   }
 
-  const onViewportChange = () => syncTouchUi()
-
   onMounted(() => {
-    syncTouchUi()
+    syncMobileCardUi()
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-      for (const query of [
-        DESKTOP_CARD_MIN_WIDTH,
-        '(any-hover: hover)',
-        '(pointer: coarse)',
-        '(any-pointer: fine)'
-      ]) {
-        const media = window.matchMedia(query)
-        const onChange = () => syncTouchUi()
-        if (typeof media.addEventListener === 'function') {
-          media.addEventListener('change', onChange)
-        } else if (typeof media.addListener === 'function') {
-          media.addListener(onChange)
-        }
-        mediaQueries.push({ media, onChange })
+      const media = window.matchMedia(MOBILE_CARD_MAX_WIDTH)
+      const onChange = () => onViewportChange()
+      if (typeof media.addEventListener === 'function') {
+        media.addEventListener('change', onChange)
+      } else if (typeof media.addListener === 'function') {
+        media.addListener(onChange)
       }
+      mediaQueries.push({ media, onChange })
     }
     window.addEventListener('resize', onViewportChange)
     document.addEventListener('pointerdown', onDocumentPointerDown, true)
-    document.addEventListener('mousedown', onDocumentMouseDown, true)
   })
 
   onBeforeUnmount(() => {
     window.removeEventListener('resize', onViewportChange)
     document.removeEventListener('pointerdown', onDocumentPointerDown, true)
-    document.removeEventListener('mousedown', onDocumentMouseDown, true)
     for (const entry of mediaQueries) {
       if (typeof entry.media.removeEventListener === 'function') {
         entry.media.removeEventListener('change', entry.onChange)
@@ -177,14 +132,20 @@ export function useCardActionReveal() {
 
   return {
     revealedKey,
-    isTouchUi,
+    isMobileCardUi,
     isActionsRevealed,
-    revealActions,
     clearRevealed,
-    notePointer,
-    isDesktopCardUi,
-    handlePosterActivate,
-    handleDetailActivate,
-    handleCardActivate
+    handlePosterClick,
+    handleDetailClick,
+    /** @deprecated 兼容旧名 */
+    handlePosterActivate: handlePosterClick,
+    /** @deprecated 兼容旧名 */
+    handleDetailActivate: handleDetailClick,
+    /** @deprecated 兼容旧名 */
+    handleCardActivate: handlePosterClick,
+    /** @deprecated 兼容旧名 */
+    isTouchUi: isMobileCardUi,
+    /** @deprecated 兼容旧名 */
+    isDesktopCardUi: () => !isMobileCardUi.value
   }
 }

@@ -50,13 +50,16 @@
           class="recommend-card"
           :class="{
             'just-saved': item.justSaved,
+            'route-resolving': isRouteResolving(item),
+            'card-ui-mobile': isMobileCardUi,
+            'card-ui-desktop': !isMobileCardUi,
             'actions-revealed': isActionsRevealed(cardActionKey(item))
           }"
           data-card-actions-host="1"
           shadow="hover"
           :body-style="{ padding: '0' }"
         >
-          <div class="poster-wrapper" @click.stop="handlePosterClick(item, $event)">
+          <div class="poster-wrapper" @click.stop="handlePosterActivate(item, $event)">
             <img
               :key="item.poster_url || item.poster_path || item.id"
               :src="getPosterUrl(item.poster_url || item.poster_path, { compact: itemIndex >= PRIORITY_POSTER_COUNT })"
@@ -76,6 +79,9 @@
               :in-emby="item.isInEmby"
               :in-feiniu="item.isInFeiniu"
             />
+            <div v-if="isRouteResolving(item)" class="route-resolving-mask">
+              <el-icon class="is-loading"><Loading /></el-icon>
+            </div>
             <div class="explore-card-actions">
               <el-button
                 class="explore-action-btn"
@@ -101,7 +107,7 @@
               </el-button>
             </div>
           </div>
-          <div class="card-info" @click.stop="handleDetailClick(item)">
+          <div class="card-info" @click.stop="onDetailActivate(item)">
             <h4 class="title">{{ item.title }}</h4>
           </div>
         </el-card>
@@ -112,7 +118,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, ArrowRight, Star, FolderAdd } from '@element-plus/icons-vue'
+import { ArrowLeft, ArrowRight, Star, FolderAdd, Loading } from '@element-plus/icons-vue'
 import { searchApi, subscriptionApi } from '@/api'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
 import { useCardActionReveal } from '@/composables/useCardActionReveal'
@@ -163,22 +169,29 @@ const props = defineProps({
   feiniuStatusMap: {
     type: Object,
     default: () => new Map()
+  },
+  /** 父组件正在解析 TMDB 路由的条目（按对象身份比较），解析期间该卡片显示 loading */
+  resolvingItem: {
+    type: Object,
+    default: null
   }
 })
 
 const emit = defineEmits(['item-click', 'subscribe', 'save', 'merge-emby-status', 'merge-feiniu-status', 'open-section'])
 
-const { isActionsRevealed, handlePosterActivate, handleDetailActivate } = useCardActionReveal()
+const { isMobileCardUi, isActionsRevealed, handlePosterClick, handleDetailClick } = useCardActionReveal()
+
+const isRouteResolving = (item) => Boolean(item) && props.resolvingItem === item
 
 const cardActionKey = (item) =>
   `${props.section?.key || 'section'}-${item?.id ?? ''}-${item?.rank ?? ''}`
 
-const handlePosterClick = (item, event) => {
-  handlePosterActivate(cardActionKey(item), () => emit('item-click', item), event)
+const handlePosterActivate = (item, event) => {
+  handlePosterClick(cardActionKey(item), () => emit('item-click', item), event)
 }
 
-const handleDetailClick = (item) => {
-  handleDetailActivate(() => emit('item-click', item))
+const onDetailActivate = (item) => {
+  handleDetailClick(() => emit('item-click', item))
 }
 
 const HOME_SECTION_LIMIT = 12
@@ -680,6 +693,24 @@ onBeforeUnmount(() => {
         line-height: 1;
       }
 
+      .route-resolving-mask {
+        position: absolute;
+        inset: 0;
+        z-index: 6;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        /* 仅作反馈，不参与命中测试，避免遮挡海报点击 */
+        pointer-events: none;
+        background: rgba(4, 16, 30, 0.52);
+        backdrop-filter: blur(2px);
+
+        .el-icon {
+          font-size: 24px;
+          color: #fff;
+        }
+      }
+
       .explore-card-actions {
         position: absolute;
         left: 50%;
@@ -690,7 +721,6 @@ onBeforeUnmount(() => {
         gap: 10px;
         z-index: 3;
         opacity: 0;
-        /* 容器与子按钮默认均不可点，避免透明层挡住海报 */
         pointer-events: none;
         transition: opacity 0.22s ease, transform 0.22s ease;
 
@@ -702,10 +732,18 @@ onBeforeUnmount(() => {
           pointer-events: none;
         }
       }
+    }
 
-      &:hover .explore-card-actions,
-      &:focus-within .explore-card-actions,
-      &.actions-revealed .explore-card-actions {
+    /* PC：悬停才展示按钮，且不参与命中（仅按钮本身可点） */
+    &.card-ui-desktop .poster-wrapper {
+      cursor: pointer;
+
+      .explore-card-actions {
+        display: none;
+      }
+
+      &:hover .explore-card-actions {
+        display: flex;
         opacity: 1;
         transform: translate(-50%, 0);
         pointer-events: none;
@@ -713,6 +751,23 @@ onBeforeUnmount(() => {
         .explore-action-btn {
           pointer-events: auto;
         }
+      }
+    }
+
+    /* 移动端：禁用 hover 展示，仅 actions-revealed 时展示按钮 */
+    &.card-ui-mobile .poster-wrapper:hover .explore-card-actions {
+      opacity: 0;
+      transform: translate(-50%, 10px);
+      pointer-events: none;
+    }
+
+    &.card-ui-mobile.actions-revealed .poster-wrapper .explore-card-actions {
+      opacity: 1;
+      transform: translate(-50%, 0);
+      pointer-events: none;
+
+      .explore-action-btn {
+        pointer-events: auto;
       }
     }
 
@@ -791,68 +846,9 @@ onBeforeUnmount(() => {
   }
 }
 
-@media (min-width: 769px) {
-  .recommend-group .recommend-card {
-    .poster-wrapper {
-      cursor: pointer;
-
-      .explore-card-actions {
-        pointer-events: none !important;
-
-        .explore-action-btn {
-          pointer-events: none;
-        }
-      }
-
-      &:hover .explore-card-actions,
-      &:focus-within .explore-card-actions {
-        opacity: 1;
-        transform: translate(-50%, 0);
-        pointer-events: none !important;
-
-        .explore-action-btn {
-          pointer-events: auto;
-        }
-      }
-    }
-
-    &:focus-within:not(:hover) .poster-wrapper .explore-card-actions {
-      opacity: 0;
-      pointer-events: none !important;
-    }
-  }
-}
-
-@media (hover: none) {
+@media (max-width: 768px) {
   .recommend-group .row-shell .side-scroll-btn {
     display: none !important;
-  }
-
-  .recommend-group .recommend-card .poster-wrapper .explore-card-actions,
-  .recommend-group .recommend-card .poster-wrapper .explore-card-actions * {
-    pointer-events: none !important;
-  }
-
-  .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
-    opacity: 0;
-    transform: translate(-50%, 10px);
-  }
-
-  .recommend-group .recommend-card:hover .poster-wrapper .explore-card-actions,
-  .recommend-group .recommend-card:focus-within .poster-wrapper .explore-card-actions {
-    opacity: 0;
-    pointer-events: none !important;
-    transform: translate(-50%, 10px);
-  }
-
-  .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions,
-  .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions * {
-    pointer-events: auto !important;
-  }
-
-  .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions {
-    opacity: 1;
-    transform: translate(-50%, 0);
   }
 }
 

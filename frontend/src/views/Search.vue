@@ -54,6 +54,7 @@
             :queue-active-save-keys="queueActiveSaveKeys"
             :emby-status-map="embyStatusMap"
             :feiniu-status-map="feiniuStatusMap"
+            :resolving-item="resolvingExploreItem"
             @merge-emby-status="mergeEmbyStatusMap"
             @merge-feiniu-status="mergeFeiniuStatusMap"
             @open-section="goToSection"
@@ -131,6 +132,8 @@
             class="media-card"
             :class="{
               'pansou-card': item.isPansouResult,
+              'card-ui-mobile': isMobileCardUi,
+              'card-ui-desktop': !isMobileCardUi,
               'actions-revealed': isActionsRevealed(`${item.source_service}-${item.id}`)
             }"
             :body-style="{ padding: '0' }"
@@ -1593,14 +1596,20 @@ const handleItemClick = (item) => {
   }
 }
 
-const { isActionsRevealed, handlePosterActivate, handleDetailActivate } = useCardActionReveal()
+const { isMobileCardUi, isActionsRevealed, handlePosterClick, handleDetailClick } = useCardActionReveal()
+
+/**
+ * 正在解析 TMDB 路由的探索条目（按对象身份比较，故用 shallowRef 避免被包成响应式代理）。
+ * 解析期间卡片显示 loading，避免用户以为“点了没反应”而重复点击。
+ */
+const resolvingExploreItem = shallowRef(null)
 
 const onSearchPosterActivate = (item, event) => {
-  handlePosterActivate(`${item?.source_service}-${item?.id}`, () => handleItemClick(item), event)
+  handlePosterClick(`${item?.source_service}-${item?.id}`, () => handleItemClick(item), event)
 }
 
 const onSearchDetailActivate = (item) => {
-  handleDetailActivate(() => handleItemClick(item))
+  handleDetailClick(() => handleItemClick(item))
 }
 
 const warmupPan115Resources = (mediaType, tmdbId) => {
@@ -1714,12 +1723,14 @@ const handleExploreItemClick = async (item) => {
   // 横向拖拽松手后的误触点击：缩短静默窗口，避免“点了没反应”
   if (Date.now() - lastDragAt.value < 80) return
 
-  if (item?._resolvingRoute) return
+  // 注意：exploreSections 是 shallowRef，条目上的普通属性不具备响应性，
+  // 因此解析中状态必须放在独立的 ref 上，否则无法驱动 loading 反馈。
+  if (resolvingExploreItem.value === item) return
   if (exploreSource.value === 'douban' && goToDoubanDetail(item)) {
     return
   }
 
-  item._resolvingRoute = true
+  resolvingExploreItem.value = item
   try {
     const routeInfo = await resolveExploreItemRoute(item)
     if (!routeInfo?.tmdb_id) {
@@ -1735,7 +1746,9 @@ const handleExploreItemClick = async (item) => {
 
     goToDetail(routeInfo.media_type, tmdbId)
   } finally {
-    item._resolvingRoute = false
+    if (resolvingExploreItem.value === item) {
+      resolvingExploreItem.value = null
+    }
   }
 }
 
@@ -2538,9 +2551,30 @@ onBeforeUnmount(() => {
       }
     }
 
-    &:hover .action-buttons,
-    &:focus-within .action-buttons,
-    &.actions-revealed .action-buttons {
+    &.card-ui-desktop .poster-wrapper {
+      cursor: pointer;
+
+      .action-buttons {
+        display: none;
+      }
+
+      &:hover .action-buttons {
+        display: flex;
+        opacity: 1;
+        pointer-events: none;
+
+        .action-btn {
+          pointer-events: auto;
+        }
+      }
+    }
+
+    &.card-ui-mobile .poster-wrapper:hover .action-buttons {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    &.card-ui-mobile.actions-revealed .poster-wrapper .action-buttons {
       opacity: 1;
       pointer-events: none;
 
@@ -2852,98 +2886,6 @@ onBeforeUnmount(() => {
           display: none;
         }
       }
-    }
-  }
-}
-
-@media (min-width: 769px) {
-  .explore-page {
-    .explore-section .recommend-group .recommend-card .poster-wrapper,
-    .media-card .poster-wrapper {
-      cursor: pointer;
-    }
-
-    .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions,
-    .media-card .poster-wrapper .action-buttons {
-      pointer-events: none !important;
-
-      .explore-action-btn,
-      .action-btn {
-        pointer-events: none;
-      }
-    }
-
-    .explore-section .recommend-group .recommend-card .poster-wrapper:hover .explore-card-actions,
-    .explore-section .recommend-group .recommend-card .poster-wrapper:focus-within .explore-card-actions,
-    .media-card .poster-wrapper:hover .action-buttons,
-    .media-card .poster-wrapper:focus-within .action-buttons {
-      pointer-events: none !important;
-
-      .explore-action-btn,
-      .action-btn {
-        pointer-events: auto;
-      }
-    }
-
-    .explore-section .recommend-group .recommend-card:focus-within:not(:hover) .poster-wrapper .explore-card-actions,
-    .media-card:focus-within:not(:hover) .poster-wrapper .action-buttons {
-      opacity: 0;
-      pointer-events: none !important;
-    }
-  }
-}
-
-@media (hover: none) {
-  .explore-page {
-    .media-card .poster-wrapper .action-buttons,
-    .media-card .poster-wrapper .action-buttons * {
-      pointer-events: none !important;
-    }
-
-    .media-card .poster-wrapper .action-buttons {
-      opacity: 0;
-    }
-
-    .media-card:hover .poster-wrapper .action-buttons,
-    .media-card:focus-within .poster-wrapper .action-buttons {
-      opacity: 0;
-      pointer-events: none !important;
-    }
-
-    .media-card.actions-revealed .poster-wrapper .action-buttons,
-    .media-card.actions-revealed .poster-wrapper .action-buttons * {
-      pointer-events: auto !important;
-    }
-
-    .media-card.actions-revealed .poster-wrapper .action-buttons {
-      opacity: 1;
-    }
-
-    .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions,
-    .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions * {
-      pointer-events: none !important;
-    }
-
-    .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
-      opacity: 0;
-      transform: translate(-50%, 10px);
-    }
-
-    .explore-section .recommend-group .recommend-card:hover .poster-wrapper .explore-card-actions,
-    .explore-section .recommend-group .recommend-card:focus-within .poster-wrapper .explore-card-actions {
-      opacity: 0;
-      pointer-events: none !important;
-      transform: translate(-50%, 10px);
-    }
-
-    .explore-section .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions,
-    .explore-section .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions * {
-      pointer-events: auto !important;
-    }
-
-    .explore-section .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions {
-      opacity: 1;
-      transform: translate(-50%, 0);
     }
   }
 }
