@@ -834,9 +834,16 @@ watch(activeTab, (tab) => {
 
       .actions {
         display: flex;
-        flex-direction: column;
+        flex-direction: row;
         align-items: stretch;
         gap: 8px;
+
+        :deep(.el-button) {
+          flex: 1 1 0;
+          min-width: 0;
+          margin: 0;
+          padding-inline: 8px;
+        }
       }
     }
 
@@ -897,9 +904,11 @@ watch(activeTab, (tab) => {
         }
 
         .actions {
-          .el-button {
-            min-height: 30px;
-            padding: 4px 10px;
+          gap: 6px;
+
+          :deep(.el-button) {
+            min-height: 28px;
+            padding: 4px 6px;
             font-size: 11px;
           }
         }
