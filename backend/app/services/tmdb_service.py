@@ -26,6 +26,28 @@ async def _get_tmdb_http_client(*, verify: bool = True) -> httpx.AsyncClient:
     return proxy_manager.create_httpx_client(timeout=15.0, http2=True, verify=False)
 
 
+def _invalidate_tmdb_http_client() -> None:
+    """代理变更后丢弃缓存的 TMDB 客户端，下次请求重建。"""
+    global _TMDB_HTTP_CLIENT
+    client = _TMDB_HTTP_CLIENT
+    _TMDB_HTTP_CLIENT = None
+    if client is not None and not client.is_closed:
+        try:
+            # 同步路径无法 await；交由事件循环在空闲时关闭
+            import asyncio
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            loop.create_task(client.aclose())
+        except Exception:
+            pass
+
+
+proxy_manager.add_change_listener(_invalidate_tmdb_http_client)
+
+
 class TmdbService:
     def _required_params(self, page: int | None = None) -> dict[str, Any]:
         if not settings.TMDB_API_KEY:

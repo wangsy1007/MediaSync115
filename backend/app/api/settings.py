@@ -36,7 +36,7 @@ from app.services.tmdb_service import tmdb_service
 from app.services.update_check_service import update_check_service
 from app.services.emby_service import emby_service
 from app.services.feiniu_service import feiniu_service
-from app.utils.proxy import proxy_manager
+from app.utils.proxy import is_running_in_docker, proxy_manager
 
 _SETTINGS_CHECK_CACHE_TTL_SECONDS = 300
 _settings_check_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -55,6 +55,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 
 class RuntimeSettingsRequest(BaseModel):
+    proxy_url: Optional[str] = None
     http_proxy: Optional[str] = None
     https_proxy: Optional[str] = None
     all_proxy: Optional[str] = None
@@ -225,6 +226,15 @@ _TG_BOT_SETTING_KEYS = frozenset(
         "tg_bot_allowed_users",
         "tg_bot_notify_chat_ids",
         "tg_bot_hdhive_auto_unlock",
+    }
+)
+_PROXY_SETTING_KEYS = frozenset(
+    {
+        "proxy_url",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "socks_proxy",
     }
 )
 _STRM_SCHEDULER_SETTING_KEYS = frozenset(
@@ -536,26 +546,32 @@ def _extract_proxy_scheme(proxy_url: str) -> str:
 def _resolve_health_probe_route(scheme: str) -> dict[str, str]:
     """解析健康检查实际走应用代理还是系统网络（含路由器全局代理）。"""
     configured_proxy = str(proxy_manager.get_proxy_for_scheme(scheme) or "").strip()
-    uses_app_proxy = bool(configured_proxy) and proxy_manager._should_apply_proxy_mounts()
-    if uses_app_proxy:
+    if not configured_proxy:
+        return {
+            "route_mode": "system",
+            "applied_proxy": "",
+            "proxy_scheme": "system",
+            "route_hint": "系统网络（未配置应用代理）",
+            "require_proxy": "0",
+        }
+
+    reachability = proxy_manager.check_proxy_reachability(configured_proxy)
+    if reachability.get("reachable"):
         return {
             "route_mode": "configured",
             "applied_proxy": configured_proxy,
             "proxy_scheme": _extract_proxy_scheme(configured_proxy),
             "route_hint": "应用代理",
+            "require_proxy": "1",
         }
-    if configured_proxy:
-        return {
-            "route_mode": "system",
-            "applied_proxy": "",
-            "proxy_scheme": "system",
-            "route_hint": "系统网络（应用代理不可达，已改走系统路由）",
-        }
+
+    # 已配置但不可达：检测场景直接判定失败，不再静默直连造成“假成功”
     return {
-        "route_mode": "system",
-        "applied_proxy": "",
-        "proxy_scheme": "system",
-        "route_hint": "系统网络（未配置应用代理，含路由器全局代理）",
+        "route_mode": "proxy_unreachable",
+        "applied_proxy": configured_proxy,
+        "proxy_scheme": _extract_proxy_scheme(configured_proxy),
+        "route_hint": str(reachability.get("message") or "应用代理不可达"),
+        "require_proxy": "1",
     }
 
 
@@ -588,9 +604,22 @@ async def _probe_target_health(
     proxy_scheme = route["proxy_scheme"]
     route_hint = route["route_hint"]
 
+    if route["route_mode"] == "proxy_unreachable":
+        return _build_proxy_health_payload(
+            status="error",
+            valid=False,
+            message=route_hint,
+            target=normalized_target,
+            applied_proxy=applied_proxy,
+            proxy_scheme=proxy_scheme,
+        )
+
+    require_proxy = route.get("require_proxy") == "1"
     try:
         async with proxy_manager.create_httpx_client(
-            timeout=10.0, follow_redirects=False
+            timeout=10.0,
+            follow_redirects=False,
+            require_proxy=require_proxy,
         ) as client:
             start = time.perf_counter()
             response = await client.get(normalized_target)
@@ -770,6 +799,15 @@ async def update_runtime_settings(
     background_tasks: BackgroundTasks,
 ):
     payload = request.model_dump(exclude_unset=True)
+    # 精简模式：单一 proxy_url 写入 all_proxy，并清空其余代理字段
+    if "proxy_url" in payload:
+        from app.utils.proxy import normalize_proxy_url
+
+        proxy_url = normalize_proxy_url(payload.pop("proxy_url")) or ""
+        payload["all_proxy"] = proxy_url
+        payload["http_proxy"] = ""
+        payload["https_proxy"] = ""
+        payload["socks_proxy"] = ""
     merged_settings = runtime_settings_service.get_all()
     merged_settings.update(payload)
     # LLM API Key 单独加密存储，不进入 update_bulk 的明文流程
@@ -852,10 +890,11 @@ async def update_runtime_settings(
             await feiniu_sync_scheduler_service.ensure_sync_task()
         if payload_keys & _STRM_SCHEDULER_SETTING_KEYS:
             await strm_scheduler_service.ensure_tasks()
-        if payload_keys & _TG_BOT_SETTING_KEYS:
+        if payload_keys & _TG_BOT_SETTING_KEYS or payload_keys & _PROXY_SETTING_KEYS:
             from app.services.tg_bot import tg_bot_service
 
             # 保存设置后合并重启，避免连续保存触发多个 polling 实例
+            # 代理变更也需重启 Bot，否则仍使用旧的 HTTPXRequest
             tg_bot_service.request_restart()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1185,25 +1224,22 @@ async def run_feiniu_sync():
 async def get_proxy_config():
     """获取当前代理配置。"""
     config = proxy_manager.get_current_config()
+    proxy_url = str(config.get("proxy_url") or "").strip()
     return {
+        "proxy_url": proxy_url,
         "http_proxy": config.get("http_proxy") or "",
         "https_proxy": config.get("https_proxy") or "",
         "all_proxy": config.get("all_proxy") or "",
         "socks_proxy": config.get("socks_proxy") or "",
-        "has_proxy": any(
-            [
-                config.get("http_proxy"),
-                config.get("https_proxy"),
-                config.get("all_proxy"),
-                config.get("socks_proxy"),
-            ]
-        ),
+        "has_proxy": bool(proxy_url),
+        "in_docker": is_running_in_docker(),
     }
 
 
 @router.get("/health/all")
 async def check_all_services_health():
-    """检测固定目标连通性：优先走应用内代理，否则走系统网络（含路由器全局代理）。"""
+    """检测代理可达性，并探测 HDHive / TMDB / Telegram 连通性。"""
+    reachability = proxy_manager.check_proxy_reachability()
     tmdb_target = runtime_settings_service.get_tmdb_base_url()
 
     hdhive_result, tmdb_result, tg_result = await asyncio.gather(
@@ -1222,15 +1258,39 @@ async def check_all_services_health():
     )
 
     results = {
+        "proxy": {
+            "status": (
+                "ok"
+                if reachability.get("reachable")
+                else ("not_configured" if not reachability.get("configured") else "error")
+            ),
+            "valid": bool(reachability.get("reachable"))
+            if reachability.get("configured")
+            else True,
+            "message": reachability.get("message") or "",
+            "target": reachability.get("endpoint") or "",
+            "applied_proxy": reachability.get("proxy_url") or "",
+            "proxy_scheme": (
+                _extract_proxy_scheme(str(reachability.get("proxy_url") or ""))
+                if reachability.get("configured")
+                else "system"
+            ),
+            "status_code": None,
+            "latency_ms": None,
+        },
         "hdhive": hdhive_result,
         "tmdb": tmdb_result,
         "tg": tg_result,
     }
     checked_results = [
         result
-        for result in results.values()
-        if result.get("status") != "not_configured"
+        for key, result in results.items()
+        if key != "proxy" and result.get("status") != "not_configured"
     ]
+    # 已配置代理时，代理可达性也计入统计
+    if reachability.get("configured"):
+        checked_results.append(results["proxy"])
+
     valid_count = sum(1 for result in checked_results if result.get("valid"))
     total_count = len(checked_results)
     all_valid = total_count > 0 and valid_count == total_count
@@ -1241,6 +1301,8 @@ async def check_all_services_health():
         "total_count": total_count,
         "services": results,
         "proxy": await get_proxy_config(),
+        "proxy_reachability": reachability,
+        "in_docker": is_running_in_docker(),
     }
 
 

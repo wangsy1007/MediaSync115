@@ -1099,53 +1099,31 @@
             style="margin-bottom: 16px"
           >
             <template #title>
-              代理配置说明
+              只需填写一个代理地址
             </template>
             <template #default>
-              可手动填写 HTTP/HTTPS/SOCKS 代理。Docker 部署时请使用 <code>host.docker.internal</code> 而非 <code>127.0.0.1</code>（例如 <code>http://host.docker.internal:7890</code>）。保存后写入后端运行时配置；TG Bot 仅使用此处配置的有效代理，不会误用系统环境变量。
+              支持 HTTP / SOCKS5，例如 <code>http://127.0.0.1:7890</code> 或
+              <code>socks5://127.0.0.1:7891</code>。Docker 部署时会自动将
+              <code>127.0.0.1</code> / <code>localhost</code> 改写为
+              <code>host.docker.internal</code>。留空表示不使用应用代理。
             </template>
           </el-alert>
 
-          <el-form :model="proxyForm" label-width="120px">
-            <el-form-item label="HTTP 代理">
+          <el-form :model="proxyForm" label-width="100px">
+            <el-form-item label="代理地址">
               <el-input
-                v-model="proxyForm.httpProxy"
-                placeholder="Docker 请填: http://host.docker.internal:7890"
+                v-model="proxyForm.proxyUrl"
+                clearable
+                placeholder="例如: http://127.0.0.1:7890"
               />
               <el-text size="small" type="info">
-                用于 HTTP 协议请求的代理地址
-              </el-text>
-            </el-form-item>
-            <el-form-item label="HTTPS 代理">
-              <el-input
-                v-model="proxyForm.httpsProxy"
-                placeholder="Docker 请填: http://host.docker.internal:7890"
-              />
-              <el-text size="small" type="info">
-                用于 HTTPS 协议请求的代理地址
-              </el-text>
-            </el-form-item>
-            <el-form-item label="通用代理">
-              <el-input
-                v-model="proxyForm.allProxy"
-                placeholder="Docker 请填: http://host.docker.internal:7890"
-              />
-              <el-text size="small" type="info">
-                当 HTTP/HTTPS 代理未设置时使用此代理
-              </el-text>
-            </el-form-item>
-            <el-form-item label="SOCKS 代理">
-              <el-input
-                v-model="proxyForm.socksProxy"
-                placeholder="例如: socks5://127.0.0.1:1080"
-              />
-              <el-text size="small" type="info">
-                SOCKS5 代理地址，支持用户名密码: socks5://user:pass@host:port
+                Clash / V2Ray 等通常使用 HTTP 混合端口（常见 7890）
               </el-text>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" :loading="savingProxy" @click="handleSaveProxy">保存代理配置</el-button>
-              <el-button :loading="testingProxy" @click="handleTestProxy">检测代理状态</el-button>
+              <el-button type="primary" :loading="savingProxy" @click="handleSaveProxy">保存</el-button>
+              <el-button :loading="testingProxy" @click="handleTestProxy">检测</el-button>
+              <el-button :disabled="!proxyForm.proxyUrl && !proxyStatus.hasProxy" @click="handleClearProxy">清除</el-button>
             </el-form-item>
           </el-form>
 
@@ -2227,10 +2205,7 @@ const juyingStatus = reactive({
 
 // 代理配置
 const proxyForm = ref({
-  httpProxy: '',
-  httpsProxy: '',
-  allProxy: '',
-  socksProxy: ''
+  proxyUrl: ''
 })
 const proxyStatus = ref({
   hasProxy: false
@@ -2243,6 +2218,7 @@ const healthStatus = ref({
   services: {}
 })
 const serviceNameMap = {
+  proxy: '代理端口',
   hdhive: 'HDHive',
   juying: '聚影',
   tg: 'Telegram',
@@ -3317,10 +3293,7 @@ const fetchProxyStatus = async () => {
   try {
     const { data } = await settingsApi.getProxy()
     proxyStatus.value.hasProxy = data.has_proxy || false
-    proxyForm.value.httpProxy = data.http_proxy || ''
-    proxyForm.value.httpsProxy = data.https_proxy || ''
-    proxyForm.value.allProxy = data.all_proxy || ''
-    proxyForm.value.socksProxy = data.socks_proxy || ''
+    proxyForm.value.proxyUrl = data.proxy_url || data.all_proxy || data.https_proxy || data.http_proxy || data.socks_proxy || ''
   } catch (error) {
     console.error('Failed to fetch proxy status:', error)
   }
@@ -3370,7 +3343,7 @@ const getHealthAppliedProxyText = (service) => {
   }
   const scheme = String(service?.proxy_scheme || '').trim().toLowerCase()
   if (scheme === 'system') {
-    return '系统网络（路由器/全局代理或未配置应用代理）'
+    return '直连（未配置应用代理）'
   }
   return '未配置应用代理'
 }
@@ -3385,19 +3358,34 @@ const getHealthLatencyText = (service) => {
   return `${label}：${latency} ms`
 }
 
+const saveProxyConfig = async (proxyUrl) => {
+  await settingsApi.updateRuntime({
+    proxy_url: proxyUrl || ''
+  })
+  await fetchProxyStatus()
+}
+
 const handleSaveProxy = async () => {
   savingProxy.value = true
   try {
-    await settingsApi.updateRuntime({
-      http_proxy: proxyForm.value.httpProxy || null,
-      https_proxy: proxyForm.value.httpsProxy || null,
-      all_proxy: proxyForm.value.allProxy || null,
-      socks_proxy: proxyForm.value.socksProxy || null
-    })
+    await saveProxyConfig(proxyForm.value.proxyUrl)
     ElMessage.success('代理配置已保存并生效')
-    await fetchProxyStatus()
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '代理配置保存失败')
+  } finally {
+    savingProxy.value = false
+  }
+}
+
+const handleClearProxy = async () => {
+  savingProxy.value = true
+  try {
+    proxyForm.value.proxyUrl = ''
+    await saveProxyConfig('')
+    healthStatus.value.checked = false
+    ElMessage.success('代理已清除')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '清除代理失败')
   } finally {
     savingProxy.value = false
   }
@@ -3407,25 +3395,21 @@ const handleTestProxy = async () => {
   testingProxy.value = true
   try {
     // 先保存当前输入的代理配置，再检测，避免用户输入后未保存导致检测异常
-    await settingsApi.updateRuntime({
-      http_proxy: proxyForm.value.httpProxy || null,
-      https_proxy: proxyForm.value.httpsProxy || null,
-      all_proxy: proxyForm.value.allProxy || null,
-      socks_proxy: proxyForm.value.socksProxy || null
-    })
-    await fetchProxyStatus()
+    await saveProxyConfig(proxyForm.value.proxyUrl)
     await fetchHealthStatus()
     const validCount = healthStatus.value.validCount
     const totalCount = healthStatus.value.totalCount
-    const notConfiguredCount = Object.values(healthStatus.value.services || {}).filter(
-      service => String(service?.status || '').trim().toLowerCase() === 'not_configured'
-    ).length
-    if (totalCount > 0 && validCount === totalCount) {
-      ElMessage.success(`已配置服务连接正常 (${validCount}/${totalCount})，${notConfiguredCount} 项未配置`)
+    const proxyService = healthStatus.value.services?.proxy
+    const proxyFailed = proxyForm.value.proxyUrl
+      && String(proxyService?.status || '').toLowerCase() === 'error'
+    if (proxyFailed) {
+      ElMessage.error(proxyService?.message || '代理端口不可达')
+    } else if (totalCount > 0 && validCount === totalCount) {
+      ElMessage.success(`连接检测通过 (${validCount}/${totalCount})`)
     } else if (totalCount === 0) {
-      ElMessage.warning(`暂无已配置的可检测服务，${notConfiguredCount} 项未配置`)
+      ElMessage.warning('暂无可检测服务')
     } else {
-      ElMessage.warning(`部分服务连接异常 (${validCount}/${totalCount} 正常)，${notConfiguredCount} 项未配置`)
+      ElMessage.warning(`部分服务异常 (${validCount}/${totalCount} 正常)`)
     }
   } catch (error) {
     ElMessage.error(error.response?.data?.detail || '服务状态检测失败')
@@ -4869,10 +4853,8 @@ const fetchRuntimeSettings = async () => {
     tgIndexForm.value.incrementalIntervalMinutes = Number(data.tg_incremental_interval_minutes || 30)
 
     tmdbForm.value.apiKey = data.tmdb_api_key || ''
-    proxyForm.value.httpProxy = data.http_proxy || ''
-    proxyForm.value.httpsProxy = data.https_proxy || ''
-    proxyForm.value.allProxy = data.all_proxy || ''
-    proxyForm.value.socksProxy = data.socks_proxy || ''
+    proxyForm.value.proxyUrl = data.proxy_url || data.all_proxy || data.https_proxy || data.http_proxy || data.socks_proxy || ''
+    proxyStatus.value.hasProxy = !!(proxyForm.value.proxyUrl)
     embyForm.value.url = data.emby_url || ''
     embyForm.value.apiKey = data.emby_api_key || ''
     embyForm.value.syncEnabled = !!data.emby_sync_enabled

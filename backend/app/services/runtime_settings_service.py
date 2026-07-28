@@ -19,7 +19,7 @@ from app.services.pansou_service import pansou_service
 from app.services.juying_web_service import juying_web_service
 from app.services.tg_service import tg_service
 from app.services.emby_service import emby_service
-from app.utils.proxy import proxy_manager
+from app.utils.proxy import normalize_proxy_url, pick_effective_proxy_url, proxy_manager
 
 
 class RuntimeSettingsService:
@@ -410,6 +410,8 @@ class RuntimeSettingsService:
         cleaned = str(value).strip()
         if not cleaned:
             return "", None
+        if key in {"http_proxy", "https_proxy", "all_proxy", "socks_proxy"}:
+            cleaned = normalize_proxy_url(cleaned) or cleaned
         return cleaned, cleaned
 
     def _persist_env_backed_fields(self, updates: dict[str, Any]) -> None:
@@ -1466,10 +1468,15 @@ class RuntimeSettingsService:
         return self.get_all()
 
     def apply_runtime_overrides(self) -> None:
-        settings.HTTP_PROXY = str(self._data.get("http_proxy") or "").strip() or None
-        settings.HTTPS_PROXY = str(self._data.get("https_proxy") or "").strip() or None
-        settings.ALL_PROXY = str(self._data.get("all_proxy") or "").strip() or None
-        settings.SOCKS_PROXY = str(self._data.get("socks_proxy") or "").strip() or None
+        settings.HTTP_PROXY = normalize_proxy_url(self._data.get("http_proxy"))
+        settings.HTTPS_PROXY = normalize_proxy_url(self._data.get("https_proxy"))
+        settings.ALL_PROXY = normalize_proxy_url(self._data.get("all_proxy"))
+        settings.SOCKS_PROXY = normalize_proxy_url(self._data.get("socks_proxy"))
+        # 回写规范化后的代理地址，确保 Docker 下环回地址改写持久化
+        self._data["http_proxy"] = settings.HTTP_PROXY or ""
+        self._data["https_proxy"] = settings.HTTPS_PROXY or ""
+        self._data["all_proxy"] = settings.ALL_PROXY or ""
+        self._data["socks_proxy"] = settings.SOCKS_PROXY or ""
         settings.PAN115_COOKIE = self.get_pan115_cookie() or None
         settings.QUARK_COOKIE = self.get_quark_cookie() or None
         settings.HDHIVE_COOKIE = self.get_hdhive_cookie() or None
@@ -1548,6 +1555,13 @@ class RuntimeSettingsService:
 
     def get_all(self) -> dict[str, Any]:
         return {
+            "proxy_url": pick_effective_proxy_url(
+                http_proxy=self._data.get("http_proxy"),
+                https_proxy=self._data.get("https_proxy"),
+                all_proxy=self._data.get("all_proxy"),
+                socks_proxy=self._data.get("socks_proxy"),
+            )
+            or "",
             "http_proxy": str(self._data.get("http_proxy") or ""),
             "https_proxy": str(self._data.get("https_proxy") or ""),
             "all_proxy": str(self._data.get("all_proxy") or ""),

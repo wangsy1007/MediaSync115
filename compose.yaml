@@ -14,6 +14,8 @@ services:
       - "5173:5173"
       - "9008:9008"
       - "8099:8099"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       TZ: Asia/Shanghai
       # 避免宿主机 shell 注入不可达的 HTTP_PROXY 影响容器内 Telegram 等外网请求

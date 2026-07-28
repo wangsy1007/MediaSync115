@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from app.utils import proxy as proxy_module
-from app.utils.proxy import ProxyManager, proxy_manager
+from app.utils.proxy import ProxyManager, normalize_proxy_url, proxy_manager
 
 
 def _restore_proxy_config(config: dict[str, str | None]) -> None:
@@ -16,6 +16,21 @@ def _restore_proxy_config(config: dict[str, str | None]) -> None:
     )
 
 
+def test_normalize_proxy_url_adds_scheme() -> None:
+    assert normalize_proxy_url("127.0.0.1:7890", rewrite_loopback_for_docker=False) == (
+        "http://127.0.0.1:7890"
+    )
+
+
+def test_normalize_proxy_url_rewrites_loopback_in_docker() -> None:
+    assert normalize_proxy_url(
+        "http://127.0.0.1:7890", rewrite_loopback_for_docker=True
+    ) == "http://host.docker.internal:7890"
+    assert normalize_proxy_url(
+        "socks5://user:pass@localhost:1080", rewrite_loopback_for_docker=True
+    ) == "socks5://user:pass@host.docker.internal:1080"
+
+
 def test_proxy_manager_uses_socks_fallback_for_httpx_clients(monkeypatch) -> None:
     manager = ProxyManager()
     original_config = dict(proxy_manager.get_current_config())
@@ -25,6 +40,7 @@ def test_proxy_manager_uses_socks_fallback_for_httpx_clients(monkeypatch) -> Non
         all_proxy="",
         socks_proxy="socks5://127.0.0.1:7890",
     )
+    monkeypatch.setattr(manager, "_is_proxy_endpoint_reachable", lambda _url: True)
 
     class DummyAsyncTransport:
         def __init__(self, proxy: str) -> None:
@@ -69,6 +85,23 @@ def test_proxy_manager_uses_socks_fallback_for_httpx_clients(monkeypatch) -> Non
         )
 
 
+def test_proxy_manager_single_proxy_url_clears_other_fields() -> None:
+    manager = ProxyManager()
+    original_config = dict(proxy_manager.get_current_config())
+    try:
+        manager.update_proxy(
+            proxy_url="http://127.0.0.1:7890",
+        )
+        config = manager.get_current_config()
+        assert config["all_proxy"] == "http://127.0.0.1:7890"
+        assert config["http_proxy"] is None
+        assert config["https_proxy"] is None
+        assert config["socks_proxy"] is None
+        assert config["proxy_url"] == "http://127.0.0.1:7890"
+    finally:
+        _restore_proxy_config(original_config)
+
+
 def test_health_all_uses_configured_proxy_for_fixed_targets(
     client: TestClient, monkeypatch
 ) -> None:
@@ -85,6 +118,21 @@ def test_health_all_uses_configured_proxy_for_fixed_targets(
         settings_api.runtime_settings_service,
         "get_tmdb_base_url",
         lambda: "https://api.themoviedb.org/3",
+    )
+    monkeypatch.setattr(
+        settings_api.proxy_manager,
+        "check_proxy_reachability",
+        lambda proxy_url=None: {
+            "configured": True,
+            "reachable": True,
+            "proxy_url": "socks5://127.0.0.1:7890",
+            "endpoint": "127.0.0.1:7890",
+            "in_docker": False,
+            "message": "代理可达 (127.0.0.1:7890)",
+        },
+    )
+    monkeypatch.setattr(
+        settings_api.proxy_manager, "_should_apply_proxy_mounts", lambda: True
     )
 
     calls: list[dict[str, object]] = []
@@ -122,8 +170,58 @@ def test_health_all_uses_configured_proxy_for_fixed_targets(
     monkeypatch.setattr(
         settings_api.proxy_manager, "create_httpx_client", DummyAsyncClient
     )
+
+    try:
+        login_response = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "password"},
+        )
+        assert login_response.status_code == 200
+        response = client.get("/api/settings/health/all")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["valid_count"] == 4
+        assert payload["total_count"] == 4
+        assert payload["all_valid"] is True
+        assert payload["services"]["proxy"]["status"] == "ok"
+        assert payload["services"]["hdhive"]["status"] == "ok"
+        assert payload["services"]["hdhive"]["valid"] is True
+        assert payload["services"]["hdhive"]["applied_proxy"] == "socks5://127.0.0.1:7890"
+        assert payload["services"]["hdhive"]["proxy_scheme"] == "socks5"
+        assert payload["services"]["tmdb"]["status"] == "ok"
+        assert payload["services"]["tmdb"]["applied_proxy"] == "socks5://127.0.0.1:7890"
+        assert payload["services"]["tg"]["status"] == "ok"
+        assert payload["services"]["tg"]["applied_proxy"] == "socks5://127.0.0.1:7890"
+        assert len(calls) == 3
+        assert {call["follow_redirects"] for call in calls} == {False}
+    finally:
+        _restore_proxy_config(original_config)
+
+
+def test_health_all_reports_unreachable_proxy(
+    client: TestClient, monkeypatch
+) -> None:
+    settings_api = importlib.import_module("app.api.settings")
+    original_config = dict(proxy_manager.get_current_config())
+    proxy_manager.update_proxy(proxy_url="http://127.0.0.1:65520")
+
     monkeypatch.setattr(
-        settings_api.proxy_manager, "_should_apply_proxy_mounts", lambda: True
+        settings_api.runtime_settings_service,
+        "get_tmdb_base_url",
+        lambda: "https://api.themoviedb.org/3",
+    )
+    monkeypatch.setattr(
+        settings_api.proxy_manager,
+        "check_proxy_reachability",
+        lambda proxy_url=None: {
+            "configured": True,
+            "reachable": False,
+            "proxy_url": "http://127.0.0.1:65520",
+            "endpoint": "127.0.0.1:65520",
+            "in_docker": True,
+            "message": "代理不可达 (127.0.0.1:65520)。 Docker 内请使用 host.docker.internal 而非 127.0.0.1",
+        },
     )
 
     try:
@@ -136,19 +234,12 @@ def test_health_all_uses_configured_proxy_for_fixed_targets(
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["valid_count"] == 3
-        assert payload["total_count"] == 3
-        assert payload["all_valid"] is True
-        assert payload["services"]["hdhive"]["status"] == "ok"
-        assert payload["services"]["hdhive"]["valid"] is True
-        assert payload["services"]["hdhive"]["applied_proxy"] == "socks5://127.0.0.1:7890"
-        assert payload["services"]["hdhive"]["proxy_scheme"] == "socks5"
-        assert payload["services"]["tmdb"]["status"] == "ok"
-        assert payload["services"]["tmdb"]["applied_proxy"] == "socks5://127.0.0.1:7890"
-        assert payload["services"]["tg"]["status"] == "ok"
-        assert payload["services"]["tg"]["applied_proxy"] == "socks5://127.0.0.1:7890"
-        assert len(calls) == 3
-        assert {call["follow_redirects"] for call in calls} == {False}
+        assert payload["services"]["proxy"]["status"] == "error"
+        assert payload["services"]["proxy"]["valid"] is False
+        assert payload["services"]["tg"]["status"] == "error"
+        assert "不可达" in payload["services"]["tg"]["message"]
+        assert payload["services"]["tg"]["applied_proxy"] == "http://127.0.0.1:65520"
+        assert payload["all_valid"] is False
     finally:
         _restore_proxy_config(original_config)
 
@@ -169,6 +260,19 @@ def test_health_all_uses_system_network_without_app_proxy(
         settings_api.runtime_settings_service,
         "get_tmdb_base_url",
         lambda: "https://api.themoviedb.org/3",
+    )
+    monkeypatch.setattr(
+        settings_api.proxy_manager,
+        "check_proxy_reachability",
+        lambda proxy_url=None: {
+            "configured": False,
+            "reachable": False,
+            "proxy_url": "",
+            "message": "未配置代理",
+        },
+    )
+    monkeypatch.setattr(
+        settings_api.proxy_manager, "_should_apply_proxy_mounts", lambda: False
     )
 
     status_map = {
@@ -197,9 +301,6 @@ def test_health_all_uses_system_network_without_app_proxy(
     monkeypatch.setattr(
         settings_api.proxy_manager, "create_httpx_client", DummyAsyncClient
     )
-    monkeypatch.setattr(
-        settings_api.proxy_manager, "_should_apply_proxy_mounts", lambda: False
-    )
 
     try:
         login_response = client.post(
@@ -214,12 +315,13 @@ def test_health_all_uses_system_network_without_app_proxy(
         assert payload["valid_count"] == 3
         assert payload["total_count"] == 3
         assert payload["all_valid"] is True
+        assert payload["services"]["proxy"]["status"] == "not_configured"
         for service_key in ("hdhive", "tmdb", "tg"):
             assert payload["services"][service_key]["status"] == "ok"
             assert payload["services"][service_key]["valid"] is True
             assert payload["services"][service_key]["applied_proxy"] == ""
             assert payload["services"][service_key]["proxy_scheme"] == "system"
-            assert "系统网络" in payload["services"][service_key]["message"]
+            assert "未配置应用代理" in payload["services"][service_key]["message"]
     finally:
         _restore_proxy_config(original_config)
 
