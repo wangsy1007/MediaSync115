@@ -2,8 +2,10 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 
 /**
  * 移动端影视卡片交互：
- * - 点海报：展开/收起订阅与转存按钮（不进详情）
+ * - 第一次点海报：展开订阅/转存按钮（不进详情）
+ * - 再点一次海报：进入详情
  * - 点标题区：直接进详情
+ * - 点空白处：收起按钮
  * 桌面端点海报或标题均可进详情，悬停显示操作按钮。
  */
 export function useCardActionReveal() {
@@ -40,7 +42,7 @@ export function useCardActionReveal() {
   }
 
   /**
-   * 点海报：移动端只展开/收起操作；桌面端进入详情。
+   * 点海报：移动端首次展开操作，再次点击进入详情；桌面端直接进入详情。
    * @returns {boolean} 是否已触发导航
    */
   const handlePosterActivate = (key, onNavigate) => {
@@ -49,10 +51,14 @@ export function useCardActionReveal() {
       return true
     }
     const id = cardKey(key)
-    if (!id) return false
+    if (!id) {
+      onNavigate?.()
+      return true
+    }
     if (revealedKey.value === id) {
-      revealedKey.value = ''
-      return false
+      clearRevealed()
+      onNavigate?.()
+      return true
     }
     revealedKey.value = id
     return false
