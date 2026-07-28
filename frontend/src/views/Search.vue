@@ -129,10 +129,14 @@
             v-for="item in results"
             :key="`${item.source_service}-${item.id}`"
             class="media-card"
-            :class="{ 'pansou-card': item.isPansouResult }"
+            :class="{
+              'pansou-card': item.isPansouResult,
+              'actions-revealed': isActionsRevealed(`${item.source_service}-${item.id}`)
+            }"
             :body-style="{ padding: '0' }"
+            data-card-actions-host="1"
             shadow="hover"
-            @click="handleItemClick(item)"
+            @click="onSearchCardActivate(item)"
           >
             <div class="poster-wrapper">
               <img
@@ -264,6 +268,7 @@ import {
   setExploreSectionBatchInflight
 } from '@/utils/exploreSectionBatchCache'
 import { createExploreLibraryBadgeSyncer } from '@/utils/exploreLibraryBadgeSync'
+import { useCardActionReveal } from '@/composables/useCardActionReveal'
 import { copyText } from '@/utils/clipboard'
 import { buildExploreQueuePayload, buildTmdbSavePayload, resolveDoubanExploreId } from '@/utils/exploreQueuePayload'
 
@@ -1587,6 +1592,12 @@ const handleItemClick = (item) => {
   }
 }
 
+const { isActionsRevealed, handleCardActivate } = useCardActionReveal()
+
+const onSearchCardActivate = (item) => {
+  handleCardActivate(`${item?.source_service}-${item?.id}`, () => handleItemClick(item))
+}
+
 const warmupPan115Resources = (mediaType, tmdbId) => {
   if (!tmdbId) return
   if (mediaType === 'tv') {
@@ -2286,9 +2297,11 @@ onBeforeUnmount(() => {
           }
 
           &:hover .explore-card-actions,
-          &:focus-within .explore-card-actions {
+          &:focus-within .explore-card-actions,
+          &.actions-revealed .explore-card-actions {
             opacity: 1;
             transform: translate(-50%, 0);
+            pointer-events: auto;
           }
         }
 
@@ -2450,19 +2463,28 @@ onBeforeUnmount(() => {
         justify-content: space-between;
         padding: 12px;
         background: rgba(17, 24, 39, 0.88);
-        opacity: 1;
+        opacity: 0;
+        pointer-events: none;
         transition: opacity 0.2s ease;
 
         .action-btn {
           padding: 6px 12px;
           font-size: 12px;
           border-radius: 6px;
+          pointer-events: auto;
 
           .el-icon {
             margin-right: 4px;
           }
         }
       }
+    }
+
+    &:hover .action-buttons,
+    &:focus-within .action-buttons,
+    &.actions-revealed .action-buttons {
+      opacity: 1;
+      pointer-events: auto;
     }
 
     .media-info {
@@ -2643,7 +2665,6 @@ onBeforeUnmount(() => {
 
       .poster-wrapper {
         .action-buttons {
-          opacity: 1;
           gap: 4px;
           padding: 6px;
 
@@ -2693,11 +2714,6 @@ onBeforeUnmount(() => {
     height: 40px;
   }
 
-  .explore-page .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
-    opacity: 1;
-    transform: translate(-50%, 0);
-  }
-
   .explore-page .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions .explore-action-btn {
     width: 36px;
     height: 36px;
@@ -2721,7 +2737,6 @@ onBeforeUnmount(() => {
 
       .poster-wrapper {
         .action-buttons {
-          opacity: 1;
           gap: 4px;
           padding: 8px;
 
@@ -2781,11 +2796,24 @@ onBeforeUnmount(() => {
 @media (hover: none) {
   .explore-page {
     .media-card .poster-wrapper .action-buttons {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .media-card.actions-revealed .poster-wrapper .action-buttons {
       opacity: 1;
+      pointer-events: auto;
     }
 
     .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 10px);
+    }
+
+    .explore-section .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions {
       opacity: 1;
+      pointer-events: auto;
       transform: translate(-50%, 0);
     }
   }

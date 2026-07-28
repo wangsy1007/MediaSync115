@@ -48,10 +48,14 @@
           v-for="(item, itemIndex) in rowItems"
           :key="`${section.key}-${item.id}-${item.rank}`"
           class="recommend-card"
-          :class="{ 'just-saved': item.justSaved }"
+          :class="{
+            'just-saved': item.justSaved,
+            'actions-revealed': isActionsRevealed(cardActionKey(item))
+          }"
+          data-card-actions-host="1"
           shadow="hover"
           :body-style="{ padding: '0' }"
-          @click="emit('item-click', item)"
+          @click="handleCardClick(item)"
         >
           <div class="poster-wrapper">
             <img
@@ -112,6 +116,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, ArrowRight, Star, FolderAdd } from '@element-plus/icons-vue'
 import { searchApi, subscriptionApi } from '@/api'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
+import { useCardActionReveal } from '@/composables/useCardActionReveal'
 import { resolveDoubanExploreId } from '@/utils/exploreQueuePayload'
 
 const props = defineProps({
@@ -163,6 +168,15 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['item-click', 'subscribe', 'save', 'merge-emby-status', 'merge-feiniu-status', 'open-section'])
+
+const { isActionsRevealed, handleCardActivate } = useCardActionReveal()
+
+const cardActionKey = (item) =>
+  `${props.section?.key || 'section'}-${item?.id ?? ''}-${item?.rank ?? ''}`
+
+const handleCardClick = (item) => {
+  handleCardActivate(cardActionKey(item), () => emit('item-click', item))
+}
 
 const HOME_SECTION_LIMIT = 12
 const PRIORITY_POSTER_COUNT = 6
@@ -684,9 +698,11 @@ onBeforeUnmount(() => {
       }
 
       &:hover .explore-card-actions,
-      &:focus-within .explore-card-actions {
+      &:focus-within .explore-card-actions,
+      &.actions-revealed .explore-card-actions {
         opacity: 1;
         transform: translate(-50%, 0);
+        pointer-events: auto;
       }
     }
 
@@ -758,16 +774,20 @@ onBeforeUnmount(() => {
       }
     }
   }
-
-  .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
-    opacity: 1;
-    transform: translate(-50%, 0);
-  }
 }
 
 @media (hover: none) {
-  .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
+  .recommend-group .recommend-card .poster-wrapper {
+    .explore-card-actions {
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 10px);
+    }
+  }
+
+  .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions {
     opacity: 1;
+    pointer-events: auto;
     transform: translate(-50%, 0);
   }
 }

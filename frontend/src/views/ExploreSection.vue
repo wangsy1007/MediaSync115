@@ -19,12 +19,16 @@
         v-for="(item, itemIndex) in visibleItems"
         :key="`${item.id}-${item.rank}`"
         class="movie-card"
-        :class="{ 'just-saved': item.justSaved }"
+        :class="{
+          'just-saved': item.justSaved,
+          'actions-revealed': isActionsRevealed(buildExploreItemKey(item) || item.id)
+        }"
         :data-item-key="buildExploreItemKey(item)"
         :data-item-index="itemIndex"
+        data-card-actions-host="1"
         shadow="hover"
         :body-style="{ padding: '0' }"
-        @click="handleItemClick(item)"
+        @click="onCardActivate(item)"
       >
         <div class="poster-wrap">
           <img
@@ -123,6 +127,7 @@ import {
   resolveExploreSectionSource
 } from '@/utils/exploreSectionSource'
 import { createExploreLibraryBadgeSyncer } from '@/utils/exploreLibraryBadgeSync'
+import { useCardActionReveal } from '@/composables/useCardActionReveal'
 import { buildExploreQueuePayload, resolveDoubanExploreId } from '@/utils/exploreQueuePayload'
 import {
   consumeExploreSectionReturnContext,
@@ -193,6 +198,8 @@ const EXPLORE_QUEUE_POLL_INTERVAL_MS = 1800
 const queueActiveSaveKeys = ref(new Set())
 let exploreQueuePollTimer = null
 let exploreQueuePolling = false
+
+const { isActionsRevealed, handleCardActivate } = useCardActionReveal()
 
 const toValidTmdbId = (rawId) => {
   const id = Number(rawId)
@@ -709,6 +716,12 @@ const warmupPan115 = (mediaType, tmdbId) => {
     return
   }
   searchApi.getMoviePan115(tmdbId).catch(() => {})
+}
+
+const onCardActivate = (item) => {
+  handleCardActivate(buildExploreItemKey(item) || item?.id, () => {
+    handleItemClick(item)
+  })
 }
 
 const handleItemClick = async (item) => {
@@ -1424,9 +1437,11 @@ onBeforeUnmount(() => {
       }
 
       &:hover .explore-card-actions,
-      &:focus-within .explore-card-actions {
+      &:focus-within .explore-card-actions,
+      &.actions-revealed .explore-card-actions {
         opacity: 1;
         transform: translate(-50%, 0);
+        pointer-events: auto;
       }
     }
 
@@ -1499,11 +1514,6 @@ onBeforeUnmount(() => {
     font-size: 9px;
   }
 
-  .explore-section-page .movie-card .poster-wrap .explore-card-actions {
-    opacity: 1;
-    transform: translate(-50%, 0);
-  }
-
   .explore-section-page .movie-card .poster-wrap .explore-card-actions .explore-action-btn {
     width: 36px;
     height: 36px;
@@ -1512,7 +1522,14 @@ onBeforeUnmount(() => {
 
 @media (hover: none) {
   .explore-section-page .movie-card .poster-wrap .explore-card-actions {
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 10px);
+  }
+
+  .explore-section-page .movie-card.actions-revealed .poster-wrap .explore-card-actions {
     opacity: 1;
+    pointer-events: auto;
     transform: translate(-50%, 0);
   }
 }
