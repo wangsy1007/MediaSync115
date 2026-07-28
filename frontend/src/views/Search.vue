@@ -2437,7 +2437,7 @@ onBeforeUnmount(() => {
         line-height: 1.2;
 
         &.has-emby {
-          top: 34px;
+          top: 28px;
         }
       }
 
@@ -2744,7 +2744,7 @@ onBeforeUnmount(() => {
           padding: 1px 4px;
 
           &.has-emby {
-            top: 30px;
+            top: 24px;
           }
         }
 

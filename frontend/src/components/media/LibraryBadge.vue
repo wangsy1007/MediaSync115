@@ -55,11 +55,11 @@ const badgeTitle = computed(() => {
 .library-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 .library-badge.is-inline {
-  gap: 7px;
+  gap: 5px;
 }
 
 .library-badge.is-multi {
@@ -70,39 +70,39 @@ const badgeTitle = computed(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.96);
-  border: 1.5px solid rgba(255, 255, 255, 0.92);
-  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 3px 8px rgba(15, 23, 42, 0.16);
   overflow: hidden;
 }
 
 :global([data-theme='dark']) .library-badge__icon {
   background: rgba(10, 24, 50, 0.96);
   border-color: rgba(148, 194, 255, 0.38);
-  box-shadow: 0 8px 16px rgba(2, 10, 24, 0.34);
+  box-shadow: 0 4px 10px rgba(2, 10, 24, 0.34);
 }
 
 .library-badge.is-inline .library-badge__icon {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
 }
 
 .library-badge.is-multi .library-badge__icon + .library-badge__icon {
-  margin-left: -6px;
+  margin-left: -4px;
 }
 
 .library-badge__icon svg {
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
   display: block;
 }
 
 .library-badge.is-inline .library-badge__icon svg {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
 }
 
 .library-badge__icon.is-emby {
@@ -115,9 +115,6 @@ const badgeTitle = computed(() => {
 
 .library-badge__icon.is-feiniu {
   border-color: rgba(59, 130, 246, 0.96);
-}
-
-.library-badge__icon.is-feiniu {
   padding: 0;
 }
 
@@ -127,5 +124,31 @@ const badgeTitle = computed(() => {
   border-radius: 50%;
   object-fit: cover;
   transform: scale(1.08);
+}
+
+@media (max-width: 768px) {
+  .library-badge__icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .library-badge__icon svg {
+    width: 10px;
+    height: 10px;
+  }
+
+  .library-badge.is-inline .library-badge__icon {
+    width: 20px;
+    height: 20px;
+  }
+
+  .library-badge.is-inline .library-badge__icon svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  .library-badge.is-multi .library-badge__icon + .library-badge__icon {
+    margin-left: -3px;
+  }
 }
 </style>
