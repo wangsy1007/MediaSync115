@@ -30,6 +30,11 @@ from app.services.archive_naming_config import (
 )
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.tmdb_service import tmdb_service
+from app.utils.cloud_filename import (
+    is_cloud_duplicate_variant,
+    normalize_archive_basename,
+    strip_cloud_duplicate_suffix,
+)
 from app.utils.name_parser import name_parser
 from app.utils.media_title_cleanup import clean_archive_display_title
 
@@ -639,6 +644,7 @@ class ArchiveService:
                 # 阶段 2.5：电视剧按集去重（单集优先于合集，同集保留最高画质）
                 tv_skip_map = self._dedupe_tv_identified_items(identified)
                 season_episode_cache: dict[str, set[tuple[int, int]]] = {}
+                folder_snapshot_cache: dict[str, dict[str, Any]] = {}
 
                 # 阶段三：准备目标目录 → 按目录批量移动 → 逐个重命名/字幕
                 folder_cache: dict[tuple[str, ...], str] = {}
@@ -669,6 +675,7 @@ class ArchiveService:
                         output_cid=output_cid,
                         folder_cache=folder_cache,
                         season_episode_cache=season_episode_cache,
+                        folder_snapshot_cache=folder_snapshot_cache,
                         id_cache=tmdb_id_cache,
                     )
                     prepared_plans.append(plan)
@@ -735,6 +742,7 @@ class ArchiveService:
                             plan=plan,
                             subtitle_items=subtitle_items,
                             season_episode_cache=season_episode_cache,
+                            folder_snapshot_cache=folder_snapshot_cache,
                         )
                     elif plan.get("ready") and not plan.get("moved"):
                         result = {
@@ -896,7 +904,9 @@ class ArchiveService:
     def _extract_tv_coverage(
         parsed: dict[str, Any], filename: str
     ) -> dict[str, int] | None:
-        coverage = name_parser.parse_episode_coverage(str(filename or ""))
+        coverage = name_parser.parse_episode_coverage(
+            strip_cloud_duplicate_suffix(str(filename or ""))
+        )
         if coverage:
             return coverage
         if str(parsed.get("media_type") or "") != "tv":
@@ -964,19 +974,27 @@ class ArchiveService:
             "message": message,
         }
 
-    async def _get_season_archived_episodes(
+    async def _get_target_folder_snapshot(
         self,
         pan115: Pan115Service,
-        season_cid: str,
-        cache: dict[str, set[tuple[int, int]]] | None = None,
-    ) -> set[tuple[int, int]]:
-        cid = str(season_cid or "").strip()
+        folder_cid: str,
+        cache: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """列出目标目录已有文件：集数索引 + 规范化文件名（用于去重）。"""
+        cid = str(folder_cid or "").strip()
+        empty: dict[str, Any] = {
+            "episodes": set(),
+            "basenames": set(),
+            "files": [],
+        }
         if not cid:
-            return set()
+            return empty
         if cache is not None and cid in cache:
             return cache[cid]
 
         episodes: set[tuple[int, int]] = set()
+        basenames: set[str] = set()
+        files: list[dict[str, str]] = []
         offset = 0
         limit = 200
         while True:
@@ -991,17 +1009,79 @@ class ArchiveService:
                 if not isinstance(row, dict) or pan115._is_folder_item(row):
                     continue
                 name = str(row.get("name") or row.get("fn") or "")
-                coverage = name_parser.parse_episode_coverage(name)
-                if not coverage:
-                    continue
-                episodes.update(name_parser.iter_episode_keys(coverage))
+                fid = str(row.get("fid") or row.get("cid") or "").strip()
+                clean_name = strip_cloud_duplicate_suffix(name)
+                coverage = name_parser.parse_episode_coverage(clean_name)
+                if coverage:
+                    episodes.update(name_parser.iter_episode_keys(coverage))
+                normalized = normalize_archive_basename(name)
+                if normalized:
+                    basenames.add(normalized)
+                files.append({"fid": fid, "name": name, "normalized": normalized})
             if len(rows) < limit:
                 break
             offset += limit
 
+        snapshot = {
+            "episodes": episodes,
+            "basenames": basenames,
+            "files": files,
+        }
         if cache is not None:
-            cache[cid] = set(episodes)
-        return episodes
+            cache[cid] = snapshot
+        return snapshot
+
+    async def _get_season_archived_episodes(
+        self,
+        pan115: Pan115Service,
+        season_cid: str,
+        cache: dict[str, set[tuple[int, int]]] | None = None,
+    ) -> set[tuple[int, int]]:
+        """兼容旧调用：仅返回目标季目录内已解析到的集数。"""
+        folder_cache: dict[str, dict[str, Any]] | None = None
+        if cache is not None:
+            folder_cache = {}
+        snapshot = await self._get_target_folder_snapshot(
+            pan115, season_cid, folder_cache
+        )
+        if cache is not None and folder_cache is not None:
+            cache[season_cid] = set(snapshot["episodes"])
+        return set(snapshot["episodes"])
+
+    @staticmethod
+    def _snapshot_has_filename_conflict(
+        snapshot: dict[str, Any],
+        *,
+        source_filename: str,
+        target_filename: str,
+        exclude_fid: str = "",
+    ) -> str | None:
+        """检查目标目录是否已有同名/同集文件（含网盘 (1)(2) 变体）。"""
+        exclude = str(exclude_fid or "").strip()
+        normalized_targets = {
+            value
+            for value in (
+                normalize_archive_basename(source_filename),
+                normalize_archive_basename(target_filename),
+            )
+            if value
+        }
+        if not normalized_targets:
+            return None
+
+        for row in snapshot.get("files") or []:
+            fid = str(row.get("fid") or "").strip()
+            if exclude and fid == exclude:
+                continue
+            normalized = str(row.get("normalized") or "")
+            if normalized in normalized_targets:
+                existing_name = str(row.get("name") or target_filename)
+                return f"目标目录已存在 {existing_name}，已跳过"
+            for candidate in normalized_targets:
+                if is_cloud_duplicate_variant(str(row.get("name") or ""), candidate):
+                    existing_name = str(row.get("name") or target_filename)
+                    return f"目标目录已存在 {existing_name}，已跳过"
+        return None
 
     async def _check_tv_episode_archive_conflict(
         self,
@@ -1010,16 +1090,33 @@ class ArchiveService:
         filename: str,
         target_cid: str,
         season_episode_cache: dict[str, set[tuple[int, int]]] | None,
+        *,
+        new_filename: str = "",
+        exclude_fid: str = "",
+        folder_snapshot_cache: dict[str, dict[str, Any]] | None = None,
     ) -> str | None:
         if str(parsed.get("media_type") or "") != "tv":
             return None
         coverage = self._extract_tv_coverage(parsed, filename)
+        snapshot = await self._get_target_folder_snapshot(
+            pan115, target_cid, folder_snapshot_cache
+        )
+        if season_episode_cache is not None:
+            season_episode_cache[target_cid] = set(snapshot["episodes"])
+
+        filename_conflict = self._snapshot_has_filename_conflict(
+            snapshot,
+            source_filename=filename,
+            target_filename=new_filename or filename,
+            exclude_fid=exclude_fid,
+        )
+        if filename_conflict:
+            return filename_conflict
+
         if not coverage:
             return None
 
-        existing = await self._get_season_archived_episodes(
-            pan115, target_cid, season_episode_cache
-        )
+        existing = set(snapshot["episodes"])
         overlap = [
             (season, episode)
             for season, episode in name_parser.iter_episode_keys(coverage)
@@ -1033,6 +1130,26 @@ class ArchiveService:
         labels = ", ".join(f"S{s:02d}E{e:02d}" for s, e in overlap[:5])
         suffix = " 等" if len(overlap) > 5 else ""
         return f"目标目录已存在 {labels}{suffix}，已跳过"
+
+    async def _check_movie_archive_conflict(
+        self,
+        pan115: Pan115Service,
+        filename: str,
+        target_cid: str,
+        *,
+        new_filename: str = "",
+        folder_snapshot_cache: dict[str, dict[str, Any]] | None = None,
+        exclude_fid: str = "",
+    ) -> str | None:
+        snapshot = await self._get_target_folder_snapshot(
+            pan115, target_cid, folder_snapshot_cache
+        )
+        return self._snapshot_has_filename_conflict(
+            snapshot,
+            source_filename=filename,
+            target_filename=new_filename or filename,
+            exclude_fid=exclude_fid,
+        )
 
     @staticmethod
     def _remember_archived_tv_episodes(
@@ -1059,6 +1176,7 @@ class ArchiveService:
         output_cid: str,
         folder_cache: dict[tuple[str, ...], str] | None = None,
         season_episode_cache: dict[str, set[tuple[int, int]]] | None = None,
+        folder_snapshot_cache: dict[str, dict[str, Any]] | None = None,
         id_cache: dict[tuple[str, int], dict[str, Any] | None] | None = None,
     ) -> dict[str, Any]:
         """准备归档计划：识别校正、建目录、冲突检查；不执行移动。"""
@@ -1173,27 +1291,6 @@ class ArchiveService:
                     season=season,
                     naming=naming,
                 )
-                conflict = await self._check_tv_episode_archive_conflict(
-                    pan115,
-                    parsed,
-                    filename,
-                    target_cid,
-                    season_episode_cache,
-                )
-                if conflict:
-                    await self._mark_task_skipped(db_task.id, conflict)
-                    return {
-                        "ready": False,
-                        "result": self._build_archive_skip_result(item, conflict),
-                    }
-                # 批量准备阶段提前占用集数，避免同批重复归档同一集
-                if season_episode_cache is not None:
-                    self._remember_archived_tv_episodes(
-                        parsed,
-                        filename,
-                        target_cid,
-                        season_episode_cache,
-                    )
             else:
                 target_cid = await self._ensure_movie_path(
                     pan115,
@@ -1207,6 +1304,73 @@ class ArchiveService:
                     "movie", subdirs, region_name, title_folder, naming=naming
                 )
 
+            new_filename = self._build_target_filename(
+                parsed,
+                matched,
+                filename,
+                naming,
+                display_title=display_title,
+            )
+
+            if parsed["media_type"] == "tv":
+                conflict = await self._check_tv_episode_archive_conflict(
+                    pan115,
+                    parsed,
+                    filename,
+                    target_cid,
+                    season_episode_cache,
+                    new_filename=new_filename,
+                    exclude_fid=fid,
+                    folder_snapshot_cache=folder_snapshot_cache,
+                )
+                if conflict:
+                    await self._mark_task_skipped(db_task.id, conflict)
+                    return {
+                        "ready": False,
+                        "result": self._build_archive_skip_result(item, conflict),
+                    }
+                if season_episode_cache is not None:
+                    self._remember_archived_tv_episodes(
+                        parsed,
+                        filename,
+                        target_cid,
+                        season_episode_cache,
+                    )
+                if folder_snapshot_cache is not None:
+                    snapshot = await self._get_target_folder_snapshot(
+                        pan115, target_cid, folder_snapshot_cache
+                    )
+                    normalized_new = normalize_archive_basename(new_filename)
+                    if normalized_new:
+                        snapshot["basenames"].add(normalized_new)
+                    coverage = self._extract_tv_coverage(parsed, filename)
+                    if coverage:
+                        snapshot["episodes"].update(
+                            name_parser.iter_episode_keys(coverage)
+                        )
+            else:
+                conflict = await self._check_movie_archive_conflict(
+                    pan115,
+                    filename,
+                    target_cid,
+                    new_filename=new_filename,
+                    folder_snapshot_cache=folder_snapshot_cache,
+                    exclude_fid=fid,
+                )
+                if conflict:
+                    await self._mark_task_skipped(db_task.id, conflict)
+                    return {
+                        "ready": False,
+                        "result": self._build_archive_skip_result(item, conflict),
+                    }
+                if folder_snapshot_cache is not None:
+                    snapshot = await self._get_target_folder_snapshot(
+                        pan115, target_cid, folder_snapshot_cache
+                    )
+                    normalized_new = normalize_archive_basename(new_filename)
+                    if normalized_new:
+                        snapshot["basenames"].add(normalized_new)
+
             await self._update_task(
                 db_task.id,
                 media_type=parsed["media_type"],
@@ -1217,13 +1381,6 @@ class ArchiveService:
                 target_path=target_desc,
             )
 
-            new_filename = self._build_target_filename(
-                parsed,
-                matched,
-                filename,
-                naming,
-                display_title=display_title,
-            )
             return {
                 "ready": True,
                 "moved": False,
@@ -1264,6 +1421,7 @@ class ArchiveService:
         plan: dict[str, Any],
         subtitle_items: list[dict[str, Any]] | None = None,
         season_episode_cache: dict[str, set[tuple[int, int]]] | None = None,
+        folder_snapshot_cache: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """文件已移动后：重命名、字幕、标记成功。"""
         fid = str(plan.get("fid") or "")
@@ -1279,9 +1437,49 @@ class ArchiveService:
         item = plan.get("item") or {}
 
         try:
+            if folder_snapshot_cache is not None and target_cid in folder_snapshot_cache:
+                del folder_snapshot_cache[target_cid]
+            snapshot = await self._get_target_folder_snapshot(
+                pan115, target_cid, folder_snapshot_cache
+            )
+            duplicate_message = self._snapshot_has_filename_conflict(
+                snapshot,
+                source_filename=filename,
+                target_filename=new_filename,
+                exclude_fid=fid,
+            )
+            if duplicate_message:
+                try:
+                    await pan115.delete_file([fid])
+                except Exception as exc:
+                    logger.warning("删除重复归档文件 %s 失败: %s", filename, exc)
+                if task_id:
+                    await self._mark_task_skipped(task_id, duplicate_message)
+                return self._build_archive_skip_result(item, duplicate_message)
+
             renamed = await self._rename_archived_file(
                 pan115, fid, filename, new_filename
             )
+            if not renamed and normalize_archive_basename(new_filename):
+                refreshed = await self._get_target_folder_snapshot(
+                    pan115, target_cid, None
+                )
+                retry_message = self._snapshot_has_filename_conflict(
+                    refreshed,
+                    source_filename=filename,
+                    target_filename=new_filename,
+                    exclude_fid=fid,
+                )
+                if retry_message:
+                    try:
+                        await pan115.delete_file([fid])
+                    except Exception as exc:
+                        logger.warning(
+                            "重命名冲突后删除重复文件 %s 失败: %s", filename, exc
+                        )
+                    if task_id:
+                        await self._mark_task_skipped(task_id, retry_message)
+                    return self._build_archive_skip_result(item, retry_message)
 
             if subtitle_items:
                 await self._move_subtitles(

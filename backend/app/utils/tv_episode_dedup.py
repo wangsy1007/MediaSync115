@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
+from app.utils.cloud_filename import strip_cloud_duplicate_suffix
 from app.utils.name_parser import name_parser
 
 
@@ -21,7 +22,9 @@ def _default_score(item: dict[str, Any]) -> tuple[Any, ...]:
 def build_tv_file_entry(
     item: dict[str, Any], *, group_id: int = 0
 ) -> dict[str, Any] | None:
-    name = str(item.get("name") or item.get("fn") or "").strip()
+    name = strip_cloud_duplicate_suffix(
+        str(item.get("name") or item.get("fn") or "").strip()
+    )
     if not name:
         return None
     coverage = name_parser.parse_episode_coverage(name)
@@ -217,7 +220,8 @@ def filename_likely_same_show(filename: str, show_title: str) -> bool:
 
 
 def extract_episodes_from_filename(filename: str) -> set[tuple[int, int]]:
-    coverage = name_parser.parse_episode_coverage(filename)
+    clean_name = strip_cloud_duplicate_suffix(str(filename or ""))
+    coverage = name_parser.parse_episode_coverage(clean_name)
     if not coverage:
         return set()
     return set(name_parser.iter_episode_keys(coverage))

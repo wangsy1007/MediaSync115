@@ -498,3 +498,86 @@ class TestArchiveTvEpisodeDedup:
         assert skip_map.get("low")
         assert "high" not in skip_map
 
+
+class TestArchiveTargetConflict:
+    def test_snapshot_detects_cloud_duplicate_suffix(self) -> None:
+        snapshot = {
+            "files": [
+                {
+                    "fid": "existing",
+                    "name": "权力的游戏前传 (2022) - S01E01.mkv",
+                    "normalized": "权力的游戏前传 (2022) - s01e01.mkv",
+                }
+            ],
+            "basenames": {"权力的游戏前传 (2022) - s01e01.mkv"},
+            "episodes": {(1, 1)},
+        }
+        message = archive_service._snapshot_has_filename_conflict(
+            snapshot,
+            source_filename="release.S01E01.2160p.mkv",
+            target_filename="权力的游戏前传 (2022) - S01E01.mkv",
+        )
+        assert message
+        assert "已跳过" in message
+
+    def test_snapshot_ignores_same_fid(self) -> None:
+        snapshot = {
+            "files": [
+                {
+                    "fid": "same",
+                    "name": "Show S01E01.mkv",
+                    "normalized": "show s01e01.mkv",
+                }
+            ],
+            "basenames": {"show s01e01.mkv"},
+            "episodes": {(1, 1)},
+        }
+        message = archive_service._snapshot_has_filename_conflict(
+            snapshot,
+            source_filename="Show S01E01.mkv",
+            target_filename="Show S01E01.mkv",
+            exclude_fid="same",
+        )
+        assert message is None
+
+    @pytest.mark.asyncio
+    async def test_tv_conflict_skips_existing_episode_from_suffixed_file(
+        self, monkeypatch
+    ) -> None:
+        class FakePan115:
+            async def get_file_list(self, **kwargs):
+                return {
+                    "data": [
+                        {
+                            "fid": "old",
+                            "name": "权力的游戏前传 (2022) - S01E01 (1).mkv",
+                        }
+                    ]
+                }
+
+            def _is_folder_item(self, row):
+                return False
+
+        parsed = {"media_type": "tv", "season": 1, "episode": 2}
+        message = await archive_service._check_tv_episode_archive_conflict(
+            FakePan115(),
+            parsed,
+            "release.S01E02.2160p.mkv",
+            "season-cid",
+            None,
+            new_filename="权力的游戏前传 (2022) - S01E02.mkv",
+        )
+        assert message is None
+
+        parsed = {"media_type": "tv", "season": 1, "episode": 1}
+        message = await archive_service._check_tv_episode_archive_conflict(
+            FakePan115(),
+            parsed,
+            "release.S01E01.2160p.mkv",
+            "season-cid",
+            None,
+            new_filename="权力的游戏前传 (2022) - S01E01.mkv",
+        )
+        assert message
+        assert "S01E01" in message
+
