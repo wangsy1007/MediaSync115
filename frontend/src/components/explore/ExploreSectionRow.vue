@@ -112,6 +112,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, ArrowRight, Star, FolderAdd } from '@element-plus/icons-vue'
 import { searchApi, subscriptionApi } from '@/api'
 import LibraryBadge from '@/components/media/LibraryBadge.vue'
+import { resolveDoubanExploreId } from '@/utils/exploreQueuePayload'
 
 const props = defineProps({
   source: {
