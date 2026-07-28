@@ -690,6 +690,7 @@ onBeforeUnmount(() => {
         gap: 10px;
         z-index: 3;
         opacity: 0;
+        /* 隐藏时必须整组不可点；子按钮不能单独 pointer-events:auto，否则会挡住海报点击 */
         pointer-events: none;
         transition: opacity 0.22s ease, transform 0.22s ease;
 
@@ -698,7 +699,6 @@ onBeforeUnmount(() => {
           width: 38px;
           height: 38px;
           padding: 0;
-          pointer-events: auto;
         }
       }
 
@@ -791,24 +791,30 @@ onBeforeUnmount(() => {
     display: none !important;
   }
 
-  .recommend-group .recommend-card .poster-wrapper {
-    .explore-card-actions {
-      opacity: 0;
-      pointer-events: none;
-      transform: translate(-50%, 10px);
-    }
+  .recommend-group .recommend-card .poster-wrapper .explore-card-actions,
+  .recommend-group .recommend-card .poster-wrapper .explore-card-actions * {
+    pointer-events: none !important;
+  }
+
+  .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
+    opacity: 0;
+    transform: translate(-50%, 10px);
   }
 
   .recommend-group .recommend-card:hover .poster-wrapper .explore-card-actions,
   .recommend-group .recommend-card:focus-within .poster-wrapper .explore-card-actions {
     opacity: 0;
-    pointer-events: none;
+    pointer-events: none !important;
     transform: translate(-50%, 10px);
+  }
+
+  .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions,
+  .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions * {
+    pointer-events: auto !important;
   }
 
   .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions {
     opacity: 1;
-    pointer-events: auto;
     transform: translate(-50%, 0);
   }
 }

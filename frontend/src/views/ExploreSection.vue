@@ -1472,6 +1472,7 @@ onBeforeUnmount(() => {
         gap: 10px;
         z-index: 3;
         opacity: 0;
+        /* 隐藏时整组不可点，避免透明按钮挡住海报点击 */
         pointer-events: none;
         transition: opacity 0.22s ease, transform 0.22s ease;
 
@@ -1480,7 +1481,6 @@ onBeforeUnmount(() => {
           width: 38px;
           height: 38px;
           padding: 0;
-          pointer-events: auto;
           box-shadow: 0 6px 18px rgba(0, 0, 0, 0.36);
         }
       }
@@ -1571,22 +1571,30 @@ onBeforeUnmount(() => {
 }
 
 @media (hover: none) {
+  .explore-section-page .movie-card .poster-wrap .explore-card-actions,
+  .explore-section-page .movie-card .poster-wrap .explore-card-actions * {
+    pointer-events: none !important;
+  }
+
   .explore-section-page .movie-card .poster-wrap .explore-card-actions {
     opacity: 0;
-    pointer-events: none;
     transform: translate(-50%, 10px);
   }
 
   .explore-section-page .movie-card:hover .poster-wrap .explore-card-actions,
   .explore-section-page .movie-card:focus-within .poster-wrap .explore-card-actions {
     opacity: 0;
-    pointer-events: none;
+    pointer-events: none !important;
     transform: translate(-50%, 10px);
+  }
+
+  .explore-section-page .movie-card.actions-revealed .poster-wrap .explore-card-actions,
+  .explore-section-page .movie-card.actions-revealed .poster-wrap .explore-card-actions * {
+    pointer-events: auto !important;
   }
 
   .explore-section-page .movie-card.actions-revealed .poster-wrap .explore-card-actions {
     opacity: 1;
-    pointer-events: auto;
     transform: translate(-50%, 0);
   }
 }

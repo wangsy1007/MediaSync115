@@ -2338,6 +2338,7 @@ onBeforeUnmount(() => {
             gap: 10px;
             z-index: 3;
             opacity: 0;
+            /* 隐藏时整组不可点，避免透明按钮挡住海报点击 */
             pointer-events: none;
             transition: opacity 0.22s ease, transform 0.22s ease;
 
@@ -2346,7 +2347,6 @@ onBeforeUnmount(() => {
               width: 38px;
               height: 38px;
               padding: 0;
-              pointer-events: auto;
             }
           }
 
@@ -2518,6 +2518,7 @@ onBeforeUnmount(() => {
         padding: 12px;
         background: rgba(17, 24, 39, 0.88);
         opacity: 0;
+        /* 隐藏时整组不可点，避免透明按钮挡住海报点击 */
         pointer-events: none;
         transition: opacity 0.2s ease;
 
@@ -2525,7 +2526,6 @@ onBeforeUnmount(() => {
           padding: 6px 12px;
           font-size: 12px;
           border-radius: 6px;
-          pointer-events: auto;
 
           .el-icon {
             margin-right: 4px;
@@ -2850,38 +2850,54 @@ onBeforeUnmount(() => {
 
 @media (hover: none) {
   .explore-page {
+    .media-card .poster-wrapper .action-buttons,
+    .media-card .poster-wrapper .action-buttons * {
+      pointer-events: none !important;
+    }
+
     .media-card .poster-wrapper .action-buttons {
       opacity: 0;
-      pointer-events: none;
     }
 
     .media-card:hover .poster-wrapper .action-buttons,
     .media-card:focus-within .poster-wrapper .action-buttons {
       opacity: 0;
-      pointer-events: none;
+      pointer-events: none !important;
+    }
+
+    .media-card.actions-revealed .poster-wrapper .action-buttons,
+    .media-card.actions-revealed .poster-wrapper .action-buttons * {
+      pointer-events: auto !important;
     }
 
     .media-card.actions-revealed .poster-wrapper .action-buttons {
       opacity: 1;
-      pointer-events: auto;
+    }
+
+    .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions,
+    .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions * {
+      pointer-events: none !important;
     }
 
     .explore-section .recommend-group .recommend-card .poster-wrapper .explore-card-actions {
       opacity: 0;
-      pointer-events: none;
       transform: translate(-50%, 10px);
     }
 
     .explore-section .recommend-group .recommend-card:hover .poster-wrapper .explore-card-actions,
     .explore-section .recommend-group .recommend-card:focus-within .poster-wrapper .explore-card-actions {
       opacity: 0;
-      pointer-events: none;
+      pointer-events: none !important;
       transform: translate(-50%, 10px);
+    }
+
+    .explore-section .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions,
+    .explore-section .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions * {
+      pointer-events: auto !important;
     }
 
     .explore-section .recommend-group .recommend-card.actions-revealed .poster-wrapper .explore-card-actions {
       opacity: 1;
-      pointer-events: auto;
       transform: translate(-50%, 0);
     }
   }

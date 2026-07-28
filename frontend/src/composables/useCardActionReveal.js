@@ -1,17 +1,12 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 
 /**
- * 移动端影视卡片交互：
- * - 第一次点海报：展开订阅/转存按钮（不进详情）
- * - 再点一次海报：进入详情
- * - 点标题区：直接进详情
- * - 点空白处：收起按钮
- * 桌面端 / 有鼠标悬停能力的设备：点击直接进详情。
- * Windows 触摸屏笔记本常把 primary 报成 hover:none，但 any-hover:hover 仍成立，必须走一键进详情。
+ * 移动端窄屏触控：第一次点海报展开订阅/转存，再点进入详情；点标题直接进详情。
+ * PC / 宽屏：海报点击一律直接进详情（含触摸屏笔记本用鼠标或触控笔）。
  */
 export function useCardActionReveal() {
   const revealedKey = ref('')
-  /** 是否启用「先展开再进详情」的触控两段式 */
+  /** 是否处于「窄屏触控两段式」模式 */
   const isTouchUi = ref(false)
   const mediaQueries = []
   let lastPointerType = ''
@@ -21,11 +16,17 @@ export function useCardActionReveal() {
       isTouchUi.value = false
       return
     }
-    // 与 CSS @media (hover: none) 对齐，但额外用 any-hover：
-    // 只要有任一可悬停指针（鼠标），就不走两段式，避免 PC 要点两次。
-    const primaryNoHover = window.matchMedia('(hover: none)').matches
-    const anyHover = window.matchMedia('(any-hover: hover)').matches
-    isTouchUi.value = primaryNoHover && !anyHover
+    // 宽屏一律视为桌面：不启用两段式，彻底避免 PC 要点两次
+    const narrow = window.matchMedia('(max-width: 768px)').matches
+    if (!narrow) {
+      isTouchUi.value = false
+      return
+    }
+    const noAnyHover = !window.matchMedia('(any-hover: hover)').matches
+    const coarseOnly =
+      window.matchMedia('(pointer: coarse)').matches &&
+      !window.matchMedia('(any-pointer: fine)').matches
+    isTouchUi.value = noAnyHover || coarseOnly
   }
 
   const cardKey = (value) => String(value ?? '')
@@ -51,25 +52,27 @@ export function useCardActionReveal() {
       lastPointerType = String(type)
       return
     }
-    // 部分环境只有 mouse 事件、没有 PointerEvent
-    if (event?.type === 'mousedown' || event?.button === 0) {
+    if (event?.type === 'mousedown' || typeof event?.button === 'number') {
       lastPointerType = 'mouse'
     }
   }
 
   const isDirectNavigatePointer = (event) => {
+    // 宽屏 / 桌面模式：永远直接进详情
+    if (!isTouchUi.value) return true
+
     notePointer(event)
     const type = String(
       event?.pointerType || lastPointerType || ''
     ).toLowerCase()
+    // 窄屏上若实际是鼠标点击，仍直接进详情
     if (type === 'mouse' || type === 'pen') return true
     if (type === 'touch') return false
-    // 无指针类型时：能悬停的设备一律一键进详情
-    return !isTouchUi.value
+    return false
   }
 
   /**
-   * 点海报：触控两段式；鼠标/桌面端直接进详情。
+   * 点海报：窄屏触控两段式；其余情况直接进详情。
    * @returns {boolean} 是否已触发导航
    */
   const handlePosterActivate = (key, onNavigate, event) => {
@@ -114,16 +117,22 @@ export function useCardActionReveal() {
   }
 
   const onDocumentMouseDown = (event) => {
-    // 兜底：无 PointerEvent 时仍能识别鼠标
     if (!event?.pointerType) {
       lastPointerType = 'mouse'
     }
   }
 
+  const onViewportChange = () => syncTouchUi()
+
   onMounted(() => {
     syncTouchUi()
     if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-      for (const query of ['(hover: none)', '(any-hover: hover)']) {
+      for (const query of [
+        '(max-width: 768px)',
+        '(any-hover: hover)',
+        '(pointer: coarse)',
+        '(any-pointer: fine)'
+      ]) {
         const media = window.matchMedia(query)
         const onChange = () => syncTouchUi()
         if (typeof media.addEventListener === 'function') {
@@ -134,11 +143,13 @@ export function useCardActionReveal() {
         mediaQueries.push({ media, onChange })
       }
     }
+    window.addEventListener('resize', onViewportChange)
     document.addEventListener('pointerdown', onDocumentPointerDown, true)
     document.addEventListener('mousedown', onDocumentMouseDown, true)
   })
 
   onBeforeUnmount(() => {
+    window.removeEventListener('resize', onViewportChange)
     document.removeEventListener('pointerdown', onDocumentPointerDown, true)
     document.removeEventListener('mousedown', onDocumentMouseDown, true)
     for (const entry of mediaQueries) {
