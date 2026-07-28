@@ -412,7 +412,7 @@ const markSubscribedOnItem = (item) => {
   if (!item || typeof item !== 'object') return
   const mediaType = item.media_type
   const tmdbId = toValidTmdbId(item.tmdb_id || item.tmdbid)
-  const doubanId = item.douban_id || item.id
+  const doubanId = resolveDoubanExploreId(item)
   const imdbId = item.imdb_id
   item.isSubscribed = isSubscribedMedia(mediaType, tmdbId) ||
                       isSubscribedByDoubanId(doubanId) ||
@@ -464,7 +464,7 @@ const buildExploreQueueItemKeyFromItem = (item) => {
   const mediaType = normalizeExploreQueueMediaType(item?.media_type)
   const tmdbId = toValidTmdbId(item?.tmdb_id || item?.tmdbid)
   if (tmdbId) return `tmdb:${mediaType}:${tmdbId}`
-  const doubanId = String(item?.douban_id || item?.id || '').trim()
+  const doubanId = resolveDoubanExploreId(item)
   if (doubanId) return `douban:${mediaType}:${doubanId}`
   return ''
 }
@@ -749,10 +749,12 @@ const getExploreSectionByKey = (sectionKey) => {
 
 const normalizeExploreSectionItems = (items = [], rankStart = 1) => {
   return items.map((item, index) => {
+    // 禁止用 item.id 回填 douban_id：备用 TMDB 榜单的 id 就是 tmdb_id，回填会导致豆瓣详情串台
+    const doubanId = resolveDoubanExploreId(item)
     const normalized = {
       ...item,
       id: item.id,
-      douban_id: item.douban_id || item.id,
+      douban_id: doubanId || null,
       media_type: item.media_type || 'movie',
       rank: item.rank || rankStart + index,
       isSubscribed: false,
@@ -799,7 +801,7 @@ const handleExploreSubscribe = async (item) => {
   if (!item) return
   const mediaType = item.media_type === 'tv' ? 'tv' : 'movie'
   const tmdbId = toValidTmdbId(item.tmdb_id || item.tmdbid)
-  const doubanId = String(item.douban_id || item.id || '').trim() || null
+  const doubanId = resolveDoubanExploreId(item) || null
   if (!tmdbId && !doubanId) {
     ElMessage.warning(withTitleHint(item, '缺少可用条目标识，无法操作订阅'))
     return
@@ -1618,12 +1620,21 @@ const normalizeMaoyanId = (value) => {
 }
 
 const resolveExploreItemRoute = async (item) => {
-  const cachedTmdbId = toValidTmdbId(item?.resolved_tmdb_id || item?.tmdb_id)
+  const doubanId = exploreSource.value === 'douban' ? resolveDoubanExploreId(item) : ''
+  const explicitTmdbId = toValidTmdbId(item?.resolved_tmdb_id || item?.tmdb_id || item?.tmdbid)
   const cachedType = item?.resolved_media_type || item?.media_type
-  if (cachedTmdbId && (exploreSource.value === 'tmdb' || item?.resolved_tmdb_id)) {
+  // TMDB 源 / 已解析缓存 / 豆瓣备用榜（无真实豆瓣 ID）→ 直接走 TMDB
+  if (
+    explicitTmdbId &&
+    (
+      exploreSource.value === 'tmdb' ||
+      Boolean(item?.resolved_tmdb_id) ||
+      (exploreSource.value === 'douban' && !doubanId)
+    )
+  ) {
     return {
       media_type: cachedType === 'tv' ? 'tv' : 'movie',
-      tmdb_id: cachedTmdbId
+      tmdb_id: explicitTmdbId
     }
   }
 
@@ -1637,7 +1648,7 @@ const resolveExploreItemRoute = async (item) => {
     const payload = {
       source: exploreSource.value,
       id: item.id,
-      douban_id: exploreSource.value === 'douban' ? (item.douban_id || item.id) : '',
+      douban_id: doubanId,
       maoyan_id:
         exploreSource.value === 'maoyan'
           ? normalizeMaoyanId(item.maoyan_id || item.id)
@@ -1646,7 +1657,9 @@ const resolveExploreItemRoute = async (item) => {
       original_title: item.original_title || '',
       year: item.year || getYear(item) || '',
       media_type: directType,
-      tmdb_id: exploreSource.value === 'tmdb' ? directTmdbId : null
+      tmdb_id: exploreSource.value === 'tmdb'
+        ? directTmdbId
+        : toValidTmdbId(item?.tmdb_id || item?.tmdbid)
     }
     let { data } = await searchApi.resolveExploreItem(payload)
 

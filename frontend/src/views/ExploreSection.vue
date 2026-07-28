@@ -241,7 +241,7 @@ const markEmbyOnItem = (item) => {
 const applySubscribedFlag = (item) => {
   if (!item || typeof item !== 'object') return
   const key = buildSubscribedKey(item.media_type, item.tmdb_id)
-  const doubanId = item.douban_id || item.id
+  const doubanId = resolveDoubanExploreId(item)
   const imdbId = item.imdb_id
   const isConfirmedSubscribed = (Boolean(key) && subscribedIdMap.value.has(key)) ||
                        (doubanId && subscribedDoubanIds.value.has(String(doubanId))) ||
@@ -317,7 +317,7 @@ const buildExploreQueueItemKeyFromItem = (item) => {
   const mediaType = normalizeExploreQueueMediaType(item?.media_type)
   const tmdbId = toValidTmdbId(item?.tmdb_id)
   if (tmdbId) return `tmdb:${mediaType}:${tmdbId}`
-  const doubanId = String(item?.douban_id || item?.id || '').trim()
+  const doubanId = resolveDoubanExploreId(item)
   if (doubanId) return `douban:${mediaType}:${doubanId}`
   return ''
 }
@@ -665,11 +665,20 @@ const normalizeMaoyanId = (value) => {
 }
 
 const resolveItemRoute = async (item) => {
-  const cachedTmdbId = toValidTmdbId(item?.resolved_tmdb_id || item?.tmdb_id)
-  if (cachedTmdbId && (exploreSource.value === 'tmdb' || item?.resolved_tmdb_id)) {
+  const doubanId = exploreSource.value === 'douban' ? resolveDoubanExploreId(item) : ''
+  const explicitTmdbId = toValidTmdbId(item?.resolved_tmdb_id || item?.tmdb_id || item?.tmdbid)
+  // TMDB 源 / 已解析缓存 / 豆瓣备用榜（无真实豆瓣 ID）→ 直接走 TMDB
+  if (
+    explicitTmdbId &&
+    (
+      exploreSource.value === 'tmdb' ||
+      Boolean(item?.resolved_tmdb_id) ||
+      (exploreSource.value === 'douban' && !doubanId)
+    )
+  ) {
     return {
       mediaType: (item?.resolved_media_type || item?.media_type) === 'tv' ? 'tv' : 'movie',
-      tmdbId: cachedTmdbId
+      tmdbId: explicitTmdbId
     }
   }
 
@@ -683,7 +692,7 @@ const resolveItemRoute = async (item) => {
     const payload = {
       source: exploreSource.value,
       id: item.id,
-      douban_id: exploreSource.value === 'douban' ? (item.douban_id || item.id) : '',
+      douban_id: doubanId,
       maoyan_id:
         exploreSource.value === 'maoyan'
           ? normalizeMaoyanId(item.maoyan_id || item.id)
@@ -692,7 +701,9 @@ const resolveItemRoute = async (item) => {
       original_title: item.original_title || '',
       year: item.year || '',
       media_type: directType,
-      tmdb_id: exploreSource.value === 'tmdb' ? directTmdbId : null
+      tmdb_id: exploreSource.value === 'tmdb'
+        ? directTmdbId
+        : toValidTmdbId(item?.tmdb_id || item?.tmdbid)
     }
     let { data } = await searchApi.resolveExploreItem(payload)
 
@@ -792,7 +803,7 @@ const handleExploreSubscribe = async (item) => {
   if (!item) return
   const mediaType = item.media_type === 'tv' ? 'tv' : 'movie'
   const tmdbId = toValidTmdbId(item.tmdb_id)
-  const doubanId = String(item.douban_id || item.id || '').trim() || null
+  const doubanId = resolveDoubanExploreId(item) || null
   if (!tmdbId && !doubanId) {
     ElMessage.warning(withTitleHint(item, '缺少可用条目标识，无法操作订阅'))
     return

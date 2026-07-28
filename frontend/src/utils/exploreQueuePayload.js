@@ -12,15 +12,19 @@ const normalizeExploreQueueMediaType = (rawType) => {
  * 解析探索卡片上的真实豆瓣 subject ID。
  * 豆瓣 Frodo 条目会带 douban_id；备用热门榜单只有 tmdb_id，且 id === tmdb_id，
  * 绝不能把后者误当成豆瓣 ID 去打开 /douban/... 详情（否则会串台）。
+ * 注意：前端 normalize 若用 item.id 回填 douban_id，也会把 TMDB ID 伪造成 douban_id，这里一并拦截。
  */
 export const resolveDoubanExploreId = (item) => {
-  const explicit = String(item?.douban_id || '').trim()
-  if (explicit) return explicit
+  const tmdbId = toValidTmdbId(item?.tmdb_id ?? item?.tmdbid)
+  const explicit = String(item?.douban_id ?? '').trim()
+  if (explicit) {
+    if (tmdbId && String(tmdbId) === explicit) return ''
+    return explicit
+  }
 
   const rawId = item?.id === undefined || item?.id === null ? '' : String(item.id).trim()
   if (!rawId) return ''
 
-  const tmdbId = toValidTmdbId(item?.tmdb_id ?? item?.tmdbid)
   if (tmdbId && String(tmdbId) === rawId) {
     return ''
   }

@@ -261,7 +261,7 @@ const markEmbyOnItem = (item) => {
 
 const applySubscribedFlag = (item) => {
   const key = buildSubscribedKey(item.media_type, item.tmdb_id || item.tmdbid)
-  const doubanId = item.douban_id || item.id
+  const doubanId = resolveDoubanExploreId(item)
   const imdbId = item.imdb_id
   const isConfirmedSubscribed = (
     Boolean(key) && props.subscribedIdMap?.has?.(key)
@@ -285,10 +285,12 @@ const applyStateToItems = () => {
 
 const normalizeItems = (items = [], rankStart = 1) => {
   return items.map((item, index) => {
+    // 禁止用 item.id 回填 douban_id：备用 TMDB 榜单的 id 就是 tmdb_id，回填会导致豆瓣详情串台
+    const doubanId = resolveDoubanExploreId(item)
     const normalized = {
       ...item,
       id: item.id,
-      douban_id: item.douban_id || item.id,
+      douban_id: doubanId || null,
       media_type: item.media_type || 'movie',
       rank: item.rank || rankStart + index,
       isSubscribed: false,
