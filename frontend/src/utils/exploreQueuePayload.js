@@ -8,6 +8,25 @@ const normalizeExploreQueueMediaType = (rawType) => {
   return String(rawType || '').toLowerCase() === 'tv' ? 'tv' : 'movie'
 }
 
+/**
+ * 解析探索卡片上的真实豆瓣 subject ID。
+ * 豆瓣 Frodo 条目会带 douban_id；备用热门榜单只有 tmdb_id，且 id === tmdb_id，
+ * 绝不能把后者误当成豆瓣 ID 去打开 /douban/... 详情（否则会串台）。
+ */
+export const resolveDoubanExploreId = (item) => {
+  const explicit = String(item?.douban_id || '').trim()
+  if (explicit) return explicit
+
+  const rawId = item?.id === undefined || item?.id === null ? '' : String(item.id).trim()
+  if (!rawId) return ''
+
+  const tmdbId = toValidTmdbId(item?.tmdb_id ?? item?.tmdbid)
+  if (tmdbId && String(tmdbId) === rawId) {
+    return ''
+  }
+  return rawId
+}
+
 const resolveItemYear = (item) => {
   const direct = String(item?.year || '').trim()
   if (direct) return direct.slice(0, 4)
@@ -37,9 +56,7 @@ export const buildExploreQueuePayload = (item, options = {}) => {
     tmdbId = explicitTmdbId
     doubanId = explicitDoubanId || ''
   } else {
-    if (!doubanId && /^\d+$/.test(rawId)) {
-      doubanId = rawId
-    }
+    doubanId = resolveDoubanExploreId(item)
     // 豆瓣源不信任 item.id 作为 TMDB ID，仅使用显式 tmdb_id/tmdbid
     tmdbId = explicitTmdbId
   }

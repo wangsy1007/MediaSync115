@@ -28,6 +28,7 @@
       >
         <div class="poster-wrap">
           <img
+            :key="item.poster_url || item.poster_path || item.id"
             :src="getPosterUrl(item.poster_url || item.poster_path, { compact: itemIndex >= PRIORITY_POSTER_COUNT })"
             :alt="item.title"
             :loading="itemIndex < PRIORITY_POSTER_COUNT ? 'eager' : 'lazy'"
@@ -122,7 +123,7 @@ import {
   resolveExploreSectionSource
 } from '@/utils/exploreSectionSource'
 import { createExploreLibraryBadgeSyncer } from '@/utils/exploreLibraryBadgeSync'
-import { buildExploreQueuePayload } from '@/utils/exploreQueuePayload'
+import { buildExploreQueuePayload, resolveDoubanExploreId } from '@/utils/exploreQueuePayload'
 import {
   consumeExploreSectionReturnContext,
   saveExploreSectionReturnContext
@@ -584,7 +585,7 @@ const goBack = () => {
 }
 
 const goToDoubanDetail = (item) => {
-  const doubanId = String(item?.douban_id || item?.id || '').trim()
+  const doubanId = resolveDoubanExploreId(item)
   if (!doubanId) return false
   const mediaType = item?.media_type === 'tv' ? 'tv' : 'movie'
   rememberExploreSectionReturn(item)
@@ -1243,9 +1244,22 @@ onMounted(() => {
   fetchSection()
 })
 
+watch(
+  () => `${normalizeExploreSource(route.params.source)}:${String(route.params.key || '').trim()}`,
+  async (next, prev) => {
+    if (!route.params.key) return
+    if (prev === undefined) return
+    if (next === prev) return
+    await fetchSection()
+  }
+)
+
 onActivated(async () => {
   if (!route.params.key) return
-  if (!loading.value && !allItems.value.length && !loadError.value) {
+  const routeKey = String(route.params.key || '').trim()
+  const loadedKey = String(sectionMeta.key || '').trim()
+  const sectionMismatch = Boolean(loadedKey) && loadedKey !== routeKey
+  if (sectionMismatch || (!loading.value && !allItems.value.length && !loadError.value)) {
     await fetchSection()
     return
   }

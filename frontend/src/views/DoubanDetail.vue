@@ -729,6 +729,7 @@ const handleBack = () => {
 const loading = ref(false)
 const mappingLoading = ref(false)
 const subscribing = ref(false)
+let detailRequestToken = 0
 const detail = ref(null)
 const quarkConfigured = ref(false)
 
@@ -1271,9 +1272,16 @@ const fetchButailingMagnet = async () => {
 
 const loadDetail = async () => {
   if (!doubanId.value) return
+  const requestToken = ++detailRequestToken
+  const requestDoubanId = doubanId.value
+  const requestMediaType = mediaType.value
   loading.value = true
+  detail.value = null
   try {
-    const { data } = await searchApi.getDoubanSubject(doubanId.value, mediaType.value)
+    const { data } = await searchApi.getDoubanSubject(requestDoubanId, requestMediaType)
+    // 路由已切换时丢弃过期响应，避免详情串台
+    if (requestToken !== detailRequestToken) return
+    if (doubanId.value !== requestDoubanId || mediaType.value !== requestMediaType) return
     detail.value = {
       ...data,
       genres: Array.isArray(data?.genres) ? data.genres : [],
@@ -1282,9 +1290,12 @@ const loadDetail = async () => {
     pan115SourceTab.value = getFirstVisibleSubTabName(_visibleTabs.value, 'pan115') || 'pansou'
     void hydrateDoubanAuxiliaryData()
   } catch (error) {
+    if (requestToken !== detailRequestToken) return
     ElMessage.error(error.response?.data?.detail || error.message || '豆瓣详情获取失败')
   } finally {
-    loading.value = false
+    if (requestToken === detailRequestToken) {
+      loading.value = false
+    }
   }
 }
 

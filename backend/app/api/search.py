@@ -1366,6 +1366,7 @@ def _normalize_popular_items(raw_items):
                 "rank": index + 1,
                 "id": movie_id,
                 "tmdb_id": tmdb_id,
+                "douban_id": None,
                 "media_type": "movie",
                 "title": item.get("title") or "",
                 "year": item.get("year"),

@@ -55,6 +55,7 @@
         >
           <div class="poster-wrapper">
             <img
+              :key="item.poster_url || item.poster_path || item.id"
               :src="getPosterUrl(item.poster_url || item.poster_path, { compact: itemIndex >= PRIORITY_POSTER_COUNT })"
               :alt="item.title"
               :loading="itemIndex < PRIORITY_POSTER_COUNT ? 'eager' : 'lazy'"
@@ -228,7 +229,7 @@ const buildExploreQueueItemKeyFromItem = (item) => {
   const mediaType = String(item?.media_type || '').toLowerCase() === 'tv' ? 'tv' : 'movie'
   const tmdbId = toValidTmdbId(item?.tmdb_id || item?.tmdbid)
   if (tmdbId) return `tmdb:${mediaType}:${tmdbId}`
-  const doubanId = String(item?.douban_id || item?.id || '').trim()
+  const doubanId = resolveDoubanExploreId(item)
   if (doubanId) return `douban:${mediaType}:${doubanId}`
   return ''
 }

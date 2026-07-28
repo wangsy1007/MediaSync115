@@ -265,7 +265,7 @@ import {
 } from '@/utils/exploreSectionBatchCache'
 import { createExploreLibraryBadgeSyncer } from '@/utils/exploreLibraryBadgeSync'
 import { copyText } from '@/utils/clipboard'
-import { buildExploreQueuePayload, buildTmdbSavePayload } from '@/utils/exploreQueuePayload'
+import { buildExploreQueuePayload, buildTmdbSavePayload, resolveDoubanExploreId } from '@/utils/exploreQueuePayload'
 
 defineOptions({ name: 'Search' })
 
@@ -635,7 +635,7 @@ const goToDetail = (mediaType, tmdbId) => {
 }
 
 const goToDoubanDetail = (item) => {
-  const doubanId = String(item?.douban_id || item?.id || '').trim()
+  const doubanId = resolveDoubanExploreId(item)
   if (!doubanId) return false
   const mediaType = item?.media_type === 'tv' ? 'tv' : 'movie'
   clearSearchReturnContext()
