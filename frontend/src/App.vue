@@ -29,7 +29,6 @@
           <div class="logo-text">
             <div class="logo-heading">
               <span class="logo-title">MediaSync115</span>
-              <span class="logo-badge">115</span>
             </div>
             <span class="logo-subtitle">Search • Save • Sync</span>
           </div>
@@ -595,18 +594,6 @@ html, body, #app {
         color: var(--ms-text-primary);
         letter-spacing: -0.4px;
         white-space: nowrap;
-      }
-
-      .logo-badge {
-        flex-shrink: 0;
-        font-size: 10px;
-        font-weight: 700;
-        line-height: 1;
-        padding: 3px 7px;
-        background: var(--ms-bg-subtle);
-        color: var(--ms-accent-primary);
-        border: 1px solid var(--ms-border-color);
-        border-radius: 4px;
       }
 
       .logo-subtitle {
