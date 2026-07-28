@@ -54,10 +54,11 @@ VIDEO_EXTENSIONS = {
 MANIFEST_FILENAME = ".mediasync115-strm-manifest.json"
 DOWNLOAD_URL_CACHE_DEFAULT_TTL_SECONDS = 1800.0
 DOWNLOAD_URL_CACHE_MAX_ITEMS = 512
-STRM_WRITE_BATCH_SIZE = 32
-STRM_WRITE_CONCURRENCY = 4
+STRM_WRITE_BATCH_SIZE = 64
+STRM_WRITE_CONCURRENCY = 8
 STRM_WRITE_RETRY = 5
 STRM_SCAN_CONCURRENCY = 4
+STRM_EXISTS_CHECK_CHUNK = 200
 STRM_WRITE_LOG_EVERY = 50
 STRM_CANCEL_WAIT_SECONDS = 5.0
 
@@ -691,6 +692,17 @@ class StrmService:
         await asyncio.gather(*(_write_one(path, content) for path, content in batch))
         return written, errors
 
+    @staticmethod
+    async def _paths_are_files(paths: list[Path]) -> list[bool]:
+        """批量检查本地文件是否存在，减少 to_thread 往返。"""
+        if not paths:
+            return []
+
+        def _check() -> list[bool]:
+            return [path.is_file() for path in paths]
+
+        return await asyncio.to_thread(_check)
+
     async def _write_strm_files(
         self,
         *,
@@ -716,8 +728,11 @@ class StrmService:
             )
         last_logged_at = 0
 
-        for index, item in enumerate(scanned_files, start=1):
-            if index == 1 or index % 20 == 0:
+        # 先收集可能跳过的条目，批量 is_file，避免逐个 to_thread
+        skip_candidates: list[tuple[int, Path]] = []
+        prepared: list[tuple[Path, str] | None] = [None] * total
+        for index, item in enumerate(scanned_files):
+            if index == 0 or (index + 1) % 20 == 0:
                 self._raise_if_generate_cancel_requested()
             item["content_hash"] = self._record_content_hash(item)
             strm_relative = self._strm_relative_path(item["relative_path"])
@@ -731,10 +746,37 @@ class StrmService:
                 and old.relative_path == item["relative_path"]
                 and old.content_hash == item["content_hash"]
                 and old.config_fingerprint == config_fingerprint
-                and await asyncio.to_thread(target_path.is_file)
             ):
+                skip_candidates.append((index, target_path))
+            else:
+                prepared[index] = (target_path, content)
+
+        exists_map: dict[int, bool] = {}
+        for start in range(0, len(skip_candidates), STRM_EXISTS_CHECK_CHUNK):
+            self._raise_if_generate_cancel_requested()
+            chunk = skip_candidates[start : start + STRM_EXISTS_CHECK_CHUNK]
+            flags = await self._paths_are_files([path for _, path in chunk])
+            for (index, _), exists in zip(chunk, flags):
+                exists_map[index] = exists
+
+        for index, item in enumerate(scanned_files, start=1):
+            if index == 1 or index % 20 == 0:
+                self._raise_if_generate_cancel_requested()
+            prepared_item = prepared[index - 1]
+            if prepared_item is None and exists_map.get(index - 1):
                 unchanged_count += 1
             else:
+                if prepared_item is None:
+                    strm_relative = self._strm_relative_path(item["relative_path"])
+                    target_path = output_dir.joinpath(
+                        *PurePosixPath(strm_relative).parts
+                    )
+                    content = self.build_play_url(
+                        item["pick_code"],
+                        item.get("name") or item.get("relative_path") or "",
+                    ) + "\n"
+                    prepared_item = (target_path, content)
+                target_path, content = prepared_item
                 dirs_needed.add(target_path.parent)
                 pending_writes.append((target_path, content))
                 if len(pending_writes) >= STRM_WRITE_BATCH_SIZE:
@@ -1355,10 +1397,13 @@ class StrmService:
         cid: str,
         relative_prefix: str,
         parent_cid: str,
+        *,
+        list_cache: dict[str, list[dict[str, Any]]] | None = None,
+        scan_sem: asyncio.Semaphore | None = None,
     ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
         files: list[dict[str, str]] = []
         folders: list[dict[str, str]] = []
-        scan_sem = asyncio.Semaphore(STRM_SCAN_CONCURRENCY)
+        sem = scan_sem or asyncio.Semaphore(STRM_SCAN_CONCURRENCY)
 
         async def _walk(
             folder_cid: str, prefix: str, folder_parent_cid: str
@@ -1367,9 +1412,20 @@ class StrmService:
             # 并发许可只保护单次目录列表请求，不能覆盖对子目录 gather 的等待。
             # 否则父目录会持有许可等待子目录，而深层子目录又在等待许可，最终
             # 所有许可都被父任务占满并形成递归死锁。
-            async with scan_sem:
-                self._raise_if_generate_cancel_requested()
-                items = await self._list_folder_items(pan115, folder_cid)
+            # 缓存命中不占用限速许可，避免变更探测后的复扫被信号量拖慢。
+            items: list[dict[str, Any]] | None = (
+                list_cache.get(folder_cid) if list_cache is not None else None
+            )
+            if items is None:
+                async with sem:
+                    self._raise_if_generate_cancel_requested()
+                    items = (
+                        list_cache.get(folder_cid) if list_cache is not None else None
+                    )
+                    if items is None:
+                        items = await self._list_folder_items(pan115, folder_cid)
+                        if list_cache is not None:
+                            list_cache[folder_cid] = items
             folders.append(
                 {
                     "fid": folder_cid,
@@ -1531,22 +1587,46 @@ class StrmService:
             ]
             complete_prefixes: set[str] = set()
             list_cache: dict[str, list[dict[str, Any]]] = {}
-            for child_cid, (_, name) in current_top.items():
+            scan_sem = asyncio.Semaphore(STRM_SCAN_CONCURRENCY)
+
+            async def _handle_top(
+                child_cid: str, name: str
+            ) -> tuple[list[dict[str, str]], list[dict[str, str]], list[str]]:
                 old = old_top.get(child_cid)
                 changed = old is None or old.relative_path != name
                 if not changed:
                     changed = await self._folder_tree_changed(
-                        pan115, child_cid, indexed_folders, list_cache
+                        pan115,
+                        child_cid,
+                        indexed_folders,
+                        list_cache,
+                        scan_sem=scan_sem,
                     )
-                if changed:
-                    tree_files, tree_folders = await self._scan_tree(
-                        pan115, child_cid, name, output_cid
-                    )
-                    files.extend(tree_files)
-                    folders.extend(tree_folders)
-                    complete_prefixes.add(name)
-                    if old and old.relative_path != name:
-                        complete_prefixes.add(old.relative_path)
+                if not changed:
+                    return [], [], []
+                tree_files, tree_folders = await self._scan_tree(
+                    pan115,
+                    child_cid,
+                    name,
+                    output_cid,
+                    list_cache=list_cache,
+                    scan_sem=scan_sem,
+                )
+                prefixes = [name]
+                if old and old.relative_path != name:
+                    prefixes.append(old.relative_path)
+                return tree_files, tree_folders, prefixes
+
+            top_results = await asyncio.gather(
+                *[
+                    _handle_top(child_cid, name)
+                    for child_cid, (_, name) in current_top.items()
+                ]
+            )
+            for tree_files, tree_folders, prefixes in top_results:
+                files.extend(tree_files)
+                folders.extend(tree_folders)
+                complete_prefixes.update(prefixes)
 
             for child_cid, old in old_top.items():
                 if child_cid not in current_top:
@@ -1571,23 +1651,46 @@ class StrmService:
         folder_cid: str,
         indexed_folders: dict[str, StrmFolderIndex],
         list_cache: dict[str, list[dict[str, Any]]],
+        *,
+        scan_sem: asyncio.Semaphore | None = None,
     ) -> bool:
+        self._raise_if_generate_cancel_requested()
+        sem = scan_sem or asyncio.Semaphore(STRM_SCAN_CONCURRENCY)
         items = list_cache.get(folder_cid)
         if items is None:
-            items = await self._list_folder_items(pan115, folder_cid)
-            list_cache[folder_cid] = items
+            async with sem:
+                self._raise_if_generate_cancel_requested()
+                # 并发下可能已被其它任务写入缓存
+                items = list_cache.get(folder_cid)
+                if items is None:
+                    items = await self._list_folder_items(pan115, folder_cid)
+                    list_cache[folder_cid] = items
         indexed = indexed_folders.get(folder_cid)
         if indexed is None or indexed.snapshot_hash != self._snapshot_hash(items, pan115):
             return True
+        child_cids: list[str] = []
         for item in items:
             if not pan115._is_folder_item(item):
                 continue
             child_cid = str(pan115._extract_folder_id(item) or "").strip()
-            if child_cid and await self._folder_tree_changed(
-                pan115, child_cid, indexed_folders, list_cache
-            ):
-                return True
-        return False
+            if child_cid:
+                child_cids.append(child_cid)
+        if not child_cids:
+            return False
+        # 同层子目录并行探测变更，吃满 115 队列；有变化时 list_cache 也可复用给后续扫描
+        results = await asyncio.gather(
+            *[
+                self._folder_tree_changed(
+                    pan115,
+                    child_cid,
+                    indexed_folders,
+                    list_cache,
+                    scan_sem=sem,
+                )
+                for child_cid in child_cids
+            ]
+        )
+        return any(results)
 
     async def _list_folder_items(
         self, pan115: Pan115Service, cid: str
@@ -1879,18 +1982,26 @@ class StrmService:
         already_scanned_fids: set[str],
     ) -> list[dict[str, str]]:
         """找出索引中有、但本地 STRM 已缺失的条目，供增量补写。"""
-        missing: list[dict[str, str]] = []
+        candidates: list[tuple[StrmFileIndex, Path]] = []
         for item in existing_files:
             if item.fid in already_scanned_fids:
                 continue
             relative = self._strm_relative_path(item.relative_path)
             target = output_dir.joinpath(*PurePosixPath(relative).parts)
-            if await asyncio.to_thread(target.is_file):
-                continue
-            record = self._file_model_to_record(item)
-            if not record.get("content_hash"):
-                record["content_hash"] = self._record_content_hash(record)
-            missing.append(record)
+            candidates.append((item, target))
+
+        missing: list[dict[str, str]] = []
+        for start in range(0, len(candidates), STRM_EXISTS_CHECK_CHUNK):
+            self._raise_if_generate_cancel_requested()
+            chunk = candidates[start : start + STRM_EXISTS_CHECK_CHUNK]
+            flags = await self._paths_are_files([path for _, path in chunk])
+            for (item, _), exists in zip(chunk, flags):
+                if exists:
+                    continue
+                record = self._file_model_to_record(item)
+                if not record.get("content_hash"):
+                    record["content_hash"] = self._record_content_hash(record)
+                missing.append(record)
         return missing
 
     async def _persist_index(

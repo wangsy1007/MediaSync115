@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.models.strm_index import StrmFileIndex
+from app.models.strm_index import StrmFileIndex, StrmFolderIndex
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.strm_service import StrmService
 
@@ -347,6 +347,117 @@ async def test_collect_missing_local_records_detects_deleted_strm(tmp_path) -> N
         already_scanned_fids=set(),
     )
     assert [item["fid"] for item in missing] == ["gone"]
+
+
+@pytest.mark.asyncio
+async def test_scan_tree_reuses_list_cache_without_extra_api_calls() -> None:
+    service = StrmService()
+    calls = {"count": 0}
+
+    class _CountingPan(_FakePan):
+        async def get_file_list(
+            self, cid: str, offset: int = 0, limit: int = 200
+        ) -> dict:
+            calls["count"] += 1
+            if cid == "root":
+                items = [{"fid": "d1", "n": "d1", "ico": "folder"}]
+            else:
+                items = [{"fid": "video", "n": "movie.mkv", "pc": "pick"}]
+            return {"data": items[offset : offset + limit], "count": len(items)}
+
+    pan = _CountingPan()
+    list_cache: dict[str, list] = {}
+    files1, folders1 = await service._scan_tree(
+        pan, "root", "", "", list_cache=list_cache
+    )
+    first_calls = calls["count"]
+    assert first_calls >= 2
+    assert [item["fid"] for item in files1] == ["video"]
+    assert "root" in list_cache and "d1" in list_cache
+
+    files2, folders2 = await service._scan_tree(
+        pan, "root", "", "", list_cache=list_cache
+    )
+    assert calls["count"] == first_calls
+    assert [item["fid"] for item in files2] == ["video"]
+    assert len(folders2) == len(folders1)
+
+
+@pytest.mark.asyncio
+async def test_folder_tree_changed_checks_siblings_in_parallel() -> None:
+    service = StrmService()
+    in_flight = 0
+    max_in_flight = 0
+    gate = asyncio.Event()
+    started = 0
+
+    class _WidePan(_FakePan):
+        async def get_file_list(
+            self, cid: str, offset: int = 0, limit: int = 200
+        ) -> dict:
+            nonlocal in_flight, max_in_flight, started
+            if cid == "root":
+                items = [
+                    {"fid": "a", "n": "a", "ico": "folder"},
+                    {"fid": "b", "n": "b", "ico": "folder"},
+                    {"fid": "c", "n": "c", "ico": "folder"},
+                ]
+            else:
+                items = [{"fid": f"{cid}-v", "n": f"{cid}.mkv", "pc": f"pc-{cid}"}]
+                in_flight += 1
+                max_in_flight = max(max_in_flight, in_flight)
+                started += 1
+                if started >= 3:
+                    gate.set()
+                await gate.wait()
+                in_flight -= 1
+            return {"data": items[offset : offset + limit], "count": len(items)}
+
+    indexed = {
+        "root": StrmFolderIndex(
+            output_cid="out",
+            fid="root",
+            relative_path="",
+            parent_cid="",
+            snapshot_hash=service._snapshot_hash(
+                [
+                    {"fid": "a", "n": "a", "ico": "folder"},
+                    {"fid": "b", "n": "b", "ico": "folder"},
+                    {"fid": "c", "n": "c", "ico": "folder"},
+                ],
+                _WidePan(),
+            ),
+        ),
+        "a": StrmFolderIndex(
+            output_cid="out",
+            fid="a",
+            relative_path="a",
+            parent_cid="root",
+            snapshot_hash="stale",
+        ),
+        "b": StrmFolderIndex(
+            output_cid="out",
+            fid="b",
+            relative_path="b",
+            parent_cid="root",
+            snapshot_hash="stale",
+        ),
+        "c": StrmFolderIndex(
+            output_cid="out",
+            fid="c",
+            relative_path="c",
+            parent_cid="root",
+            snapshot_hash="stale",
+        ),
+    }
+    # root hash will match after listing; children are stale → changed
+    list_cache: dict[str, list] = {}
+    changed = await asyncio.wait_for(
+        service._folder_tree_changed(_WidePan(), "root", indexed, list_cache),
+        timeout=2,
+    )
+    assert changed is True
+    assert max_in_flight >= 2
 
 
 def test_save_manifest_always_writes_index_file(tmp_path) -> None:
