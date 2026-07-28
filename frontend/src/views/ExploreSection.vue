@@ -1374,23 +1374,23 @@ onBeforeUnmount(() => {
 
       .rating-badge {
         position: absolute;
-        top: 8px;
-        right: 8px;
+        top: 6px;
+        right: 6px;
         z-index: 4;
         display: flex;
         align-items: center;
         justify-content: center;
-        min-width: 48px;
-        height: 28px;
-        padding: 0 10px;
+        min-width: 32px;
+        height: 18px;
+        padding: 0 5px;
         border: none;
         border-radius: 999px;
         background: rgba(14, 32, 54, 0.78);
         color: var(--ms-accent-warning);
-        font-size: 13px;
+        font-size: 10px;
         font-weight: 700;
         line-height: 1;
-        box-shadow: 0 4px 12px rgba(4, 16, 30, 0.22);
+        box-shadow: 0 2px 8px rgba(4, 16, 30, 0.2);
         backdrop-filter: blur(6px);
       }
 
@@ -1490,6 +1490,15 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 768px) {
+  .explore-section-page .movie-card .poster-wrap .rating-badge {
+    top: 4px;
+    right: 4px;
+    min-width: 28px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 9px;
+  }
+
   .explore-section-page .movie-card .poster-wrap .explore-card-actions {
     opacity: 1;
     transform: translate(-50%, 0);

@@ -2426,17 +2426,18 @@ onBeforeUnmount(() => {
 
       .rating-badge {
         position: absolute;
-        top: 10px;
-        right: 10px;
+        top: 6px;
+        right: 6px;
         background: var(--ms-accent-warning);
         color: #fff;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 12px;
+        padding: 2px 5px;
+        border-radius: 3px;
+        font-size: 10px;
         font-weight: 700;
+        line-height: 1.2;
 
         &.has-emby {
-          top: 46px;
+          top: 34px;
         }
       }
 
@@ -2737,8 +2738,14 @@ onBeforeUnmount(() => {
         }
 
         .rating-badge {
-          font-size: 11px;
-          padding: 3px 7px;
+          top: 4px;
+          right: 4px;
+          font-size: 9px;
+          padding: 1px 4px;
+
+          &.has-emby {
+            top: 30px;
+          }
         }
 
         .media-type-tag .el-tag {

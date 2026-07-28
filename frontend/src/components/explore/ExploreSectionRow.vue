@@ -643,20 +643,20 @@ onBeforeUnmount(() => {
 
       .rating-badge {
         position: absolute;
-        top: 10px;
-        right: 10px;
+        top: 6px;
+        right: 6px;
         z-index: 4;
         display: flex;
         align-items: center;
         justify-content: center;
-        min-width: 48px;
-        height: 28px;
-        padding: 0 10px;
+        min-width: 32px;
+        height: 18px;
+        padding: 0 5px;
         border: none;
         border-radius: 4px;
         background: var(--ms-accent-warning);
         color: #fff;
-        font-size: 13px;
+        font-size: 10px;
         font-weight: 700;
         line-height: 1;
       }
@@ -739,6 +739,15 @@ onBeforeUnmount(() => {
     }
 
     .recommend-card {
+      .poster-wrapper .rating-badge {
+        top: 4px;
+        right: 4px;
+        min-width: 28px;
+        height: 16px;
+        padding: 0 4px;
+        font-size: 9px;
+      }
+
       .card-info {
         padding: 9px 9px 11px;
 
