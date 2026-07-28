@@ -701,14 +701,23 @@ watch(activeTab, (tab) => {
   .subscription-item {
     overflow: hidden;
     cursor: pointer;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
 
     :deep(.el-card__body) {
       padding: 0;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
     }
 
     .card-content {
       display: flex;
       flex-direction: column;
+      flex: 1;
+      min-height: 0;
       height: 100%;
     }
 
@@ -790,7 +799,11 @@ watch(activeTab, (tab) => {
     }
 
     .info {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
       min-width: 0;
+      min-height: 0;
       padding: 8px 12px 12px;
 
       .title-row {
@@ -837,6 +850,8 @@ watch(activeTab, (tab) => {
         flex-direction: row;
         align-items: stretch;
         gap: 8px;
+        margin-top: auto;
+        padding-top: 4px;
 
         :deep(.el-button) {
           flex: 1 1 0;
