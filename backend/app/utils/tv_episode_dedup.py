@@ -199,8 +199,21 @@ def dedupe_tv_transfer_files(
     return passthrough + kept_tv, skip_map
 
 
-def filename_likely_same_show(filename: str, show_title: str) -> bool:
+def normalize_show_title_for_match(show_title: str) -> str:
+    """移除转存目录附带的季号，保留可用于剧名匹配的主体。"""
     title = str(show_title or "").strip()
+    if not title:
+        return ""
+    title = re.sub(
+        r"(?i)[\s._-]*(?:S(?:eason)?[\s._-]*0*\d{1,3}|第\s*\d{1,3}\s*季)\s*$",
+        "",
+        title,
+    ).strip()
+    return title
+
+
+def filename_likely_same_show(filename: str, show_title: str) -> bool:
+    title = normalize_show_title_for_match(show_title)
     if not title:
         return True
     name = str(filename or "").lower()
@@ -217,6 +230,37 @@ def filename_likely_same_show(filename: str, show_title: str) -> bool:
     if latin and len(latin) >= 3 and latin in file_latin:
         return True
     return False
+
+
+def folder_likely_same_show(folder_name: str, show_title: str) -> bool:
+    """严格匹配正式库中的剧名目录，避免遍历或误命中其它剧集。"""
+    folder = normalize_show_title_for_match(folder_name)
+    title = normalize_show_title_for_match(show_title)
+    if not folder or not title:
+        return False
+
+    folder_year = re.search(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)", folder)
+    title_year = re.search(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)", title)
+    if folder_year and title_year and folder_year.group(1) != title_year.group(1):
+        return False
+
+    def compact(value: str) -> str:
+        without_year = re.sub(
+            r"\s*[\(（]\s*(?:19\d{2}|20\d{2})\s*[\)）]\s*$",
+            "",
+            value,
+        )
+        return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", without_year.casefold())
+
+    folder_core = compact(folder)
+    title_core = compact(title)
+    if not folder_core or not title_core:
+        return False
+    return (
+        folder_core == title_core
+        or (len(title_core) >= 3 and title_core in folder_core)
+        or (len(folder_core) >= 3 and folder_core in title_core)
+    )
 
 
 def extract_episodes_from_filename(filename: str) -> set[tuple[int, int]]:

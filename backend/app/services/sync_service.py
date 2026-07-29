@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import time
 from typing import Any
 from urllib.parse import unquote
 
@@ -13,6 +14,32 @@ logger = logging.getLogger(__name__)
 
 
 class SyncService:
+    @staticmethod
+    async def _log_tv_stage(
+        *,
+        tmdb_id: int,
+        stage: str,
+        started_at: float,
+        message: str,
+        extra: dict[str, Any] | None = None,
+    ) -> int:
+        duration_ms = int((time.perf_counter() - started_at) * 1000)
+        payload = {
+            "tmdb_id": tmdb_id,
+            "stage": stage,
+            "duration_ms": duration_ms,
+            **(extra or {}),
+        }
+        await operation_log_service.log_background_event(
+            source_type="background_task",
+            module="sync",
+            action=f"sync.tv_show.stage.{stage}",
+            status="success",
+            message=f"{message}，耗时 {duration_ms}ms",
+            extra=payload,
+        )
+        return duration_ms
+
     @staticmethod
     def _extract_receive_code(
         share_url: str,
@@ -77,6 +104,7 @@ class SyncService:
         """
         基于 Emby 查漏补缺的 115 转存策略
         """
+        overall_started_at = time.perf_counter()
         await operation_log_service.log_background_event(
             source_type="background_task", module="sync",
             action="sync.tv_show.start", status="info",
@@ -84,9 +112,28 @@ class SyncService:
             extra={"tmdb_id": tmdb_id},
         )
         try:
-            # 1. 查询 Emby 媒体库
-            existing_episodes = await emby_service.get_downloaded_episodes(tmdb_id)
-            logger.info("Emby 中已存在的剧集 (TMDB ID: %s): %s", tmdb_id, existing_episodes)
+            # 1. 优先查询本地 Emby 同步索引，索引不可用时再访问 Emby。
+            stage_started_at = time.perf_counter()
+            emby_status = await emby_service.get_tv_episode_status_by_tmdb(tmdb_id)
+            existing_episodes = set(emby_status.get("existing_episodes") or set())
+            emby_source = str(emby_status.get("source") or "emby_api")
+            await self._log_tv_stage(
+                tmdb_id=tmdb_id,
+                stage="emby_lookup",
+                started_at=stage_started_at,
+                message=f"Emby 已有集数查询完成（来源：{emby_source}）",
+                extra={
+                    "source": emby_source,
+                    "existing_episode_count": len(existing_episodes),
+                    "lookup_status": str(emby_status.get("status") or ""),
+                },
+            )
+            logger.info(
+                "Emby 中已存在的剧集 (TMDB ID: %s, source=%s): %s",
+                tmdb_id,
+                emby_source,
+                existing_episodes,
+            )
 
             # 2 & 3. 解析 115 分享链接获取所有文件
             # 获取 share_code
@@ -105,8 +152,25 @@ class SyncService:
             receive_code = self._extract_receive_code(share_url, share_payload, receive_code)
 
             # 递归获取分享链接内所有的文件
+            stage_started_at = time.perf_counter()
             all_files = await pan115_service.get_share_all_files_recursive(share_code, receive_code)
+            await self._log_tv_stage(
+                tmdb_id=tmdb_id,
+                stage="share_scan",
+                started_at=stage_started_at,
+                message="115 分享目录扫描完成",
+                extra={"file_count": len(all_files)},
+            )
             if not all_files:
+                duration_ms = int((time.perf_counter() - overall_started_at) * 1000)
+                await operation_log_service.log_background_event(
+                    source_type="background_task",
+                    module="sync",
+                    action="sync.tv_show.failed",
+                    status="failed",
+                    message=f"分享链接中没有找到文件 (TMDB ID: {tmdb_id})",
+                    extra={"tmdb_id": tmdb_id, "duration_ms": duration_ms},
+                )
                 return {"success": False, "message": "分享链接中没有找到文件", "saved_count": 0}
 
             candidates_by_episode: dict[tuple[int, int], list[dict[str, Any]]] = {}
@@ -124,9 +188,6 @@ class SyncService:
                 coverage = name_parser.parse_episode_coverage(filename)
                 if coverage:
                     episode_keys = name_parser.iter_episode_keys(coverage)
-                    if any(key in existing_episodes for key in episode_keys):
-                        logger.info("跳过已存在剧集: %s", filename)
-                        continue
                     for season, episode in episode_keys:
                         candidates_by_episode.setdefault((season, episode), []).append(f)
                     continue
@@ -153,13 +214,28 @@ class SyncService:
                 else:
                     selected_files.extend(unparsed_video_candidates)
 
+            stage_started_at = time.perf_counter()
             pan_existing = await pan115_service._collect_tv_existing_episodes_for_transfer(
                 target_cid=str(target_folder_id or ""),
                 show_title=show_title,
             )
-            selected_files, _tv_skip = dedupe_tv_transfer_files(
+            all_existing_episodes = existing_episodes | pan_existing
+            selected_files, tv_skip = dedupe_tv_transfer_files(
                 selected_files,
-                existing_episodes=pan_existing,
+                existing_episodes=all_existing_episodes,
+            )
+            await self._log_tv_stage(
+                tmdb_id=tmdb_id,
+                stage="library_dedupe",
+                started_at=stage_started_at,
+                message="正式库及目标目录定向查重完成",
+                extra={
+                    "emby_episode_count": len(existing_episodes),
+                    "pan_episode_count": len(pan_existing),
+                    "existing_episode_count": len(all_existing_episodes),
+                    "skipped_file_count": len(tv_skip),
+                    "selected_file_count": len(selected_files),
+                },
             )
 
             missing_fids = [str(f.get("fid")) for f in selected_files if f.get("fid")]
@@ -167,6 +243,19 @@ class SyncService:
 
             # 5. 精准转存
             if not missing_fids:
+                duration_ms = int((time.perf_counter() - overall_started_at) * 1000)
+                await operation_log_service.log_background_event(
+                    source_type="background_task",
+                    module="sync",
+                    action="sync.tv_show.success",
+                    status="success",
+                    message=f"所有剧集均已存在，无需转存 (TMDB ID: {tmdb_id})",
+                    extra={
+                        "tmdb_id": tmdb_id,
+                        "saved_count": 0,
+                        "duration_ms": duration_ms,
+                    },
+                )
                 return {"success": True, "message": "所有剧集均已存在，无需转存", "saved_count": 0}
 
             # 调用 115 API 批量转存
@@ -174,11 +263,19 @@ class SyncService:
             missing_fids = list(dict.fromkeys(missing_fids))
             logger.info("准备转存 %s 个文件: %s", len(missing_fids), matched_files)
 
+            stage_started_at = time.perf_counter()
             save_result = await pan115_service.save_share_files(
                 share_code=share_code,
                 file_ids=missing_fids,
                 pid=target_folder_id,
                 receive_code=receive_code
+            )
+            await self._log_tv_stage(
+                tmdb_id=tmdb_id,
+                stage="transfer",
+                started_at=stage_started_at,
+                message="115 文件转存请求完成",
+                extra={"requested_file_count": len(missing_fids)},
             )
 
             # 判断转存结果
@@ -189,11 +286,17 @@ class SyncService:
             if success:
                 # 6. 触发 Emby 刷新 (不阻塞等待)
                 asyncio.create_task(emby_service.refresh_library())
+                duration_ms = int((time.perf_counter() - overall_started_at) * 1000)
                 await operation_log_service.log_background_event(
                     source_type="background_task", module="sync",
                     action="sync.tv_show.success", status="success",
                     message=f"剧集同步完成：成功转存 {len(missing_fids)} 集 (TMDB ID: {tmdb_id})",
-                    extra={"tmdb_id": tmdb_id, "saved_count": len(missing_fids), "files": matched_files[:10]},
+                    extra={
+                        "tmdb_id": tmdb_id,
+                        "saved_count": len(missing_fids),
+                        "files": matched_files[:10],
+                        "duration_ms": duration_ms,
+                    },
                 )
                 return {
                     "success": True,
@@ -202,11 +305,12 @@ class SyncService:
                     "files": matched_files
                 }
             else:
+                duration_ms = int((time.perf_counter() - overall_started_at) * 1000)
                 await operation_log_service.log_background_event(
                     source_type="background_task", module="sync",
                     action="sync.tv_show.failed", status="failed",
                     message=f"剧集转存失败 (TMDB ID: {tmdb_id})：{str(save_result)[:200]}",
-                    extra={"tmdb_id": tmdb_id},
+                    extra={"tmdb_id": tmdb_id, "duration_ms": duration_ms},
                 )
                 return {
                     "success": False,
@@ -215,11 +319,16 @@ class SyncService:
                 }
 
         except Exception as e:
+            duration_ms = int((time.perf_counter() - overall_started_at) * 1000)
             await operation_log_service.log_background_event(
                 source_type="background_task", module="sync",
                 action="sync.tv_show.error", status="failed",
                 message=f"剧集同步异常 (TMDB ID: {tmdb_id})：{str(e)[:200]}",
-                extra={"tmdb_id": tmdb_id, "error": str(e)[:300]},
+                extra={
+                    "tmdb_id": tmdb_id,
+                    "error": str(e)[:300],
+                    "duration_ms": duration_ms,
+                },
             )
             return {"success": False, "message": f"同步过程中发生异常: {str(e)}", "saved_count": 0}
 

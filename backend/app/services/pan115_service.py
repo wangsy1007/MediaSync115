@@ -84,6 +84,8 @@ class _QueueRequest:
 
     coro_factory: Any
     future: asyncio.Future[Any]
+    operation: str = ""
+    queued_at: float = 0.0
     bypass_rate_limit: bool = False
 
 
@@ -95,14 +97,16 @@ class _Pan115ThrottleManager:
         self._throttled_until: float = 0.0
         self._lock = asyncio.Lock()
 
-    async def mark_throttled(self) -> None:
+    async def mark_throttled(self) -> float:
         now = time.monotonic()
         async with self._lock:
             new_until = now + self._cooldown_seconds
             if new_until > self._throttled_until:
                 self._throttled_until = new_until
+            return max(self._throttled_until - now, 0.0)
 
-    async def wait_if_throttled(self) -> None:
+    async def wait_if_throttled(self) -> float:
+        started_at = time.monotonic()
         while True:
             now = time.monotonic()
             async with self._lock:
@@ -110,6 +114,7 @@ class _Pan115ThrottleManager:
             if remaining <= 0:
                 break
             await asyncio.sleep(min(remaining, 1.0))
+        return max(time.monotonic() - started_at, 0.0)
 
     def is_throttled(self) -> bool:
         return time.monotonic() < self._throttled_until
@@ -127,7 +132,8 @@ class _Pan115RateLimiter:
         self._hour_window: deque[float] = deque()
         self._lock = asyncio.Lock()
 
-    async def acquire(self) -> None:
+    async def acquire(self) -> float:
+        started_at = time.monotonic()
         while True:
             now = time.monotonic()
             async with self._lock:
@@ -149,7 +155,7 @@ class _Pan115RateLimiter:
                     self._second_window.append(now)
                     self._minute_window.append(now)
                     self._hour_window.append(now)
-                    return
+                    return max(time.monotonic() - started_at, 0.0)
 
             async with self._lock:
                 sleep_sec = 0.0
@@ -187,9 +193,32 @@ class _Pan115QueueExecutor:
         while True:
             req = await self._queue.get()
             try:
+                queue_wait_seconds = max(
+                    time.monotonic() - float(req.queued_at or time.monotonic()),
+                    0.0,
+                )
+                if queue_wait_seconds >= 5.0:
+                    logger.warning(
+                        "115 API 请求排队 %.1f 秒：operation=%s, queue_size=%s",
+                        queue_wait_seconds,
+                        req.operation or "unknown",
+                        self._queue.qsize(),
+                    )
                 if not req.bypass_rate_limit:
-                    await self._limiter.acquire()
-                    await self._throttle.wait_if_throttled()
+                    rate_wait_seconds = await self._limiter.acquire()
+                    if rate_wait_seconds >= 5.0:
+                        logger.warning(
+                            "115 API 请求受频率上限影响，等待 %.1f 秒：operation=%s",
+                            rate_wait_seconds,
+                            req.operation or "unknown",
+                        )
+                    throttle_wait_seconds = await self._throttle.wait_if_throttled()
+                    if throttle_wait_seconds >= 1.0:
+                        logger.warning(
+                            "115 API 请求等待限流冷却 %.1f 秒：operation=%s",
+                            throttle_wait_seconds,
+                            req.operation or "unknown",
+                        )
 
                 result = await req.coro_factory()
                 if not req.future.done():
@@ -203,7 +232,12 @@ class _Pan115QueueExecutor:
                     or "too many" in error_text
                     or "rate limit" in error_text
                 ):
-                    await self._throttle.mark_throttled()
+                    cooldown_seconds = await self._throttle.mark_throttled()
+                    logger.warning(
+                        "115 API 触发限流，进入 %.0f 秒冷却：operation=%s",
+                        cooldown_seconds,
+                        req.operation or "unknown",
+                    )
                 if not req.future.done():
                     req.future.set_exception(exc)
             finally:
@@ -286,7 +320,14 @@ class Pan115Service:
             return await method(*args, async_=True, **kwargs)
 
         executor = await _get_global_pan115_executor()
-        executor.enqueue(_QueueRequest(coro_factory=coro_factory, future=future))
+        executor.enqueue(
+            _QueueRequest(
+                coro_factory=coro_factory,
+                future=future,
+                operation=method_name,
+                queued_at=time.monotonic(),
+            )
+        )
         return await future
 
     # ==================== 用户信息 ====================
@@ -1500,6 +1541,141 @@ class Pan115Service:
 
         return name_parser.parse_episode_coverage(filename) is not None
 
+    async def _list_folder_items(
+        self,
+        cid: str,
+        *,
+        limit: int = 200,
+        max_pages: int = 50,
+    ) -> list[dict[str, Any]]:
+        """分页读取一个目录的直接子项，不递归进入子目录。"""
+        folder_id = str(cid or "").strip()
+        if not folder_id:
+            return []
+
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        for _page in range(max_pages):
+            result = await self.get_file_list(
+                cid=folder_id,
+                offset=offset,
+                limit=limit,
+            )
+            page_rows = result.get("data") or []
+            if not isinstance(page_rows, list) or not page_rows:
+                break
+            valid_rows = [row for row in page_rows if isinstance(row, dict)]
+            rows.extend(valid_rows)
+            if len(page_rows) < limit:
+                break
+            offset += len(page_rows)
+        return rows
+
+    async def find_tv_show_folders_in_archive(
+        self,
+        output_cid: str,
+        show_title: str,
+    ) -> list[str]:
+        """
+        按归档结构定向定位剧名目录：
+        输出根目录 -> 剧集根目录 -> 分类目录 -> 剧名目录。
+
+        只读取固定层级，不再递归遍历正式库中的所有影视目录。
+        """
+        from app.services.runtime_settings_service import runtime_settings_service
+        from app.utils.tv_episode_dedup import folder_likely_same_show
+
+        root_cid = str(output_cid or "").strip()
+        title = str(show_title or "").strip()
+        if not root_cid or not title:
+            return []
+
+        subdirs = runtime_settings_service.get_archive_subdirs()
+        tv_root_name = str(subdirs.get("tv_root") or "剧集").strip()
+        category_names = {
+            str(item.get("name") or "").strip().casefold()
+            for item in (subdirs.get("tv_categories") or [])
+            if isinstance(item, dict)
+            and item.get("enabled", True)
+            and str(item.get("name") or "").strip()
+        }
+
+        try:
+            root_rows = await self._list_folder_items(root_cid)
+        except Exception as exc:
+            logger.warning("读取正式库输出根目录失败，跳过跨库目录扫描：%s", exc)
+            return []
+
+        matched_ids: set[str] = set()
+        tv_root_ids: set[str] = set()
+        root_category_ids: set[str] = set()
+
+        for row in root_rows:
+            if not self._is_folder_item(row):
+                continue
+            folder_id = str(self._extract_folder_id(row) or "").strip()
+            folder_name = self._share_item_name(row)
+            if not folder_id:
+                continue
+            if folder_likely_same_show(folder_name, title):
+                matched_ids.add(folder_id)
+                continue
+            if folder_name.casefold() == tv_root_name.casefold():
+                tv_root_ids.add(folder_id)
+            elif folder_name.casefold() in category_names:
+                # 兼容输出目录本身已经指向“剧集”根目录的旧配置。
+                root_category_ids.add(folder_id)
+
+        category_ids: set[str] = set(root_category_ids)
+        for tv_root_id in tv_root_ids:
+            try:
+                tv_root_rows = await self._list_folder_items(tv_root_id)
+            except Exception as exc:
+                logger.warning("读取正式库剧集根目录失败：cid=%s, error=%s", tv_root_id, exc)
+                continue
+            for row in tv_root_rows:
+                if not self._is_folder_item(row):
+                    continue
+                folder_id = str(self._extract_folder_id(row) or "").strip()
+                folder_name = self._share_item_name(row)
+                if not folder_id:
+                    continue
+                if folder_likely_same_show(folder_name, title):
+                    matched_ids.add(folder_id)
+                elif folder_name.casefold() in category_names:
+                    category_ids.add(folder_id)
+
+        async def list_category(category_id: str) -> tuple[str, list[dict[str, Any]]]:
+            return category_id, await self._list_folder_items(category_id)
+
+        if category_ids:
+            results = await asyncio.gather(
+                *(list_category(category_id) for category_id in sorted(category_ids)),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.warning("读取正式库剧集分类目录失败：%s", result)
+                    continue
+                _category_id, category_rows = result
+                for row in category_rows:
+                    if not self._is_folder_item(row):
+                        continue
+                    folder_name = self._share_item_name(row)
+                    if not folder_likely_same_show(folder_name, title):
+                        continue
+                    folder_id = str(self._extract_folder_id(row) or "").strip()
+                    if folder_id:
+                        matched_ids.add(folder_id)
+
+        logger.info(
+            "正式库定向查重：剧名=%s，分类目录=%s，命中剧名目录=%s",
+            title,
+            len(category_ids),
+            len(matched_ids),
+        )
+        return sorted(matched_ids)
+
     async def collect_tv_episodes_under_folder(
         self,
         cid: str,
@@ -1586,10 +1762,26 @@ class Pan115Service:
 
         output_cid = runtime_settings_service.get_archive_output_cid()
         if output_cid and title:
-            episodes |= await self.collect_tv_episodes_under_folder(
+            show_folder_ids = await self.find_tv_show_folders_in_archive(
                 output_cid,
-                show_title=title,
+                title,
             )
+            if show_folder_ids:
+                results = await asyncio.gather(
+                    *(
+                        self.collect_tv_episodes_under_folder(
+                            show_folder_id,
+                            show_title="",
+                        )
+                        for show_folder_id in show_folder_ids
+                    ),
+                    return_exceptions=True,
+                )
+                for result in results:
+                    if isinstance(result, Exception):
+                        logger.warning("扫描正式库剧名目录失败：%s", result)
+                        continue
+                    episodes |= result
         return episodes
 
     @classmethod
