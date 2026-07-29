@@ -90,10 +90,17 @@ docker run -d \
 2. 重新构建 Docker 镜像
 3. 部署到本地 Docker 容器
 4. 检查服务启动预热完成
+5. 将本机验证通过的同一镜像同步到 NAS `192.168.50.176`
+6. 在 NAS 使用 `/vol1/1000/docker/mediasync115/docker-compose.yml`
+   重建 `mediasync115`，保留已有 `data` 与 `strm` 挂载
+7. 检查 NAS 容器状态以及
+   `http://192.168.50.176:9008/healthz`
 
 这是用户明确要求的工作流，不要跳过。
 
 > 注意：只提交到本地 Git，不要 push 到远程，除非用户明确要求。
+> 不得把 NAS 密码、Cookie、API Key 或其他凭据写入仓库；优先使用
+> SSH 密钥，临时凭据只能在当前部署会话中使用。
 
 ## 项目架构
 
