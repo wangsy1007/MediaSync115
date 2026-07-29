@@ -6,6 +6,7 @@ from typing import Any, Optional
 import httpx
 
 from app.core.config import settings
+from app.services.tmdb_service import tmdb_service
 
 from app.core.timezone_utils import beijing_now
 
@@ -198,8 +199,15 @@ def _required_tmdb_params(page: int) -> dict[str, Any]:
 async def _fetch_tmdb_page(
     source: dict[str, Any],
     page: int,
-    client: httpx.AsyncClient,
+    client: Optional[httpx.AsyncClient] = None,
 ) -> dict[str, Any]:
+    if client is None:
+        return await tmdb_service.get_list_page(
+            source["path"],
+            page=page,
+            extra_params=source.get("extra_params") or {},
+        )
+
     params = _required_tmdb_params(page)
     extra_params = source.get("extra_params") or {}
     params.update(extra_params)
@@ -250,13 +258,24 @@ async def fetch_tmdb_section(
     page_start, page_end, local_start, local_end = _prepare_pages(start, count)
     base_url = f"{settings.TMDB_BASE_URL}{source['path']}"
 
-    async def _request_with_client(active_client: httpx.AsyncClient) -> dict[str, Any]:
-        page_payloads = await asyncio.gather(
-            *[
-                _fetch_tmdb_page(source=source, page=page, client=active_client)
-                for page in range(page_start, page_end + 1)
-            ]
-        )
+    async def _request_pages(
+        active_client: Optional[httpx.AsyncClient],
+    ) -> dict[str, Any]:
+        if active_client is None:
+            # NAS 代理对同一榜单的多条并发短连接不稳定。完整榜单复用详情页的
+            # 长连接客户端，并顺序拉取跨页数据，避免 ConnectError。
+            page_payloads = []
+            for page in range(page_start, page_end + 1):
+                page_payloads.append(
+                    await _fetch_tmdb_page(source=source, page=page)
+                )
+        else:
+            page_payloads = await asyncio.gather(
+                *[
+                    _fetch_tmdb_page(source=source, page=page, client=active_client)
+                    for page in range(page_start, page_end + 1)
+                ]
+            )
 
         all_items = []
         total_results = 0
@@ -298,14 +317,9 @@ async def fetch_tmdb_section(
 
     try:
         if client is None:
-            from app.utils.proxy import proxy_manager
-
-            async with proxy_manager.create_httpx_client(
-                timeout=30.0, http2=False
-            ) as local_client:
-                result = await _request_with_client(local_client)
+            result = await _request_pages(None)
         else:
-            result = await _request_with_client(client)
+            result = await _request_pages(client)
 
         cache_item["payload"] = result
         cache_item["expires_at"] = now + TMDB_EXPLORE_CACHE_TTL_SECONDS
@@ -313,4 +327,7 @@ async def fetch_tmdb_section(
     except Exception as exc:
         if cache_item["payload"] is not None:
             return cache_item["payload"]
-        raise exc
+        if isinstance(exc, ValueError):
+            raise
+        detail = str(exc).strip() or type(exc).__name__
+        raise RuntimeError(f"TMDB section request failed: {detail}") from exc

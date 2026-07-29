@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from typing import Any
 
@@ -7,7 +8,11 @@ import httpx
 from app.core.config import settings
 from app.utils.proxy import proxy_manager
 
+logger = logging.getLogger(__name__)
+
 _TMDB_CACHE_TTL_SECONDS = 60 * 60
+_TMDB_REQUEST_MAX_ATTEMPTS = 3
+_TMDB_REQUEST_RETRY_BASE_SECONDS = 0.2
 _TMDB_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _TMDB_CACHE_LOCK = asyncio.Lock()
 _TMDB_HTTP_CLIENT: httpx.AsyncClient | None = None
@@ -71,19 +76,31 @@ class TmdbService:
 
     async def _request_json(self, url: str, params: dict[str, Any]) -> dict[str, Any]:
         client = await _get_tmdb_http_client()
-        try:
-            response = await client.get(url, params=params)
-            self._check_api_key_error(response)
-            response.raise_for_status()
-            payload = response.json()
-            return payload if isinstance(payload, dict) else {}
-        except ValueError:
-            raise
-        except Exception as exc:
-            # Some environments/proxies present a mismatched certificate for TMDB.
-            # Fallback once with verify=False to keep subscription/detail flows available.
-            if not self._is_tls_hostname_error(exc):
+        for attempt in range(1, _TMDB_REQUEST_MAX_ATTEMPTS + 1):
+            try:
+                response = await client.get(url, params=params)
+                self._check_api_key_error(response)
+                response.raise_for_status()
+                payload = response.json()
+                return payload if isinstance(payload, dict) else {}
+            except ValueError:
                 raise
+            except Exception as exc:
+                # Some environments/proxies present a mismatched certificate for TMDB.
+                # Fallback once with verify=False to keep subscription/detail flows available.
+                if self._is_tls_hostname_error(exc):
+                    break
+                if not self._is_retryable_transport_error(exc) or attempt >= _TMDB_REQUEST_MAX_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "TMDB 请求连接失败，准备重试：attempt=%s/%s error=%s",
+                    attempt,
+                    _TMDB_REQUEST_MAX_ATTEMPTS,
+                    type(exc).__name__,
+                )
+                await asyncio.sleep(
+                    _TMDB_REQUEST_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+                )
 
         insecure_client = await _get_tmdb_http_client(verify=False)
         try:
@@ -99,6 +116,19 @@ class TmdbService:
     async def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         url = f"{settings.TMDB_BASE_URL}{path}"
         return await self._request_json(url, params)
+
+    async def get_list_page(
+        self,
+        path: str,
+        *,
+        page: int = 1,
+        extra_params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """通过共享 TMDB 客户端读取榜单分页，复用详情页的稳定连接与重试逻辑。"""
+        params = self._required_params(page=max(int(page), 1))
+        if extra_params:
+            params.update(extra_params)
+        return await self._get(path, params)
 
     @staticmethod
     def _format_configuration_result(payload: dict[str, Any]) -> dict[str, Any]:
@@ -154,6 +184,19 @@ class TmdbService:
             "ssl",
         )
         return any(token in text for token in tokens)
+
+    @staticmethod
+    def _is_retryable_transport_error(exc: Exception) -> bool:
+        return isinstance(
+            exc,
+            (
+                httpx.ConnectError,
+                httpx.ConnectTimeout,
+                httpx.ReadError,
+                httpx.ReadTimeout,
+                httpx.RemoteProtocolError,
+            ),
+        )
 
     async def _get_cached(
         self, cache_key: str, path: str, params: dict[str, Any]
