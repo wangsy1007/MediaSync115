@@ -236,3 +236,94 @@ class TestPan115BestVideoSelection:
         assert result["file_count"] == 1
         assert result["original_file_count"] == 2
         assert result["selected_best_video"] is True
+
+    @pytest.mark.asyncio
+    async def test_save_share_directly_does_not_fallback_when_all_tv_episodes_exist(
+        self, monkeypatch
+    ) -> None:
+        """剧集判重过滤为空时应成功跳过，不能回退成全量转存。"""
+
+        service = Pan115Service(cookie="test-cookie")
+        save_called = False
+
+        async def fake_get_files(share_code, receive_code, cid="0", visited_cids=None):
+            return [
+                {"fid": "e1", "name": "Show.S01E01.1080p.mkv", "size": 8_000},
+            ]
+
+        async def fake_collect(*, target_cid, show_title=""):
+            return {(1, 1)}
+
+        async def fake_save_files(*args, **kwargs):
+            nonlocal save_called
+            save_called = True
+            return {"state": True}
+
+        monkeypatch.setattr(service, "_resolve_share_payload", lambda *_: ("abc", ""))
+        monkeypatch.setattr(service, "get_share_all_files_recursive", fake_get_files)
+        monkeypatch.setattr(
+            service, "_collect_tv_existing_episodes_for_transfer", fake_collect
+        )
+        monkeypatch.setattr(service, "save_share_files", fake_save_files)
+
+        result = await service.save_share_directly(
+            "https://115.com/s/abc",
+            parent_id="target",
+            media_type="tv",
+        )
+
+        assert save_called is False
+        assert result["success"] is True
+        assert result["file_count"] == 0
+        assert result["saved_count"] == 0
+        assert result["skipped_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_save_share_to_folder_does_not_fallback_when_all_tv_episodes_exist(
+        self, monkeypatch
+    ) -> None:
+        """建剧集目录转存也应在全部已存在时直接结束。"""
+
+        service = Pan115Service(cookie="test-cookie")
+        save_called = False
+
+        async def fake_get_files(share_code, receive_code, cid="0", visited_cids=None):
+            return [
+                {"fid": "e1", "name": "Show.S01E01.1080p.mkv", "size": 8_000},
+            ]
+
+        async def fake_collect(*, target_cid, show_title=""):
+            assert target_cid == "show-folder"
+            assert show_title == "Show"
+            return {(1, 1)}
+
+        async def fake_get_or_create_folder(*args, **kwargs):
+            return "show-folder"
+
+        async def fake_save_files(*args, **kwargs):
+            nonlocal save_called
+            save_called = True
+            return {"state": True}
+
+        monkeypatch.setattr(service, "_resolve_share_payload", lambda *_: ("abc", ""))
+        monkeypatch.setattr(
+            service, "get_or_create_folder", fake_get_or_create_folder
+        )
+        monkeypatch.setattr(service, "get_share_all_files_recursive", fake_get_files)
+        monkeypatch.setattr(
+            service, "_collect_tv_existing_episodes_for_transfer", fake_collect
+        )
+        monkeypatch.setattr(service, "save_share_files", fake_save_files)
+
+        result = await service.save_share_to_folder(
+            "https://115.com/s/abc",
+            "Show",
+            parent_id="target",
+            media_type="tv",
+        )
+
+        assert save_called is False
+        assert result["success"] is True
+        assert result["file_count"] == 0
+        assert result["saved_count"] == 0
+        assert result["skipped_count"] == 1

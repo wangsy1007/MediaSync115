@@ -2858,7 +2858,7 @@ class Pan115Service:
             )
             if tv_count >= max(1, len(selected_files) // 2):
                 media_type = "tv"
-        selected_files, _skip_map = await self._finalize_tv_transfer_selection(
+        selected_files, skip_map = await self._finalize_tv_transfer_selection(
             selected_files,
             target_folder_id,
             media_type=media_type,
@@ -2866,6 +2866,19 @@ class Pan115Service:
         )
 
         file_ids = self._collect_share_file_ids(selected_files)
+        if not file_ids and skip_map:
+            return {
+                "success": True,
+                "message": "所选剧集均已存在，无需重复转存",
+                "folder_id": target_folder_id,
+                "folder_name": folder_name,
+                "file_count": 0,
+                "saved_count": 0,
+                "skipped_count": len(skip_map),
+                "original_file_count": len(all_files),
+                "selected_best_video": True,
+                "result": {"state": True, "skipped": True},
+            }
         if not file_ids:
             file_ids = self._collect_share_file_ids(all_files)
         if not file_ids:
@@ -2916,6 +2929,7 @@ class Pan115Service:
         receive_code: str = "",
         quality_filter: dict[str, Any] | None = None,
         media_type: str | None = None,
+        show_title: str = "",
     ) -> Dict[str, Any]:
         """将分享里的所有文件直接转存到目标目录，不创建影视外层文件夹。"""
         share_code, receive_code = self._resolve_share_payload(share_url, receive_code)
@@ -2927,12 +2941,26 @@ class Pan115Service:
         selected_files = self._select_files_for_best_quality_transfer(
             all_files, quality_filter, media_type
         )
-        selected_files, _skip_map = await self._finalize_tv_transfer_selection(
+        selected_files, skip_map = await self._finalize_tv_transfer_selection(
             selected_files,
             str(parent_id or "0"),
             media_type=media_type,
+            show_title=show_title,
         )
         file_ids = self._collect_share_file_ids(selected_files)
+        if not file_ids and skip_map:
+            return {
+                "success": True,
+                "message": "所选剧集均已存在，无需重复转存",
+                "target_parent_id": str(parent_id or "0"),
+                "file_count": 0,
+                "saved_count": 0,
+                "skipped_count": len(skip_map),
+                "original_file_count": len(all_files),
+                "selected_best_video": True,
+                "save_mode": "direct",
+                "result": {"state": True, "skipped": True},
+            }
         if not file_ids:
             file_ids = self._collect_share_file_ids(all_files)
         if not file_ids:

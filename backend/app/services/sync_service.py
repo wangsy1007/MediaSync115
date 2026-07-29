@@ -71,7 +71,8 @@ class SyncService:
         tmdb_id: int,
         share_url: str,
         target_folder_id: str,
-        receive_code: str = ""
+        receive_code: str = "",
+        show_title: str = "",
     ) -> dict[str, Any]:
         """
         基于 Emby 查漏补缺的 115 转存策略
@@ -154,6 +155,7 @@ class SyncService:
 
             pan_existing = await pan115_service._collect_tv_existing_episodes_for_transfer(
                 target_cid=str(target_folder_id or ""),
+                show_title=show_title,
             )
             selected_files, _tv_skip = dedupe_tv_transfer_files(
                 selected_files,

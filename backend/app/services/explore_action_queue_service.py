@@ -968,6 +968,7 @@ class ExploreActionQueueService:
                             receive_code,
                             quality_filter,
                             media_type,
+                            title,
                         )
                     except Exception as exc:
                         transfer_attempts.append(

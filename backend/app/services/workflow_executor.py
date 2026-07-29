@@ -188,6 +188,7 @@ class WorkflowExecutor:
                     parent_id, folder_name
                 ),
                 receive_code=receive_code,
+                show_title=folder_name,
             )
         else:
             result = await pan115_service.save_share_to_folder(

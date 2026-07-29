@@ -1117,6 +1117,7 @@ async def save_share_to_folder(request: SaveShareToFolderRequest):
                             share_url=request.share_url,
                             target_folder_id=target_folder_id,
                             receive_code=request.receive_code,
+                            show_title=request.folder_name,
                         )
                         await _register_transfer_intent_after_save(
                             folder_name=request.folder_name,
