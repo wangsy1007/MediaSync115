@@ -39,6 +39,15 @@ from app.services.feiniu_service import feiniu_service
 from app.utils.proxy import is_running_in_docker, proxy_manager
 
 _SETTINGS_CHECK_CACHE_TTL_SECONDS = 300
+_TMDB_HEALTH_TRANSPORT_ATTEMPTS = 3
+_TMDB_HEALTH_RETRY_BASE_SECONDS = 0.5
+_TMDB_HEALTH_RETRYABLE_ERRORS = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadError,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+)
 _settings_check_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _settings_check_cache_lock = asyncio.Lock()
 
@@ -657,6 +666,92 @@ async def _probe_target_health(
         )
 
 
+async def _probe_tmdb_health(target: str) -> dict[str, Any]:
+    """使用 TMDB 真实业务客户端检测，避免一次性短连接造成健康状态假失败。"""
+    normalized_target = str(target or "").strip()
+    if not normalized_target:
+        return _build_proxy_health_payload(
+            status="not_configured",
+            valid=False,
+            message="未配置 TMDB Base URL",
+            target="",
+        )
+
+    parsed_target = urlparse(normalized_target)
+    scheme = str(parsed_target.scheme or "").strip().lower()
+    if scheme not in {"http", "https"} or not parsed_target.netloc:
+        return _build_proxy_health_payload(
+            status="error",
+            valid=False,
+            message="TMDB Base URL 无效",
+            target=normalized_target,
+        )
+
+    # 未配置 API Key 时仍保留基础网络探测，便于单独检查代理路由。
+    if not str(runtime_settings_service.get_tmdb_api_key() or "").strip():
+        return await _probe_target_health(
+            target=normalized_target,
+            not_configured_message="未配置 TMDB Base URL",
+        )
+
+    route = _resolve_health_probe_route(scheme)
+    applied_proxy = route["applied_proxy"]
+    proxy_scheme = route["proxy_scheme"]
+    route_hint = route["route_hint"]
+    if route["route_mode"] == "proxy_unreachable":
+        return _build_proxy_health_payload(
+            status="error",
+            valid=False,
+            message=route_hint,
+            target=normalized_target,
+            applied_proxy=applied_proxy,
+            proxy_scheme=proxy_scheme,
+        )
+
+    started = time.perf_counter()
+    try:
+        result: dict[str, Any] | None = None
+        for attempt in range(1, _TMDB_HEALTH_TRANSPORT_ATTEMPTS + 1):
+            try:
+                result = await tmdb_service.check_connection()
+                break
+            except _TMDB_HEALTH_RETRYABLE_ERRORS:
+                if attempt >= _TMDB_HEALTH_TRANSPORT_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "TMDB 健康检测连接失败，等待后重试：attempt=%s/%s",
+                    attempt,
+                    _TMDB_HEALTH_TRANSPORT_ATTEMPTS,
+                )
+                await asyncio.sleep(_TMDB_HEALTH_RETRY_BASE_SECONDS * attempt)
+        assert result is not None
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        change_keys_count = int(result.get("change_keys_count") or 0)
+        return _build_proxy_health_payload(
+            status="ok",
+            valid=True,
+            message=(
+                f"TMDB API 连接正常（变更键 {change_keys_count} 项，{route_hint}）"
+            ),
+            target=normalized_target,
+            applied_proxy=applied_proxy,
+            proxy_scheme=proxy_scheme,
+            status_code=200,
+            latency_ms=latency_ms,
+        )
+    except Exception as exc:
+        detail = str(exc).strip() or type(exc).__name__
+        return _build_proxy_health_payload(
+            status="error",
+            valid=False,
+            message=f"{detail}（{route_hint}）",
+            target=normalized_target,
+            applied_proxy=applied_proxy,
+            proxy_scheme=proxy_scheme,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+        )
+
+
 async def _perform_hdhive_check_cached() -> dict[str, Any]:
     now = time.time()
     async with _settings_check_cache_lock:
@@ -1247,10 +1342,7 @@ async def check_all_services_health():
             target="https://hdhive.com/",
             not_configured_message="",
         ),
-        _probe_target_health(
-            target=tmdb_target,
-            not_configured_message="未配置 TMDB Base URL",
-        ),
+        _probe_tmdb_health(tmdb_target),
         _probe_target_health(
             target="https://api.telegram.org",
             not_configured_message="",

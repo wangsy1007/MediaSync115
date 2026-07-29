@@ -170,6 +170,20 @@ def test_health_all_uses_configured_proxy_for_fixed_targets(
     monkeypatch.setattr(
         settings_api.proxy_manager, "create_httpx_client", DummyAsyncClient
     )
+    monkeypatch.setattr(
+        settings_api.runtime_settings_service,
+        "get_tmdb_api_key",
+        lambda: "test-api-key",
+    )
+
+    async def fake_tmdb_check() -> dict[str, object]:
+        return {"images_configured": True, "change_keys_count": 54}
+
+    monkeypatch.setattr(
+        settings_api.tmdb_service,
+        "check_connection",
+        fake_tmdb_check,
+    )
 
     try:
         login_response = client.post(
@@ -193,7 +207,7 @@ def test_health_all_uses_configured_proxy_for_fixed_targets(
         assert payload["services"]["tmdb"]["applied_proxy"] == "socks5://127.0.0.1:7890"
         assert payload["services"]["tg"]["status"] == "ok"
         assert payload["services"]["tg"]["applied_proxy"] == "socks5://127.0.0.1:7890"
-        assert len(calls) == 3
+        assert len(calls) == 2
         assert {call["follow_redirects"] for call in calls} == {False}
     finally:
         _restore_proxy_config(original_config)
@@ -300,6 +314,20 @@ def test_health_all_uses_system_network_without_app_proxy(
 
     monkeypatch.setattr(
         settings_api.proxy_manager, "create_httpx_client", DummyAsyncClient
+    )
+    monkeypatch.setattr(
+        settings_api.runtime_settings_service,
+        "get_tmdb_api_key",
+        lambda: "test-api-key",
+    )
+
+    async def fake_tmdb_check() -> dict[str, object]:
+        return {"images_configured": True, "change_keys_count": 54}
+
+    monkeypatch.setattr(
+        settings_api.tmdb_service,
+        "check_connection",
+        fake_tmdb_check,
     )
 
     try:
