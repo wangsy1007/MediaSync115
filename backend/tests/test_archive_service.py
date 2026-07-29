@@ -128,6 +128,27 @@ class TestArchiveService:
         assert parsed["episode"] == 5
         assert parsed["query_title"] == "Game of Thrones"
 
+    def test_parse_sxxexx_not_broken_by_stem_normalization(self) -> None:
+        """数字与大写字母分界不得把 S02E01 拆成 S02.E01 导致季号丢失。"""
+        parsed = archive_service.parse_media_filename(
+            "House.of.the.Dragon.S02E01.2024.2160p.BluRay.REMUX.mkv"
+        )
+        assert parsed["media_type"] == "tv"
+        assert parsed["season"] == 2
+        assert parsed["episode"] == 1
+
+        parsed2 = archive_service.parse_media_filename(
+            "权力的游戏前传：龙族.2022.S03E02.第2集.2160p.HBO.WEB-DL.mkv"
+        )
+        assert parsed2["season"] == 3
+        assert parsed2["episode"] == 2
+
+        parsed3 = archive_service.parse_media_filename(
+            "权力的游戏前传：龙族.House of the Dragon (2022) S02E03.火磨坊.2160p.mkv"
+        )
+        assert parsed3["season"] == 2
+        assert parsed3["episode"] == 3
+
     def test_is_video(self) -> None:
         """测试视频文件识别"""
         assert archive_service._is_video("test.mkv") is True

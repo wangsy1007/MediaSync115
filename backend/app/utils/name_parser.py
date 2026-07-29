@@ -45,8 +45,8 @@ class NameParser:
                 "episode_end": episode_end,
             }
 
-        # 匹配 S01E01 或 s1e01 或 S1E1 或 s01 e01 (忽略大小写)
-        match = re.search(r"S(\d+)\s*E(\d+)", clean_name, re.IGNORECASE)
+        # 匹配 S01E01 / S01.E01 / s1e01
+        match = re.search(r"S(\d+)\s*[.\s_-]*E(\d+)", clean_name, re.IGNORECASE)
         if match:
             episode = int(match.group(2))
             return {

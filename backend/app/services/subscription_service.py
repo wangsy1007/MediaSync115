@@ -3796,9 +3796,9 @@ class SubscriptionService:
                             continue
                         seen_selected_fids.add(fid)
                         selected_items.append(chosen)
-                    existing_episodes = await pan_service.collect_tv_episodes_under_folder(
-                        parent_folder_id,
-                        show_title=sub.title,
+                    existing_episodes = await pan_service._collect_tv_existing_episodes_for_transfer(
+                        target_cid=parent_folder_id,
+                        show_title=str(sub.title or ""),
                     )
                     from app.utils.tv_episode_dedup import dedupe_tv_transfer_files
 
@@ -3993,13 +3993,46 @@ class SubscriptionService:
                     before_fids = await transfer_file_binding_service.list_video_fids(
                         parent_folder_id, pan115=pan_service
                     )
+                    # 缺集服务不可用时，电视剧仍按 TV 转存并对照正式库去重，禁止整包当电影重复入库
+                    transfer_media_type = "tv" if is_tv_subscription else "movie"
                     result = await pan_service.save_share_directly(
                         share_url=share_link,
                         parent_id=parent_folder_id,
                         receive_code=receive_code,
                         quality_filter=quality_filter,
-                        media_type="movie",
+                        media_type=transfer_media_type,
+                        show_title=str(sub.title or "") if is_tv_subscription else "",
                     )
+                    saved_count = int(
+                        result.get("saved_count")
+                        or result.get("file_count")
+                        or 0
+                    )
+                    skipped_count = int(result.get("skipped_count") or 0)
+                    if is_tv_subscription and saved_count <= 0:
+                        record.status = MediaStatus.MATCHED
+                        record.completed_at = None
+                        record.error_message = None
+                        await self._create_step_log(
+                            db,
+                            run_id=run_id,
+                            channel=channel,
+                            subscription_id=sub.id,
+                            subscription_title=sub.title,
+                            step="tv_record_skip_already_in_library",
+                            status="info",
+                            message=(
+                                f"正式库已存在对应集数，已跳过整包转存"
+                                f"（跳过 {skipped_count} 个）：{record.resource_name}"
+                            ),
+                            payload={
+                                "record_id": record.id,
+                                "skipped_count": skipped_count,
+                                "save_mode": "direct",
+                            },
+                        )
+                        continue
+
                     record.status = MediaStatus.COMPLETED
                     record.completed_at = beijing_now()
                     record.error_message = None
@@ -4035,6 +4068,9 @@ class SubscriptionService:
                             "record_id": record.id,
                             "target_parent_id": parent_folder_id,
                             "save_mode": "direct",
+                            "media_type": transfer_media_type,
+                            "saved_count": saved_count,
+                            "skipped_count": skipped_count,
                         },
                     )
                     await operation_log_service.log_background_event(
@@ -4049,6 +4085,7 @@ class SubscriptionService:
                             "record_id": record.id,
                             "source": source,
                             "save_mode": "direct",
+                            "media_type": transfer_media_type,
                         },
                     )
                     # 发送转存成功事件到 Kafka

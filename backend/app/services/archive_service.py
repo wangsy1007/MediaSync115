@@ -130,7 +130,8 @@ IGNORE_PATTERNS = (
 )
 
 EPISODE_PATTERNS = (
-    re.compile(r"(?i)\bS(?P<season>\d{1,2})E(?P<episode>\d{1,3})\b"),
+    # 允许 S02E01 / S02.E01 / S02_E01（stem 规范化可能插入分隔符）
+    re.compile(r"(?i)\bS(?P<season>\d{1,2})[.\s_-]*E(?P<episode>\d{1,3})\b"),
     re.compile(r"(?i)\bSeason[\s._-]?(?P<season>\d{1,2})[\s._-]*E(?:p(?:isode)?)?[\s._-]?(?P<episode>\d{1,3})\b"),
     re.compile(r"(?i)\b(?P<season>\d{1,2})x(?P<episode>\d{1,3})\b"),
     re.compile(r"第(?P<season>\d{1,2})季[\s._-]*第(?P<episode>\d{1,3})[集话話]"),
@@ -590,9 +591,12 @@ class ArchiveService:
                                     "tv" if media_type == "tv" else "movie"
                                 )
                                 if binding.get("season") is not None:
-                                    parsed["season"] = int(binding["season"])
+                                    # 文件名已明确解析出季号时，以文件名为准，避免错误 binding 覆盖
+                                    if parsed.get("season") is None:
+                                        parsed["season"] = int(binding["season"])
                                 if binding.get("episode") is not None:
-                                    parsed["episode"] = int(binding["episode"])
+                                    if parsed.get("episode") is None:
+                                        parsed["episode"] = int(binding["episode"])
                                 matched = await self._identify_by_tmdb_id(
                                     int(binding["tmdb_id"]),
                                     parsed["media_type"],
@@ -979,8 +983,13 @@ class ArchiveService:
         pan115: Pan115Service,
         folder_cid: str,
         cache: dict[str, dict[str, Any]] | None = None,
+        *,
+        require_list: bool = False,
     ) -> dict[str, Any]:
-        """列出目标目录已有文件：集数索引 + 规范化文件名（用于去重）。"""
+        """列出目标目录已有文件：集数索引 + 规范化文件名（用于去重）。
+
+        require_list=True 时，列举失败会抛出异常，避免误当成空目录而重复归档。
+        """
         cid = str(folder_cid or "").strip()
         empty: dict[str, Any] = {
             "episodes": set(),
@@ -997,10 +1006,14 @@ class ArchiveService:
         files: list[dict[str, str]] = []
         offset = 0
         limit = 200
+        listed = False
+        list_error: Exception | None = None
         while True:
             try:
                 result = await pan115.get_file_list(cid=cid, limit=limit, offset=offset)
-            except Exception:
+                listed = True
+            except Exception as exc:
+                list_error = exc
                 break
             rows = result.get("data") or []
             if not isinstance(rows, list) or not rows:
@@ -1021,6 +1034,11 @@ class ArchiveService:
             if len(rows) < limit:
                 break
             offset += limit
+
+        if list_error is not None and (require_list or not listed):
+            raise RuntimeError(
+                f"无法列举目标目录 {cid} 以检查重复，已中止归档以避免重复入库：{list_error}"
+            ) from list_error
 
         snapshot = {
             "episodes": episodes,
@@ -1099,7 +1117,7 @@ class ArchiveService:
             return None
         coverage = self._extract_tv_coverage(parsed, filename)
         snapshot = await self._get_target_folder_snapshot(
-            pan115, target_cid, folder_snapshot_cache
+            pan115, target_cid, folder_snapshot_cache, require_list=True
         )
         if season_episode_cache is not None:
             season_episode_cache[target_cid] = set(snapshot["episodes"])
@@ -1142,7 +1160,7 @@ class ArchiveService:
         exclude_fid: str = "",
     ) -> str | None:
         snapshot = await self._get_target_folder_snapshot(
-            pan115, target_cid, folder_snapshot_cache
+            pan115, target_cid, folder_snapshot_cache, require_list=True
         )
         return self._snapshot_has_filename_conflict(
             snapshot,
@@ -1203,9 +1221,11 @@ class ArchiveService:
                     "tv" if str(binding.get("media_type")) == "tv" else "movie"
                 )
             if binding.get("season") is not None:
-                parsed["season"] = int(binding["season"])
+                if parsed.get("season") is None:
+                    parsed["season"] = int(binding["season"])
             if binding.get("episode") is not None:
-                parsed["episode"] = int(binding["episode"])
+                if parsed.get("episode") is None:
+                    parsed["episode"] = int(binding["episode"])
             if int(matched.get("tmdb_id") or 0) != int(binding["tmdb_id"]):
                 binding_matched = await self._identify_by_tmdb_id(
                     int(binding["tmdb_id"]),
@@ -1636,9 +1656,11 @@ class ArchiveService:
                         "tv" if str(binding.get("media_type")) == "tv" else "movie"
                     )
                 if binding.get("season") is not None:
-                    parsed["season"] = int(binding["season"])
+                    if parsed.get("season") is None:
+                        parsed["season"] = int(binding["season"])
                 if binding.get("episode") is not None:
-                    parsed["episode"] = int(binding["episode"])
+                    if parsed.get("episode") is None:
+                        parsed["episode"] = int(binding["episode"])
                 matched = await self._identify_by_tmdb_id(
                     int(binding["tmdb_id"]),
                     str(parsed.get("media_type") or "movie"),
@@ -2590,7 +2612,13 @@ class ArchiveService:
         # 误写的粘连年份：.22025 / 22025 -> .2025
         text = re.sub(r"([.\-_]|^)2(20\d{2})(?![0-9])", r"\1\2", text)
         # 小写/数字与大写字母分界：22025Repack -> 22025.Repack
+        # 注意：会把 S02E01 误拆成 S02.E01，后面必须还原，否则季号丢失默认成第1季
         text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", ".", text)
+        text = re.sub(
+            r"(?i)(S\d{1,2})\.+(E\d{1,3}(?:\s*[-~_至到]+\s*E?\d{1,3})?)",
+            r"\1\2",
+            text,
+        )
         # 字母与年份分界：Zootopia2025 -> Zootopia.2025
         text = re.sub(r"(?<=[A-Za-z])(19\d{2}|20\d{2})(?![0-9])", r".\1", text)
         # 中文与年份分界：冷战1994 -> 冷战.1994
@@ -2688,6 +2716,19 @@ class ArchiveService:
         query_title = self._normalize_title(raw_title)
         if not query_title:
             query_title = self._normalize_title(name)
+
+        # 与 name_parser 对齐：原始文件名能解析出季集时，纠正 stem 拆分导致的季号丢失
+        coverage = name_parser.parse_episode_coverage(filename)
+        if coverage:
+            media_type = "tv"
+            if season is None:
+                season = int(coverage["season"])
+            if episode is None:
+                episode = int(coverage["episode_start"])
+            # 文件名明确写了 S02E01，不得被默认季号/残缺解析覆盖成 S01
+            elif int(coverage["season"]) != int(season or 0):
+                season = int(coverage["season"])
+                episode = int(coverage["episode_start"])
 
         return {
             "source_filename": filename,

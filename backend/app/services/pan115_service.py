@@ -3154,6 +3154,20 @@ class Pan115Service:
                 "result": {"state": True, "skipped": True},
             }
         if not file_ids:
+            # 电视剧去重后为空时，绝不能回退转存整包，否则会重复入库
+            if str(media_type or "").strip().lower() == "tv" or skip_map:
+                return {
+                    "success": True,
+                    "message": "没有需要转存的剧集文件",
+                    "target_parent_id": str(parent_id or "0"),
+                    "file_count": 0,
+                    "saved_count": 0,
+                    "skipped_count": len(skip_map),
+                    "original_file_count": len(all_files),
+                    "selected_best_video": True,
+                    "save_mode": "direct",
+                    "result": {"state": True, "skipped": True},
+                }
             file_ids = self._collect_share_file_ids(all_files)
         if not file_ids:
             raise ValueError("分享中未找到可转存的视频文件")
@@ -3189,6 +3203,8 @@ class Pan115Service:
             + ("（已自动选择最高画质视频）" if selected_best else ""),
             "target_parent_id": str(parent_id or "0"),
             "file_count": len(file_ids),
+            "saved_count": len(file_ids),
+            "skipped_count": len(skip_map),
             "original_file_count": len(all_files),
             "selected_best_video": selected_best,
             "save_mode": "direct",
