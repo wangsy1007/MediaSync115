@@ -649,3 +649,113 @@ class TestArchiveTargetConflict:
         assert fixed["media_type"] == "movie"
         assert fixed.get("season") is None
 
+    @pytest.mark.asyncio
+    async def test_tv_conflict_merges_season_episode_cache(self) -> None:
+        class FakePan115:
+            async def get_file_list(self, **kwargs):
+                return {"data": []}
+
+            def _is_folder_item(self, row):
+                return False
+
+        cache: dict[str, set[tuple[int, int]]] = {"season-cid": {(1, 1)}}
+        message = await archive_service._check_tv_episode_archive_conflict(
+            FakePan115(),
+            {"media_type": "tv", "season": 1, "episode": 1},
+            "Show.S01E01.1080p.mp4",
+            "season-cid",
+            cache,
+            new_filename="Show (2024) - S01E01.mp4",
+        )
+        assert message
+        assert "S01E01" in message
+        assert (1, 1) in cache["season-cid"]
+
+    @pytest.mark.asyncio
+    async def test_finalize_deletes_same_episode_different_ext(self, monkeypatch) -> None:
+        deleted: list[str] = []
+
+        class FakePan115:
+            async def get_file_list(self, **kwargs):
+                return {
+                    "data": [
+                        {
+                            "fid": "old",
+                            "name": "雀骨 (2024) - S01E01.mkv",
+                            "size": 10_000,
+                        },
+                        {
+                            "fid": "new",
+                            "name": "雀骨.S01E01.1080p.mp4",
+                            "size": 5_000,
+                        },
+                    ]
+                }
+
+            def _is_folder_item(self, row):
+                return False
+
+            async def delete_file(self, fids):
+                deleted.extend(fids if isinstance(fids, list) else [fids])
+
+            async def rename_file(self, *args, **kwargs):
+                return True
+
+        async def fake_mark_skipped(task_id, message):
+            return None
+
+        monkeypatch.setattr(archive_service, "_mark_task_skipped", fake_mark_skipped)
+
+        result = await archive_service._finalize_identified(
+            FakePan115(),
+            plan={
+                "fid": "new",
+                "filename": "雀骨.S01E01.1080p.mp4",
+                "parsed": {"media_type": "tv", "season": 1, "episode": 1},
+                "matched": {"tmdb_id": 1, "title": "雀骨", "year": "2024"},
+                "naming": None,
+                "display_title": "雀骨",
+                "target_cid": "season-cid",
+                "target_desc": "剧集/华语剧集/雀骨 (2024)/Season 01",
+                "new_filename": "雀骨 (2024) - S01E01.mp4",
+                "task_id": 1,
+                "item": {"fid": "new", "name": "雀骨.S01E01.1080p.mp4"},
+            },
+        )
+        assert result["status"] == ArchiveStatus.SKIPPED.value
+        assert deleted == ["new"]
+
+    @pytest.mark.asyncio
+    async def test_cleanup_keeps_higher_quality_episode(self) -> None:
+        deleted: list[str] = []
+
+        class FakePan115:
+            async def get_file_list(self, **kwargs):
+                return {
+                    "data": [
+                        {
+                            "fid": "low",
+                            "name": "雀骨.S01E01.720p.mp4",
+                            "size": 3_000,
+                        },
+                        {
+                            "fid": "high",
+                            "name": "雀骨.S01E01.2160p.mkv",
+                            "size": 12_000,
+                        },
+                    ]
+                }
+
+            def _is_folder_item(self, row):
+                return False
+
+            async def delete_file(self, fids):
+                deleted.extend(fids if isinstance(fids, list) else [fids])
+
+        count = await archive_service._cleanup_duplicate_tv_episodes_in_folder(
+            FakePan115(),
+            "season-cid",
+        )
+        assert count == 1
+        assert deleted == ["low"]
+

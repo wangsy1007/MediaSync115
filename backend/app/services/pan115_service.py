@@ -1349,7 +1349,13 @@ class Pan115Service:
         return {"state": False, "error": retry_hint}
 
     async def save_share_all(
-        self, share_code: str, pid: str = "0", receive_code: str = ""
+        self,
+        share_code: str,
+        pid: str = "0",
+        receive_code: str = "",
+        *,
+        media_type: str | None = None,
+        show_title: str = "",
     ) -> Dict[str, Any]:
         """
         转存分享链接中的所有文件（仅当分享为单文件/文件夹时）
@@ -1358,6 +1364,8 @@ class Pan115Service:
             share_code: 分享码
             pid: 保存到的目标目录ID
             receive_code: 提取码（如果有）
+            media_type: 可选 movie/tv，便于剧集按集去重
+            show_title: 剧名，用于对照归档正式库已有集
 
         Returns:
             转存结果
@@ -1373,16 +1381,48 @@ class Pan115Service:
         else:
             file_list = []
 
-        if file_list:
-            selected_files = self._select_files_for_best_quality_transfer(file_list)
-            file_ids = self._collect_share_file_ids(selected_files)
-            if not file_ids:
-                file_ids = self._collect_share_file_ids(
-                    [f for f in file_list if isinstance(f, dict)]
-                )
-            return await self.save_share_files(share_code, file_ids, pid, receive_code)
+        if not file_list:
+            return {"state": False, "error": "分享内容为空或无法获取"}
 
-        return {"state": False, "error": "分享内容为空或无法获取"}
+        selected_files = self._select_files_for_best_quality_transfer(
+            [f for f in file_list if isinstance(f, dict)],
+            media_type=media_type,
+        )
+        selected_files, skip_map = await self._finalize_tv_transfer_selection(
+            selected_files,
+            str(pid or "0"),
+            media_type=media_type,
+            show_title=show_title,
+        )
+        file_ids = self._collect_share_file_ids(selected_files)
+        if not file_ids and skip_map:
+            return {
+                "state": True,
+                "skipped": True,
+                "success": True,
+                "message": "所选剧集均已存在，无需重复转存",
+                "file_count": 0,
+                "saved_count": 0,
+                "skipped_count": len(skip_map),
+            }
+        if not file_ids:
+            # 剧集去重后为空时禁止回退转存整包
+            if str(media_type or "").strip().lower() == "tv" or skip_map:
+                return {
+                    "state": True,
+                    "skipped": True,
+                    "success": True,
+                    "message": "没有需要转存的剧集文件",
+                    "file_count": 0,
+                    "saved_count": 0,
+                    "skipped_count": len(skip_map),
+                }
+            file_ids = self._collect_share_file_ids(
+                [f for f in file_list if isinstance(f, dict)]
+            )
+        if not file_ids:
+            return {"state": False, "error": "分享中未找到可转存的文件"}
+        return await self.save_share_files(share_code, file_ids, pid, receive_code)
 
     # ==================== Cookie管理 ====================
 
@@ -3175,6 +3215,20 @@ class Pan115Service:
                 "result": {"state": True, "skipped": True},
             }
         if not file_ids:
+            # 电视剧去重后为空时，绝不能回退转存整包，否则会重复入库
+            if str(media_type or "").strip().lower() == "tv" or skip_map:
+                return {
+                    "success": True,
+                    "message": "没有需要转存的剧集文件",
+                    "folder_id": target_folder_id,
+                    "folder_name": folder_name,
+                    "file_count": 0,
+                    "saved_count": 0,
+                    "skipped_count": len(skip_map),
+                    "original_file_count": len(all_files),
+                    "selected_best_video": True,
+                    "result": {"state": True, "skipped": True},
+                }
             file_ids = self._collect_share_file_ids(all_files)
         if not file_ids:
             raise ValueError("分享中未找到可转存的视频文件")

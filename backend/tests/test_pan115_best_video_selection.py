@@ -327,3 +327,76 @@ class TestPan115BestVideoSelection:
         assert result["file_count"] == 0
         assert result["saved_count"] == 0
         assert result["skipped_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_save_share_all_skips_existing_tv_episodes(self, monkeypatch) -> None:
+        service = Pan115Service(cookie="test-cookie")
+        save_called = False
+
+        async def fake_share_list(share_code, receive_code=""):
+            return [
+                {"fid": "e1", "name": "Show.S01E01.1080p.mkv", "size": 8_000},
+                {"fid": "e1b", "name": "Show.S01E01.720p.mp4", "size": 4_000},
+            ]
+
+        async def fake_collect(*, target_cid, show_title=""):
+            return {(1, 1)}
+
+        async def fake_save_files(*args, **kwargs):
+            nonlocal save_called
+            save_called = True
+            return {"state": True}
+
+        monkeypatch.setattr(service, "get_share_file_list", fake_share_list)
+        monkeypatch.setattr(
+            service, "_collect_tv_existing_episodes_for_transfer", fake_collect
+        )
+        monkeypatch.setattr(service, "save_share_files", fake_save_files)
+
+        result = await service.save_share_all(
+            "abc",
+            pid="target",
+            media_type="tv",
+            show_title="Show",
+        )
+
+        assert save_called is False
+        assert result.get("success") is True or result.get("skipped") is True
+        assert result.get("file_count", 0) == 0
+        assert int(result.get("skipped_count") or 0) >= 1
+
+    @pytest.mark.asyncio
+    async def test_save_share_all_dedupes_same_episode_in_share(
+        self, monkeypatch
+    ) -> None:
+        service = Pan115Service(cookie="test-cookie")
+        received: dict = {}
+
+        async def fake_share_list(share_code, receive_code=""):
+            return [
+                {"fid": "low", "name": "Show.S01E01.720p.mp4", "size": 4_000},
+                {"fid": "high", "name": "Show.S01E01.2160p.mkv", "size": 12_000},
+            ]
+
+        async def fake_collect(*, target_cid, show_title=""):
+            return set()
+
+        async def fake_save_files(share_code, file_ids, pid, receive_code=""):
+            received["file_ids"] = list(file_ids)
+            return {"state": True}
+
+        monkeypatch.setattr(service, "get_share_file_list", fake_share_list)
+        monkeypatch.setattr(
+            service, "_collect_tv_existing_episodes_for_transfer", fake_collect
+        )
+        monkeypatch.setattr(service, "save_share_files", fake_save_files)
+
+        result = await service.save_share_all(
+            "abc",
+            pid="target",
+            media_type="tv",
+            show_title="Show",
+        )
+
+        assert received["file_ids"] == ["high"]
+        assert result.get("state") is True
