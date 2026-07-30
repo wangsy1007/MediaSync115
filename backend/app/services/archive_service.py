@@ -546,7 +546,7 @@ class ArchiveService:
                 video_items = [it for it in source_items if it["is_video"]]
                 subtitle_items = [it for it in source_items if it["is_subtitle"]]
 
-                # 无论监听目录是否有新文件，都主动清理正式库剧集同集多份
+                # 无论监听目录是否有新文件，都主动清理正式库重复（剧集同集 + 电影同名(1)(2)）
                 dup_cleanup = await self._cleanup_all_tv_archive_duplicates(
                     pan115, output_cid
                 )
@@ -557,7 +557,7 @@ class ArchiveService:
                         action="archive.scan.dedupe_tv",
                         status="info",
                         message=(
-                            "正式库剧集同集清理："
+                            "正式库重复清理："
                             f"检查 {dup_cleanup.get('folders', 0)} 个目录，"
                             f"删除 {dup_cleanup.get('deleted', 0)} 个重复文件"
                         ),
@@ -1262,7 +1262,7 @@ class ArchiveService:
         folder_snapshot_cache: dict[str, dict[str, Any]] | None = None,
         cleaned_cids: set[str] | None = None,
     ) -> int:
-        """季目录内同 (S,E) 多份时保留画质最高的一份，删除其余。"""
+        """目录内去重：同 (S,E) 或网盘同名 (1)(2) 变体，只留画质最高的一份。"""
         cid = str(folder_cid or "").strip()
         if not cid:
             return 0
@@ -1275,10 +1275,39 @@ class ArchiveService:
         if cleaned_cids is not None:
             cleaned_cids.add(cid)
 
-        groups: dict[tuple[int, int], list[dict[str, Any]]] = {}
-        for row in snapshot.get("files") or []:
-            if not isinstance(row, dict):
-                continue
+        rows = [row for row in (snapshot.get("files") or []) if isinstance(row, dict)]
+        if len(rows) <= 1:
+            return 0
+
+        delete_fids: list[str] = []
+
+        def _score(row: dict[str, Any]) -> tuple:
+            return Pan115Service._score_video_file(
+                {
+                    "name": str(row.get("name") or ""),
+                    "size": int(row.get("size") or 0),
+                }
+            )
+
+        def _keep_best(group_rows: list[dict[str, Any]]) -> None:
+            by_fid: dict[str, dict[str, Any]] = {}
+            for row in group_rows:
+                fid = str(row.get("fid") or "").strip()
+                if fid and fid not in by_fid:
+                    by_fid[fid] = row
+            unique_rows = list(by_fid.values())
+            if len(unique_rows) <= 1:
+                return
+            best = max(unique_rows, key=_score)
+            best_fid = str(best.get("fid") or "").strip()
+            for row in unique_rows:
+                fid = str(row.get("fid") or "").strip()
+                if fid and fid != best_fid:
+                    delete_fids.append(fid)
+
+        # 1) 单集 SxxExx 去重
+        episode_groups: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        for row in rows:
             fid = str(row.get("fid") or "").strip()
             name = str(row.get("name") or "")
             if not fid or not name:
@@ -1289,38 +1318,27 @@ class ArchiveService:
             if not coverage:
                 continue
             keys = list(name_parser.iter_episode_keys(coverage))
-            # 仅清理「单集文件」之间的同集多份；合集包不参与，避免误删
             if len(keys) != 1:
                 continue
-            groups.setdefault(keys[0], []).append(row)
+            episode_groups.setdefault(keys[0], []).append(row)
+        for group_rows in episode_groups.values():
+            _keep_best(group_rows)
 
-        delete_fids: list[str] = []
-        for key, rows in groups.items():
-            # 同一文件可能覆盖多集，按 fid 去重后再比画质
-            by_fid: dict[str, dict[str, Any]] = {}
-            for row in rows:
-                fid = str(row.get("fid") or "").strip()
-                if fid and fid not in by_fid:
-                    by_fid[fid] = row
-            unique_rows = list(by_fid.values())
-            if len(unique_rows) <= 1:
+        # 2) 网盘同名 (1)/(2) 变体去重（电影误归档、无集数文件名也适用）
+        basename_groups: dict[str, list[dict[str, Any]]] = {}
+        already_deleting = set(delete_fids)
+        for row in rows:
+            fid = str(row.get("fid") or "").strip()
+            name = str(row.get("name") or "")
+            if not fid or not name or fid in already_deleting:
                 continue
-            best = max(
-                unique_rows,
-                key=lambda r: Pan115Service._score_video_file(
-                    {
-                        "name": str(r.get("name") or ""),
-                        "size": int(r.get("size") or 0),
-                    }
-                ),
-            )
-            best_fid = str(best.get("fid") or "").strip()
-            for row in unique_rows:
-                fid = str(row.get("fid") or "").strip()
-                if fid and fid != best_fid:
-                    delete_fids.append(fid)
+            key = normalize_archive_basename(name)
+            if not key:
+                continue
+            basename_groups.setdefault(key, []).append(row)
+        for group_rows in basename_groups.values():
+            _keep_best(group_rows)
 
-        # 去重删除列表（合集文件可能出现在多组）
         delete_fids = list(dict.fromkeys(delete_fids))
         if not delete_fids:
             return 0
@@ -1329,7 +1347,7 @@ class ArchiveService:
             await pan115.delete_file(delete_fids)
         except Exception as exc:
             logger.warning(
-                "清理季目录同集重复失败 cid=%s count=%s: %s",
+                "清理目录重复文件失败 cid=%s count=%s: %s",
                 cid,
                 len(delete_fids),
                 exc,
@@ -1339,7 +1357,7 @@ class ArchiveService:
         if folder_snapshot_cache is not None and cid in folder_snapshot_cache:
             del folder_snapshot_cache[cid]
         logger.info(
-            "清理季目录同集重复：cid=%s deleted=%s",
+            "清理目录重复文件：cid=%s deleted=%s",
             cid,
             len(delete_fids),
         )
@@ -1350,20 +1368,16 @@ class ArchiveService:
         pan115: Pan115Service,
         output_cid: str,
     ) -> list[str]:
-        """收集正式库剧集树下可能含单集文件的目录 cid。
-
-        层级兼容：
-        - 剧集/分类/剧名/季
-        - 剧集/自定义分类名/剧名/季
-        - 剧集/剧名/季
-        并对剧名目录本身也执行清理（兼容平铺单集）。
-        """
+        """收集正式库剧集/电影树下可能含重复文件的目录 cid。"""
         root_cid = str(output_cid or "").strip()
         if not root_cid:
             return []
 
         subdirs = self._get_archive_subdirs()
-        tv_root_name = str(subdirs.get("tv_root") or "剧集").strip()
+        root_names = {
+            str(subdirs.get("tv_root") or "剧集").strip().casefold(),
+            str(subdirs.get("movie_root") or "电影").strip().casefold(),
+        }
 
         season_cids: list[str] = []
         seen: set[str] = set()
@@ -1377,27 +1391,27 @@ class ArchiveService:
         try:
             root_rows = await pan115._list_folder_items(root_cid)
         except Exception as exc:
-            logger.warning("读取归档输出根目录失败，跳过剧集重复清理：%s", exc)
+            logger.warning("读取归档输出根目录失败，跳过重复清理：%s", exc)
             return []
 
-        tv_root_ids: list[str] = []
+        media_root_ids: list[str] = []
         for row in root_rows:
             if not pan115._is_folder_item(row):
                 continue
             folder_id = str(pan115._extract_folder_id(row) or "").strip()
             folder_name = pan115._share_item_name(row)
-            if folder_id and folder_name.casefold() == tv_root_name.casefold():
-                tv_root_ids.append(folder_id)
+            if folder_id and folder_name.casefold() in root_names:
+                media_root_ids.append(folder_id)
 
-        # 输出目录本身已是「剧集」根时的兼容
-        if not tv_root_ids:
-            tv_root_ids = [root_cid]
+        # 输出目录本身已是剧集/电影根时的兼容
+        if not media_root_ids:
+            media_root_ids = [root_cid]
 
-        for tv_root_id in tv_root_ids:
+        for media_root_id in media_root_ids:
             try:
-                level1 = await pan115._list_folder_items(tv_root_id)
+                level1 = await pan115._list_folder_items(media_root_id)
             except Exception as exc:
-                logger.warning("读取剧集根目录失败 cid=%s: %s", tv_root_id, exc)
+                logger.warning("读取影视根目录失败 cid=%s: %s", media_root_id, exc)
                 continue
             for row1 in level1:
                 if not pan115._is_folder_item(row1):
@@ -1405,12 +1419,11 @@ class ArchiveService:
                 cid1 = str(pan115._extract_folder_id(row1) or "").strip()
                 if not cid1:
                     continue
-                # 分类或剧名：都可能直接含单集
                 _add(cid1)
                 try:
                     level2 = await pan115._list_folder_items(cid1)
                 except Exception as exc:
-                    logger.warning("读取剧集子目录失败 cid=%s: %s", cid1, exc)
+                    logger.warning("读取影视分类目录失败 cid=%s: %s", cid1, exc)
                     continue
                 for row2 in level2:
                     if not pan115._is_folder_item(row2):
@@ -1422,7 +1435,7 @@ class ArchiveService:
                     try:
                         level3 = await pan115._list_folder_items(cid2)
                     except Exception as exc:
-                        logger.warning("读取剧名/季目录失败 cid=%s: %s", cid2, exc)
+                        logger.warning("读取影视子目录失败 cid=%s: %s", cid2, exc)
                         continue
                     for row3 in level3:
                         if not pan115._is_folder_item(row3):
@@ -1456,7 +1469,7 @@ class ArchiveService:
                 logger.warning("清理剧集目录重复失败 cid=%s: %s", cid, exc)
         if deleted_total:
             logger.info(
-                "正式库剧集同集清理完成：folders=%s deleted=%s",
+                "正式库重复清理完成：folders=%s deleted=%s",
                 folder_count,
                 deleted_total,
             )

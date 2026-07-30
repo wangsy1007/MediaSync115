@@ -760,6 +760,34 @@ class TestArchiveTargetConflict:
         assert deleted == ["low"]
 
     @pytest.mark.asyncio
+    async def test_cleanup_cloud_duplicate_suffix_variants(self) -> None:
+        deleted: list[str] = []
+
+        class FakePan115:
+            async def get_file_list(self, **kwargs):
+                return {
+                    "data": [
+                        {"fid": "a", "name": "28-4K.国语中字.mp4", "size": 8_000},
+                        {"fid": "b", "name": "28-4K.国语中字(1).mp4", "size": 8_000},
+                        {"fid": "c", "name": "28-4K.国语中字(2).mp4", "size": 8_000},
+                        {"fid": "d", "name": "28-4K.国语中字(3).mp4", "size": 8_000},
+                    ]
+                }
+
+            def _is_folder_item(self, row):
+                return False
+
+            async def delete_file(self, fids):
+                deleted.extend(fids if isinstance(fids, list) else [fids])
+
+        count = await archive_service._cleanup_duplicate_tv_episodes_in_folder(
+            FakePan115(),
+            "movie-cid",
+        )
+        assert count == 3
+        assert set(deleted) == {"b", "c", "d"}
+
+    @pytest.mark.asyncio
     async def test_collect_tv_season_folder_cids(self) -> None:
         class FakePan115:
             def _is_folder_item(self, row):
