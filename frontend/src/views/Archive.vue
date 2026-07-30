@@ -55,6 +55,19 @@
               <p class="form-hint">归档成功后自动增量生成 STRM（需同时启用 STRM）；默认开启</p>
             </div>
           </el-form-item>
+          <el-form-item label="文件覆盖方式" class="grid-span-2">
+            <div class="field-stack">
+              <div class="control-line">
+                <el-select v-model="config.archive_overwrite_mode" style="width: 280px">
+                  <el-option label="从不覆盖" value="never" />
+                  <el-option label="按大小覆盖" value="size" />
+                  <el-option label="总是覆盖" value="always" />
+                  <el-option label="仅保留最新版本" value="latest" />
+                </el-select>
+              </div>
+              <p class="form-hint">{{ overwriteModeHint }}</p>
+            </div>
+          </el-form-item>
           <el-form-item label="离线监控间隔" class="config-item-inline">
             <el-input-number v-model="config.offline_monitor_interval_minutes" :min="1" :max="60" />
             <span class="suffix-text">分钟</span>
@@ -408,6 +421,7 @@ const config = reactive({
   archive_interval_minutes: 10,
   archive_auto_on_transfer: true,
   archive_auto_on_offline: true,
+  archive_overwrite_mode: 'latest',
   strm_auto_after_archive: true,
   offline_monitor_interval_minutes: 3,
   archive_subdirs: applyArchiveSubdirs(),
@@ -443,6 +457,16 @@ const pickerHistory = ref([])
 
 const pickerTitle = computed(() => pickerTarget.value === 'watch' ? '选择 115 监听目录' : '选择 115 输出目录')
 const pickerBreadcrumbs = computed(() => [{ cid: '0', name: '根目录' }, ...pickerHistory.value])
+
+const overwriteModeHint = computed(() => {
+  const hints = {
+    never: '目标目录已有同名文件时跳过整理（同集异名文件可并存）',
+    size: '仅当新文件体积更大时覆盖同名文件，否则跳过',
+    always: '直接覆盖目标目录中的同名文件',
+    latest: '整理后删除同目录其它版本（剧集按季/集，含文件名不一致），仅保留本次归档'
+  }
+  return hints[config.archive_overwrite_mode] || hints.latest
+})
 
 const getFolderDisplayName = (folder) => {
   if (!folder || typeof folder !== 'object') return '-'
@@ -565,6 +589,9 @@ const loadConfig = async () => {
   config.archive_interval_minutes = Number(data.archive_interval_minutes || 10)
   config.archive_auto_on_transfer = data.archive_auto_on_transfer !== false
   config.archive_auto_on_offline = data.archive_auto_on_offline !== false
+  config.archive_overwrite_mode = ['never', 'size', 'always', 'latest'].includes(data.archive_overwrite_mode)
+    ? data.archive_overwrite_mode
+    : 'latest'
   config.strm_auto_after_archive = data.strm_auto_after_archive !== false
   config.offline_monitor_interval_minutes = Number(data.offline_monitor_interval_minutes || 3)
   Object.assign(config.archive_subdirs, applyArchiveSubdirs(data.archive_subdirs))
@@ -630,6 +657,7 @@ const saveConfig = async () => {
       archive_interval_minutes: config.archive_interval_minutes,
       archive_auto_on_transfer: config.archive_auto_on_transfer,
       archive_auto_on_offline: config.archive_auto_on_offline,
+      archive_overwrite_mode: config.archive_overwrite_mode,
       strm_auto_after_archive: config.strm_auto_after_archive,
       offline_monitor_interval_minutes: config.offline_monitor_interval_minutes,
       archive_subdirs: buildArchiveSubdirsPayload(config.archive_subdirs),

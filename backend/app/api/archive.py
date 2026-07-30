@@ -48,6 +48,10 @@ class ArchiveConfigRequest(BaseModel):
     archive_interval_minutes: Optional[int] = None
     archive_auto_on_transfer: Optional[bool] = None
     archive_auto_on_offline: Optional[bool] = None
+    archive_overwrite_mode: Optional[str] = Field(
+        default=None,
+        description="归档覆盖模式：never / size / always / latest（对齐 MoviePilot）",
+    )
     strm_auto_after_archive: Optional[bool] = None
     offline_monitor_interval_minutes: Optional[int] = None
     archive_subdirs: Optional[dict[str, Any]] = Field(
@@ -128,7 +132,19 @@ async def update_archive_config(payload: ArchiveConfigRequest):
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    config = runtime_settings_service.update_archive_config(updates)
+    if "archive_overwrite_mode" in updates and updates["archive_overwrite_mode"] is not None:
+        mode = str(updates["archive_overwrite_mode"] or "").strip().lower()
+        if mode not in {"never", "size", "always", "latest"}:
+            raise HTTPException(
+                status_code=400,
+                detail="archive_overwrite_mode 仅支持 never / size / always / latest",
+            )
+        updates["archive_overwrite_mode"] = mode
+
+    try:
+        config = runtime_settings_service.update_archive_config(updates)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await archive_scheduler_service.ensure_scan_task()
     return {
         **config,

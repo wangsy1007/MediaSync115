@@ -197,6 +197,7 @@ class RuntimeSettingsService:
             "archive_interval_minutes": 10,
             "archive_auto_on_transfer": True,
             "archive_auto_on_offline": True,
+            "archive_overwrite_mode": "latest",
             "offline_monitor_interval_minutes": 3,
             "archive_subdirs": DEFAULT_ARCHIVE_SUBDIRS,
             "archive_naming": DEFAULT_ARCHIVE_NAMING,
@@ -1064,6 +1065,13 @@ class RuntimeSettingsService:
     def get_archive_auto_on_offline(self) -> bool:
         return bool(self._data.get("archive_auto_on_offline", True))
 
+    def get_archive_overwrite_mode(self) -> str:
+        """归档覆盖模式：never / size / always / latest，默认 latest（对齐 MoviePilot）。"""
+        value = str(self._data.get("archive_overwrite_mode") or "latest").strip().lower()
+        if value in {"never", "size", "always", "latest"}:
+            return value
+        return "latest"
+
     def get_offline_monitor_interval_minutes(self) -> int:
         value = self._data.get("offline_monitor_interval_minutes", 3)
         try:
@@ -1095,6 +1103,7 @@ class RuntimeSettingsService:
             "archive_interval_minutes": self.get_archive_interval_minutes(),
             "archive_auto_on_transfer": self.get_archive_auto_on_transfer(),
             "archive_auto_on_offline": self.get_archive_auto_on_offline(),
+            "archive_overwrite_mode": self.get_archive_overwrite_mode(),
             "offline_monitor_interval_minutes": self.get_offline_monitor_interval_minutes(),
             "strm_auto_after_archive": self.get_strm_auto_after_archive(),
             "archive_subdirs": self.get_archive_subdirs(),
@@ -1309,6 +1318,16 @@ class RuntimeSettingsService:
             self._data["archive_auto_on_offline"] = bool(
                 payload["archive_auto_on_offline"]
             )
+        if (
+            "archive_overwrite_mode" in payload
+            and payload["archive_overwrite_mode"] is not None
+        ):
+            mode = str(payload["archive_overwrite_mode"] or "").strip().lower()
+            if mode not in {"never", "size", "always", "latest"}:
+                raise ValueError(
+                    "archive_overwrite_mode 仅支持 never / size / always / latest"
+                )
+            self._data["archive_overwrite_mode"] = mode
         if (
             "strm_auto_after_archive" in payload
             and payload["strm_auto_after_archive"] is not None

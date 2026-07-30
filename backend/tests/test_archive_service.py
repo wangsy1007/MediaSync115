@@ -579,6 +579,13 @@ class TestArchiveTargetConflict:
             def _is_folder_item(self, row):
                 return False
 
+            async def delete_file(self, fids):
+                return True
+
+        # never 模式：同名（含 (1) 变体）跳过；同集异名不因季集冲突跳过
+        monkeypatch.setattr(
+            archive_service, "_get_archive_overwrite_mode", lambda: "never"
+        )
         parsed = {"media_type": "tv", "season": 1, "episode": 2}
         message = await archive_service._check_tv_episode_archive_conflict(
             FakePan115(),
@@ -600,7 +607,41 @@ class TestArchiveTargetConflict:
             new_filename="权力的游戏前传 (2022) - S01E01.mkv",
         )
         assert message
-        assert "S01E01" in message
+        assert "不覆盖" in message or "已存在" in message
+
+    @pytest.mark.asyncio
+    async def test_tv_same_episode_allowed_under_never_different_name(
+        self, monkeypatch
+    ) -> None:
+        """对齐 MoviePilot never：同集但文件名不同时允许并存。"""
+
+        class FakePan115:
+            async def get_file_list(self, **kwargs):
+                return {
+                    "data": [
+                        {
+                            "fid": "old",
+                            "name": "雀骨 (2024) - S01E01.mkv",
+                            "size": 10_000,
+                        }
+                    ]
+                }
+
+            def _is_folder_item(self, row):
+                return False
+
+        monkeypatch.setattr(
+            archive_service, "_get_archive_overwrite_mode", lambda: "never"
+        )
+        message = await archive_service._check_tv_episode_archive_conflict(
+            FakePan115(),
+            {"media_type": "tv", "season": 1, "episode": 1},
+            "雀骨.S01E01.1080p.mp4",
+            "season-cid",
+            None,
+            new_filename="雀骨 (2024) - S01E01.mp4",
+        )
+        assert message is None
 
     def test_apply_tv_hints_from_intent(self) -> None:
         parsed = {
@@ -650,7 +691,7 @@ class TestArchiveTargetConflict:
         assert fixed.get("season") is None
 
     @pytest.mark.asyncio
-    async def test_tv_conflict_merges_season_episode_cache(self) -> None:
+    async def test_tv_conflict_merges_season_episode_cache(self, monkeypatch) -> None:
         class FakePan115:
             async def get_file_list(self, **kwargs):
                 return {"data": []}
@@ -658,6 +699,9 @@ class TestArchiveTargetConflict:
             def _is_folder_item(self, row):
                 return False
 
+        monkeypatch.setattr(
+            archive_service, "_get_archive_overwrite_mode", lambda: "never"
+        )
         cache: dict[str, set[tuple[int, int]]] = {"season-cid": {(1, 1)}}
         message = await archive_service._check_tv_episode_archive_conflict(
             FakePan115(),
@@ -667,12 +711,14 @@ class TestArchiveTargetConflict:
             cache,
             new_filename="Show (2024) - S01E01.mp4",
         )
-        assert message
-        assert "S01E01" in message
+        # 对齐 MP：同集异名不再因缓存跳过；仅合并 episodes 缓存
+        assert message is None
         assert (1, 1) in cache["season-cid"]
 
     @pytest.mark.asyncio
-    async def test_finalize_deletes_same_episode_different_ext(self, monkeypatch) -> None:
+    async def test_finalize_latest_deletes_same_episode_different_ext(
+        self, monkeypatch
+    ) -> None:
         deleted: list[str] = []
 
         class FakePan115:
@@ -698,8 +744,69 @@ class TestArchiveTargetConflict:
             async def delete_file(self, fids):
                 deleted.extend(fids if isinstance(fids, list) else [fids])
 
-            async def rename_file(self, *args, **kwargs):
-                return True
+        async def fake_mark_success(task_id):
+            return None
+
+        async def fake_rename(*args, **kwargs):
+            return True
+
+        async def fake_log(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(archive_service, "_mark_task_success", fake_mark_success)
+        monkeypatch.setattr(archive_service, "_rename_archived_file", fake_rename)
+        monkeypatch.setattr(
+            "app.services.archive_service.operation_log_service.log_background_event",
+            fake_log,
+        )
+
+        result = await archive_service._finalize_identified(
+            FakePan115(),
+            plan={
+                "fid": "new",
+                "filename": "雀骨.S01E01.1080p.mp4",
+                "parsed": {"media_type": "tv", "season": 1, "episode": 1},
+                "matched": {"tmdb_id": 1, "title": "雀骨", "year": "2024"},
+                "naming": None,
+                "display_title": "雀骨",
+                "target_cid": "season-cid",
+                "target_desc": "剧集/华语剧集/雀骨 (2024)/Season 01",
+                "new_filename": "雀骨 (2024) - S01E01.mp4",
+                "incoming_size": 5_000,
+                "overwrite_mode": "latest",
+                "task_id": 1,
+                "item": {"fid": "new", "name": "雀骨.S01E01.1080p.mp4", "size": 5_000},
+            },
+        )
+        assert result["status"] == ArchiveStatus.SUCCESS.value
+        assert deleted == ["old"]
+
+    @pytest.mark.asyncio
+    async def test_finalize_never_skips_same_basename(self, monkeypatch) -> None:
+        deleted: list[str] = []
+
+        class FakePan115:
+            async def get_file_list(self, **kwargs):
+                return {
+                    "data": [
+                        {
+                            "fid": "old",
+                            "name": "雀骨 (2024) - S01E01.mp4",
+                            "size": 10_000,
+                        },
+                        {
+                            "fid": "new",
+                            "name": "雀骨 (2024) - S01E01.mp4",
+                            "size": 5_000,
+                        },
+                    ]
+                }
+
+            def _is_folder_item(self, row):
+                return False
+
+            async def delete_file(self, fids):
+                deleted.extend(fids if isinstance(fids, list) else [fids])
 
         async def fake_mark_skipped(task_id, message):
             return None
@@ -718,12 +825,79 @@ class TestArchiveTargetConflict:
                 "target_cid": "season-cid",
                 "target_desc": "剧集/华语剧集/雀骨 (2024)/Season 01",
                 "new_filename": "雀骨 (2024) - S01E01.mp4",
+                "incoming_size": 5_000,
+                "overwrite_mode": "never",
                 "task_id": 1,
-                "item": {"fid": "new", "name": "雀骨.S01E01.1080p.mp4"},
+                "item": {"fid": "new", "name": "雀骨.S01E01.1080p.mp4", "size": 5_000},
             },
         )
         assert result["status"] == ArchiveStatus.SKIPPED.value
         assert deleted == ["new"]
+
+    @pytest.mark.asyncio
+    async def test_size_mode_keeps_larger_existing(self, monkeypatch) -> None:
+        class FakePan115:
+            async def get_file_list(self, **kwargs):
+                return {
+                    "data": [
+                        {
+                            "fid": "old",
+                            "name": "Movie (1999).mkv",
+                            "size": 20_000,
+                        }
+                    ]
+                }
+
+            def _is_folder_item(self, row):
+                return False
+
+        monkeypatch.setattr(
+            archive_service, "_get_archive_overwrite_mode", lambda: "size"
+        )
+        message = await archive_service._check_movie_archive_conflict(
+            FakePan115(),
+            "Movie.1999.mkv",
+            "movie-cid",
+            new_filename="Movie (1999).mkv",
+            incoming_size=10_000,
+        )
+        assert message
+        assert "体积" in message
+
+    @pytest.mark.asyncio
+    async def test_size_mode_overwrites_when_new_larger(self, monkeypatch) -> None:
+        deleted: list[str] = []
+
+        class FakePan115:
+            async def get_file_list(self, **kwargs):
+                return {
+                    "data": [
+                        {
+                            "fid": "old",
+                            "name": "Movie (1999).mkv",
+                            "size": 10_000,
+                        }
+                    ]
+                }
+
+            def _is_folder_item(self, row):
+                return False
+
+            async def delete_file(self, fids):
+                deleted.extend(fids if isinstance(fids, list) else [fids])
+
+        monkeypatch.setattr(
+            archive_service, "_get_archive_overwrite_mode", lambda: "size"
+        )
+        message = await archive_service._check_movie_archive_conflict(
+            FakePan115(),
+            "Movie.1999.mkv",
+            "movie-cid",
+            new_filename="Movie (1999).mkv",
+            incoming_size=20_000,
+        )
+        assert message is None
+        assert deleted == ["old"]
 
     @pytest.mark.asyncio
     async def test_cleanup_keeps_higher_quality_episode(self) -> None:
