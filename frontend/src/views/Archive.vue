@@ -8,9 +8,12 @@
       <div class="header-actions">
         <el-button :loading="refreshing" @click="refreshAll">刷新</el-button>
         <el-button v-if="scanActive" type="warning" :loading="cancelLoading" @click="cancelScan">
-          取消扫描
+          取消任务
         </el-button>
-        <el-button type="primary" :loading="scanLoading" @click="runScan">立即扫描</el-button>
+        <el-button :loading="dedupeLoading" :disabled="scanActive" @click="runLibraryDedupe">
+          全库去重
+        </el-button>
+        <el-button type="primary" :loading="scanLoading" :disabled="scanActive" @click="runScan">立即扫描</el-button>
       </div>
     </div>
 
@@ -384,6 +387,7 @@ import { formatBeijingTableCell } from '@/utils/timezone'
 const refreshing = ref(false)
 const saving = ref(false)
 const scanLoading = ref(false)
+const dedupeLoading = ref(false)
 const cancelLoading = ref(false)
 const tasksLoading = ref(false)
 const total = ref(0)
@@ -527,7 +531,10 @@ const statusTagType = (v) => ({ success: 'success', failed: 'danger', processing
 const scanSummaryText = computed(() => {
   const summary = runtime.last_scan_summary
   if (!summary || typeof summary !== 'object') {
-    return scanActive.value ? '扫描执行中' : '暂无记录'
+    return scanActive.value ? '任务执行中' : '暂无记录'
+  }
+  if (summary.mode === 'library_dedupe' || runtime.last_scan_trigger === 'library_dedupe') {
+    return `全库去重：检查 ${Number(summary.folders || summary.total || 0)} 个目录，删除 ${Number(summary.deleted || 0)} 个重复文件`
   }
   return `总计 ${Number(summary.total || 0)} 个，成功 ${Number(summary.success || 0)} 个，跳过 ${Number(summary.skipped || 0)} 个，失败 ${Number(summary.failed || 0)} 个`
 })
@@ -659,6 +666,41 @@ const runScan = async () => {
   }
 }
 
+const runLibraryDedupe = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将扫描正式库「电影/剧集」目录，删除同集多份与网盘同名(1)(2)重复（每组保留画质更高的一份）。过程可能较慢，且会占用 115 接口，确认继续？',
+      '全库去重',
+      {
+        type: 'warning',
+        confirmButtonText: '开始去重',
+        cancelButtonText: '取消'
+      }
+    )
+  } catch {
+    return
+  }
+
+  dedupeLoading.value = true
+  try {
+    const { data } = await archiveApi.runLibraryDedupe()
+    syncRuntime(data.runtime)
+    if (data.started === false) {
+      ElMessage.info(data.message || '当前有任务正在执行')
+    } else {
+      ElMessage.success(data.message || '全库去重已启动')
+    }
+    if (scanActive.value) {
+      startScanPolling()
+    }
+    await loadTasks()
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '全库去重启动失败')
+  } finally {
+    dedupeLoading.value = false
+  }
+}
+
 const cancelScan = async () => {
   cancelLoading.value = true
   try {
@@ -666,9 +708,9 @@ const cancelScan = async () => {
     syncRuntime(data.runtime)
     stopScanPolling()
     if (data.cancelled) {
-      ElMessage.warning(data.message || '归档扫描已取消')
+      ElMessage.warning(data.message || '任务已取消')
     } else {
-      ElMessage.info(data.message || '当前没有正在执行的归档扫描')
+      ElMessage.info(data.message || '当前没有正在执行的任务')
     }
     await Promise.all([loadConfig(), loadTasks()])
   } catch (error) {
@@ -694,6 +736,11 @@ const startScanPolling = () => {
         stopScanPolling()
         if (runtime.last_scan_error) {
           ElMessage.warning(runtime.last_scan_error)
+        } else if (runtime.last_scan_trigger === 'library_dedupe') {
+          const summary = runtime.last_scan_summary || {}
+          ElMessage.success(
+            `全库去重已完成：检查 ${Number(summary.folders || 0)} 个目录，删除 ${Number(summary.deleted || 0)} 个重复文件`
+          )
         } else {
           ElMessage.success('归档扫描已完成')
         }

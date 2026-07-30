@@ -203,6 +203,17 @@ async def run_archive_scan():
         _raise_archive_115_error(exc)
 
 
+@router.post("/library-dedupe")
+async def run_archive_library_dedupe():
+    """正式库全库去重：清理电影/剧集目录中的同集与同名(1)(2)重复。"""
+    try:
+        return await archive_service.start_library_dedupe()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        _raise_archive_115_error(exc)
+
+
 @router.post("/scan/cancel")
 async def cancel_archive_scan():
     try:

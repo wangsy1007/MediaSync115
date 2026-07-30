@@ -381,6 +381,7 @@ export const archiveApi = {
   listFolders: (cid = '0') => api.get('/archive/folders', { params: { cid } }),
   listTasks: (params) => api.get('/archive/tasks', { params }),
   runScan: () => api.post('/archive/scan', null, { timeout: 300000 }),
+  runLibraryDedupe: () => api.post('/archive/library-dedupe', null, { timeout: 300000 }),
   cancelScan: () => api.post('/archive/scan/cancel'),
   cancelTask: (taskId) => api.post(`/archive/tasks/${taskId}/cancel`),
   retryTask: (taskId) => api.post(`/archive/tasks/${taskId}/retry`, null, { timeout: 300000 }),

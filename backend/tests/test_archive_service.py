@@ -838,3 +838,21 @@ class TestArchiveTargetConflict:
         # 分类/剧名/季 都会纳入清理候选
         assert cids == ["cn", "show", "s1"]
 
+    @pytest.mark.asyncio
+    async def test_start_library_dedupe_requires_output_cid(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            archive_service,
+            "get_config",
+            lambda: {"archive_output_cid": ""},
+        )
+        monkeypatch.setattr(archive_service, "is_scan_running", lambda: False)
+        with pytest.raises(ValueError, match="输出目录"):
+            await archive_service.start_library_dedupe()
+
+    @pytest.mark.asyncio
+    async def test_start_library_dedupe_rejects_when_busy(self, monkeypatch) -> None:
+        monkeypatch.setattr(archive_service, "is_scan_running", lambda: True)
+        result = await archive_service.start_library_dedupe()
+        assert result["started"] is False
+        assert result["running"] is True
+

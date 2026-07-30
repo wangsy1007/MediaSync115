@@ -546,32 +546,12 @@ class ArchiveService:
                 video_items = [it for it in source_items if it["is_video"]]
                 subtitle_items = [it for it in source_items if it["is_subtitle"]]
 
-                # 无论监听目录是否有新文件，都主动清理正式库重复（剧集同集 + 电影同名(1)(2)）
-                dup_cleanup = await self._cleanup_all_tv_archive_duplicates(
-                    pan115, output_cid
-                )
-                if int(dup_cleanup.get("deleted") or 0) > 0:
-                    await operation_log_service.log_background_event(
-                        source_type=log_source_type,
-                        module="archive",
-                        action="archive.scan.dedupe_tv",
-                        status="info",
-                        message=(
-                            "正式库重复清理："
-                            f"检查 {dup_cleanup.get('folders', 0)} 个目录，"
-                            f"删除 {dup_cleanup.get('deleted', 0)} 个重复文件"
-                        ),
-                        extra={"trigger": trigger, **dup_cleanup},
-                    )
-
                 summary = {
                     "success": 0,
                     "failed": 0,
                     "skipped": 0,
                     "total": len(video_items),
                     "items": [],
-                    "tv_dup_folders": int(dup_cleanup.get("folders") or 0),
-                    "tv_dup_deleted": int(dup_cleanup.get("deleted") or 0),
                 }
 
                 if not video_items:
@@ -580,14 +560,7 @@ class ArchiveService:
                         module="archive",
                         action="archive.scan.finish",
                         status="info",
-                        message=(
-                            "监听目录中未发现视频文件，跳过归档"
-                            + (
-                                f"（已清理同集重复 {summary['tv_dup_deleted']} 个）"
-                                if summary["tv_dup_deleted"]
-                                else ""
-                            )
-                        ),
+                        message="监听目录中未发现视频文件，跳过归档",
                         extra={"trigger": trigger, **summary},
                     )
                     await self._trigger_strm_after_archive(summary, trigger)
@@ -1451,7 +1424,7 @@ class ArchiveService:
         pan115: Pan115Service,
         output_cid: str,
     ) -> dict[str, int]:
-        """归档扫描时主动清理正式库剧集树中的同集多份。"""
+        """全库去重：遍历正式库电影/剧集树，清理同集与同名(1)(2)重复。"""
         cleaned_cids: set[str] = set()
         deleted_total = 0
         folder_count = 0
@@ -1466,14 +1439,117 @@ class ArchiveService:
                     cleaned_cids=cleaned_cids,
                 )
             except Exception as exc:
-                logger.warning("清理剧集目录重复失败 cid=%s: %s", cid, exc)
+                logger.warning("清理正式库目录重复失败 cid=%s: %s", cid, exc)
         if deleted_total:
             logger.info(
-                "正式库重复清理完成：folders=%s deleted=%s",
+                "正式库全库去重完成：folders=%s deleted=%s",
                 folder_count,
                 deleted_total,
             )
         return {"folders": folder_count, "deleted": deleted_total}
+
+    async def start_library_dedupe(self) -> dict[str, Any]:
+        """后台启动正式库全库去重（与归档扫描互斥）。"""
+        self._cleanup_finished_scan_task()
+        if self.is_scan_running() or self._scan_lock.locked():
+            return {
+                "started": False,
+                "running": True,
+                "queued": False,
+                "message": "归档扫描或全库去重正在执行中，请稍后再试",
+                "runtime": self.get_runtime_status(),
+            }
+
+        config = self.get_config()
+        output_cid = str(config.get("archive_output_cid") or "").strip()
+        if not output_cid:
+            raise ValueError("请先配置归档输出目录（115 文件夹 ID）")
+
+        self._last_scan_started_at = beijing_now()
+        self._last_scan_finished_at = None
+        self._last_scan_trigger = "library_dedupe"
+        self._last_scan_summary = None
+        self._last_scan_error = ""
+        self._cancel_requested = False
+        self._pending_rescan = False
+
+        self._background_scan_task = asyncio.create_task(
+            self.run_library_dedupe(),
+            name="archive-library-dedupe",
+        )
+        self._background_scan_task.add_done_callback(self._handle_background_scan_done)
+
+        return {
+            "started": True,
+            "running": True,
+            "message": "全库去重已启动，正在后台执行（仅扫描正式库电影/剧集目录）",
+            "runtime": self.get_runtime_status(),
+        }
+
+    async def run_library_dedupe(self) -> dict[str, Any]:
+        """执行正式库全库去重。"""
+        async with self._scan_lock:
+            config = self.get_config()
+            output_cid = str(config.get("archive_output_cid") or "").strip()
+            if not output_cid:
+                raise ValueError("请先配置归档输出目录（115 文件夹 ID）")
+
+            pan115 = self._get_pan115()
+            await operation_log_service.log_background_event(
+                source_type="background_task",
+                module="archive",
+                action="archive.library_dedupe.start",
+                status="info",
+                message="正式库全库去重开始",
+                extra={"output_cid": output_cid},
+            )
+            try:
+                result = await self._cleanup_all_tv_archive_duplicates(
+                    pan115, output_cid
+                )
+                summary = {
+                    "mode": "library_dedupe",
+                    "folders": int(result.get("folders") or 0),
+                    "deleted": int(result.get("deleted") or 0),
+                    "total": int(result.get("folders") or 0),
+                    "success": int(result.get("deleted") or 0),
+                    "failed": 0,
+                    "skipped": 0,
+                }
+                await operation_log_service.log_background_event(
+                    source_type="background_task",
+                    module="archive",
+                    action="archive.library_dedupe.finish",
+                    status="info",
+                    message=(
+                        "正式库全库去重完成："
+                        f"检查 {summary['folders']} 个目录，"
+                        f"删除 {summary['deleted']} 个重复文件"
+                    ),
+                    extra=summary,
+                )
+                if summary["deleted"] > 0:
+                    await self._trigger_strm_after_archive(summary, "library_dedupe")
+                return summary
+            except asyncio.CancelledError:
+                await operation_log_service.log_background_event(
+                    source_type="background_task",
+                    module="archive",
+                    action="archive.library_dedupe.cancel",
+                    status="warning",
+                    message="正式库全库去重已取消",
+                )
+                raise
+            except Exception as exc:
+                error_message = self._format_scan_error(exc)
+                await operation_log_service.log_background_event(
+                    source_type="background_task",
+                    module="archive",
+                    action="archive.library_dedupe.failed",
+                    status="failed",
+                    message=f"正式库全库去重失败：{error_message}",
+                )
+                raise
 
     # ================================================================
     #  阶段二：处理已识别的视频文件（准备目录 + 移动 + 重命名 + 字幕）
