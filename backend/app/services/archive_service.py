@@ -546,12 +546,32 @@ class ArchiveService:
                 video_items = [it for it in source_items if it["is_video"]]
                 subtitle_items = [it for it in source_items if it["is_subtitle"]]
 
+                # 无论监听目录是否有新文件，都主动清理正式库剧集同集多份
+                dup_cleanup = await self._cleanup_all_tv_archive_duplicates(
+                    pan115, output_cid
+                )
+                if int(dup_cleanup.get("deleted") or 0) > 0:
+                    await operation_log_service.log_background_event(
+                        source_type=log_source_type,
+                        module="archive",
+                        action="archive.scan.dedupe_tv",
+                        status="info",
+                        message=(
+                            "正式库剧集同集清理："
+                            f"检查 {dup_cleanup.get('folders', 0)} 个目录，"
+                            f"删除 {dup_cleanup.get('deleted', 0)} 个重复文件"
+                        ),
+                        extra={"trigger": trigger, **dup_cleanup},
+                    )
+
                 summary = {
                     "success": 0,
                     "failed": 0,
                     "skipped": 0,
                     "total": len(video_items),
                     "items": [],
+                    "tv_dup_folders": int(dup_cleanup.get("folders") or 0),
+                    "tv_dup_deleted": int(dup_cleanup.get("deleted") or 0),
                 }
 
                 if not video_items:
@@ -560,7 +580,14 @@ class ArchiveService:
                         module="archive",
                         action="archive.scan.finish",
                         status="info",
-                        message="监听目录中未发现视频文件，跳过归档",
+                        message=(
+                            "监听目录中未发现视频文件，跳过归档"
+                            + (
+                                f"（已清理同集重复 {summary['tv_dup_deleted']} 个）"
+                                if summary["tv_dup_deleted"]
+                                else ""
+                            )
+                        ),
                         extra={"trigger": trigger, **summary},
                     )
                     await self._trigger_strm_after_archive(summary, trigger)
@@ -1317,6 +1344,123 @@ class ArchiveService:
             len(delete_fids),
         )
         return len(delete_fids)
+
+    async def _collect_tv_season_folder_cids(
+        self,
+        pan115: Pan115Service,
+        output_cid: str,
+    ) -> list[str]:
+        """收集正式库剧集树下可能含单集文件的目录 cid。
+
+        层级兼容：
+        - 剧集/分类/剧名/季
+        - 剧集/自定义分类名/剧名/季
+        - 剧集/剧名/季
+        并对剧名目录本身也执行清理（兼容平铺单集）。
+        """
+        root_cid = str(output_cid or "").strip()
+        if not root_cid:
+            return []
+
+        subdirs = self._get_archive_subdirs()
+        tv_root_name = str(subdirs.get("tv_root") or "剧集").strip()
+
+        season_cids: list[str] = []
+        seen: set[str] = set()
+
+        def _add(cid: str) -> None:
+            value = str(cid or "").strip()
+            if value and value not in seen:
+                seen.add(value)
+                season_cids.append(value)
+
+        try:
+            root_rows = await pan115._list_folder_items(root_cid)
+        except Exception as exc:
+            logger.warning("读取归档输出根目录失败，跳过剧集重复清理：%s", exc)
+            return []
+
+        tv_root_ids: list[str] = []
+        for row in root_rows:
+            if not pan115._is_folder_item(row):
+                continue
+            folder_id = str(pan115._extract_folder_id(row) or "").strip()
+            folder_name = pan115._share_item_name(row)
+            if folder_id and folder_name.casefold() == tv_root_name.casefold():
+                tv_root_ids.append(folder_id)
+
+        # 输出目录本身已是「剧集」根时的兼容
+        if not tv_root_ids:
+            tv_root_ids = [root_cid]
+
+        for tv_root_id in tv_root_ids:
+            try:
+                level1 = await pan115._list_folder_items(tv_root_id)
+            except Exception as exc:
+                logger.warning("读取剧集根目录失败 cid=%s: %s", tv_root_id, exc)
+                continue
+            for row1 in level1:
+                if not pan115._is_folder_item(row1):
+                    continue
+                cid1 = str(pan115._extract_folder_id(row1) or "").strip()
+                if not cid1:
+                    continue
+                # 分类或剧名：都可能直接含单集
+                _add(cid1)
+                try:
+                    level2 = await pan115._list_folder_items(cid1)
+                except Exception as exc:
+                    logger.warning("读取剧集子目录失败 cid=%s: %s", cid1, exc)
+                    continue
+                for row2 in level2:
+                    if not pan115._is_folder_item(row2):
+                        continue
+                    cid2 = str(pan115._extract_folder_id(row2) or "").strip()
+                    if not cid2:
+                        continue
+                    _add(cid2)
+                    try:
+                        level3 = await pan115._list_folder_items(cid2)
+                    except Exception as exc:
+                        logger.warning("读取剧名/季目录失败 cid=%s: %s", cid2, exc)
+                        continue
+                    for row3 in level3:
+                        if not pan115._is_folder_item(row3):
+                            continue
+                        cid3 = str(pan115._extract_folder_id(row3) or "").strip()
+                        if cid3:
+                            _add(cid3)
+
+        return season_cids
+
+    async def _cleanup_all_tv_archive_duplicates(
+        self,
+        pan115: Pan115Service,
+        output_cid: str,
+    ) -> dict[str, int]:
+        """归档扫描时主动清理正式库剧集树中的同集多份。"""
+        cleaned_cids: set[str] = set()
+        deleted_total = 0
+        folder_count = 0
+        season_cids = await self._collect_tv_season_folder_cids(pan115, output_cid)
+        for cid in season_cids:
+            self._raise_if_scan_cancel_requested()
+            folder_count += 1
+            try:
+                deleted_total += await self._cleanup_duplicate_tv_episodes_in_folder(
+                    pan115,
+                    cid,
+                    cleaned_cids=cleaned_cids,
+                )
+            except Exception as exc:
+                logger.warning("清理剧集目录重复失败 cid=%s: %s", cid, exc)
+        if deleted_total:
+            logger.info(
+                "正式库剧集同集清理完成：folders=%s deleted=%s",
+                folder_count,
+                deleted_total,
+            )
+        return {"folders": folder_count, "deleted": deleted_total}
 
     # ================================================================
     #  阶段二：处理已识别的视频文件（准备目录 + 移动 + 重命名 + 字幕）

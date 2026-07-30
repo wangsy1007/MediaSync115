@@ -759,3 +759,54 @@ class TestArchiveTargetConflict:
         assert count == 1
         assert deleted == ["low"]
 
+    @pytest.mark.asyncio
+    async def test_collect_tv_season_folder_cids(self) -> None:
+        class FakePan115:
+            def _is_folder_item(self, row):
+                return bool(row.get("folder"))
+
+            def _extract_folder_id(self, row):
+                return str(row.get("cid") or "")
+
+            def _share_item_name(self, row):
+                return str(row.get("name") or "")
+
+            async def _list_folder_items(self, cid, **kwargs):
+                tree = {
+                    "out": [
+                        {"cid": "tv", "name": "剧集", "folder": True},
+                    ],
+                    "tv": [
+                        {"cid": "cn", "name": "国产剧", "folder": True},
+                    ],
+                    "cn": [
+                        {"cid": "show", "name": "雀骨 (2026)", "folder": True},
+                    ],
+                    "show": [
+                        {"cid": "s1", "name": "第1季", "folder": True},
+                    ],
+                    "s1": [],
+                }
+                return tree.get(cid, [])
+
+        monkey_subdirs = {
+            "tv_root": "剧集",
+            "movie_root": "电影",
+            "tv_categories": [
+                {"id": "cn", "name": "国产剧", "enabled": True, "is_fallback": True},
+            ],
+            "movie_categories": [
+                {"id": "default", "name": "外语电影", "enabled": True, "is_fallback": True},
+            ],
+        }
+        original = archive_service._get_archive_subdirs
+        archive_service._get_archive_subdirs = lambda: monkey_subdirs
+        try:
+            cids = await archive_service._collect_tv_season_folder_cids(
+                FakePan115(), "out"
+            )
+        finally:
+            archive_service._get_archive_subdirs = original
+        # 分类/剧名/季 都会纳入清理候选
+        assert cids == ["cn", "show", "s1"]
+
