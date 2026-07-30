@@ -602,3 +602,50 @@ class TestArchiveTargetConflict:
         assert message
         assert "S01E01" in message
 
+    def test_apply_tv_hints_from_intent(self) -> None:
+        parsed = {
+            "media_type": "movie",
+            "query_title": "权力的游戏前传",
+            "year": "1903",
+            "season": None,
+            "episode": None,
+        }
+        fixed = archive_service._apply_tv_media_type_hints(
+            parsed,
+            intent={"media_type": "tv", "tmdb_id": 94997, "display_title": "权力的游戏前传"},
+        )
+        assert fixed["media_type"] == "tv"
+        assert fixed["season"] == 1
+
+    def test_apply_tv_hints_from_relative_path(self) -> None:
+        parsed = {
+            "media_type": "movie",
+            "query_title": "灿如繁星",
+            "year": "2003",
+            "season": None,
+            "episode": None,
+        }
+        fixed = archive_service._apply_tv_media_type_hints(
+            parsed,
+            relative_path="灿如繁星/第1季/E01.mkv",
+            folder_name="第1季",
+        )
+        assert fixed["media_type"] == "tv"
+        assert fixed["season"] == 1
+
+    def test_apply_tv_hints_keeps_real_movie(self) -> None:
+        parsed = {
+            "media_type": "movie",
+            "query_title": "黑客帝国",
+            "year": "1999",
+            "season": None,
+            "episode": None,
+        }
+        fixed = archive_service._apply_tv_media_type_hints(
+            parsed,
+            intent={"media_type": "movie", "tmdb_id": 603},
+            relative_path="黑客帝国.1999.mkv",
+        )
+        assert fixed["media_type"] == "movie"
+        assert fixed.get("season") is None
+

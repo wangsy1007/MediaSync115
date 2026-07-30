@@ -139,6 +139,17 @@ EPISODE_PATTERNS = (
     re.compile(r"(?i)\bEP(?P<episode>\d{1,3})\b"),
     re.compile(r"(?i)(?<![A-Z0-9])E(?P<episode>\d{2,3})(?![A-Z0-9])"),
 )
+# 相对路径/文件夹名中的剧集痕迹（无文件名季集标记时，仍应归档到剧集库）
+_PATH_TV_HINT_RE = re.compile(
+    r"(?i)(?:"
+    r"第\d{1,2}季|"
+    r"Season[\s._-]?\d{1,2}|"
+    r"\bS\d{1,2}[.\s_-]*E\d{1,3}\b|"
+    r"\b\d{1,2}x\d{1,3}\b|"
+    r"第\d{1,3}[集话話]"
+    r")"
+)
+_PATH_SEASON_RE = re.compile(r"(?i)(?:第(?P<season>\d{1,2})季|Season[\s._-]?(?P<season_en>\d{1,2}))")
 MOVIE_REGION_MAP = {
     "CN": "华语电影",
     "HK": "华语电影",
@@ -1254,8 +1265,20 @@ class ArchiveService:
             folder_name=str(transfer_context.get("folder_name") or ""),
             tmdb_id=int(matched.get("tmdb_id") or 0) or None,
         ):
-            transfer_context["intent"] = {}
-            intent = {}
+            # 文件名已判成 movie 时，tmdb_id 可能是错的电影 ID；仍保留按目录命中的剧集意图
+            if str(intent.get("media_type") or "").lower() != "tv":
+                transfer_context["intent"] = {}
+                intent = {}
+
+        original_type = str(parsed.get("media_type") or "movie")
+        parsed = self._apply_tv_media_type_hints(
+            parsed,
+            binding=binding,
+            intent=intent,
+            relative_path=str(item.get("relative_path") or ""),
+            folder_name=str(transfer_context.get("folder_name") or ""),
+        )
+
         if intent.get("tmdb_id") and not binding.get("tmdb_id"):
             intent_matched = await self._identify_by_tmdb_id(
                 int(intent["tmdb_id"]),
@@ -1264,6 +1287,34 @@ class ArchiveService:
             )
             if intent_matched:
                 matched = intent_matched
+        elif (
+            original_type != "tv"
+            and str(parsed.get("media_type") or "") == "tv"
+            and int(matched.get("tmdb_id") or 0) > 0
+        ):
+            # 文件名误判为电影后，按剧集重新拉详情，避免 region 落成外语电影
+            rematch_id = int(
+                (intent.get("tmdb_id") if intent else 0)
+                or (binding.get("tmdb_id") if binding else 0)
+                or matched.get("tmdb_id")
+                or 0
+            )
+            if rematch_id > 0:
+                rematched = await self._identify_by_tmdb_id(
+                    rematch_id, "tv", cache=id_cache
+                )
+                if rematched:
+                    matched = rematched
+                else:
+                    rematched = await self.identify_media(
+                        parsed, id_cache=id_cache
+                    )
+                    if rematched:
+                        matched = rematched
+            else:
+                rematched = await self.identify_media(parsed, id_cache=id_cache)
+                if rematched:
+                    matched = rematched
 
         db_task = await self._upsert_task(
             task_id=None, source_fid=fid, source_filename=filename
@@ -1686,8 +1737,19 @@ class ArchiveService:
                 folder_name=str(transfer_context.get("folder_name") or ""),
                 tmdb_id=int(matched.get("tmdb_id") or 0) or None,
             ):
-                transfer_context["intent"] = {}
-                intent = {}
+                if str(intent.get("media_type") or "").lower() != "tv":
+                    transfer_context["intent"] = {}
+                    intent = {}
+
+            original_type = str(parsed.get("media_type") or "movie")
+            parsed = self._apply_tv_media_type_hints(
+                parsed,
+                binding=binding or {},
+                intent=intent,
+                relative_path=str(item.get("relative_path") or ""),
+                folder_name=str(transfer_context.get("folder_name") or ""),
+            )
+
             if intent.get("tmdb_id") and not (binding and binding.get("tmdb_id")):
                 intent_matched = await self._identify_by_tmdb_id(
                     int(intent["tmdb_id"]),
@@ -1695,6 +1757,28 @@ class ArchiveService:
                 )
                 if intent_matched:
                     matched = intent_matched
+            elif (
+                original_type != "tv"
+                and str(parsed.get("media_type") or "") == "tv"
+            ):
+                rematch_id = int(
+                    (intent.get("tmdb_id") if intent else 0)
+                    or ((binding or {}).get("tmdb_id") or 0)
+                    or ((matched or {}).get("tmdb_id") or 0)
+                    or 0
+                )
+                if rematch_id > 0:
+                    rematched = await self._identify_by_tmdb_id(rematch_id, "tv")
+                    if rematched:
+                        matched = rematched
+                    else:
+                        rematched = await self.identify_media(parsed)
+                        if rematched:
+                            matched = rematched
+                else:
+                    rematched = await self.identify_media(parsed)
+                    if rematched:
+                        matched = rematched
             if not matched:
                 raise ValueError("TMDB 未匹配到可用结果")
 
@@ -1952,10 +2036,26 @@ class ArchiveService:
             filename=filename,
             folder_name=folder_name,
         )
+        # 文件名误判为 movie 时，按类型过滤会漏掉剧集意图；再无类型兜底一次
+        if not intent and str(media_type or "").strip().lower() == "movie":
+            intent = await transfer_intent_service.find_best_match(
+                parent_cid=parent_cid,
+                file_fid=fid,
+                tmdb_id=tmdb_id,
+                media_type="",
+                filename=filename,
+                folder_name=folder_name,
+            )
 
         lookup_tmdb_id = int(intent["tmdb_id"]) if intent and intent.get("tmdb_id") else None
         if not lookup_tmdb_id and tmdb_id and int(tmdb_id) > 0:
             lookup_tmdb_id = int(tmdb_id)
+
+        effective_media_type = str(
+            (intent or {}).get("media_type") or media_type or "movie"
+        ).strip().lower()
+        if effective_media_type != "tv":
+            effective_media_type = "movie"
 
         if lookup_tmdb_id:
             async with async_session_maker() as db:
@@ -1964,13 +2064,29 @@ class ArchiveService:
                     .where(
                         Subscription.tmdb_id == lookup_tmdb_id,
                         Subscription.media_type == (
-                            MediaType.TV if str(media_type) == "tv" else MediaType.MOVIE
+                            MediaType.TV
+                            if effective_media_type == "tv"
+                            else MediaType.MOVIE
                         ),
                     )
                     .order_by(Subscription.updated_at.desc())
                     .limit(1)
                 )
                 subscription_title_by_tmdb = str(sub_result.scalar_one_or_none() or "").strip()
+                if not subscription_title_by_tmdb and effective_media_type == "movie":
+                    # 电影检索无结果时，再试剧集订阅标题（误判兜底）
+                    sub_result = await db.execute(
+                        select(Subscription.title)
+                        .where(
+                            Subscription.tmdb_id == lookup_tmdb_id,
+                            Subscription.media_type == MediaType.TV,
+                        )
+                        .order_by(Subscription.updated_at.desc())
+                        .limit(1)
+                    )
+                    subscription_title_by_tmdb = str(
+                        sub_result.scalar_one_or_none() or ""
+                    ).strip()
 
         if not resource_name and folder_name:
             resource_name = folder_name
@@ -2499,6 +2615,7 @@ class ArchiveService:
         )
         result = {
             "tmdb_id": int(tmdb_id),
+            "media_type": normalized_type,
             "title": title,
             "year": year_text,
             "genre_name": genre_name,
@@ -2506,6 +2623,57 @@ class ArchiveService:
         }
         if cache is not None:
             cache[cache_key] = dict(result)
+        return result
+
+    @classmethod
+    def _apply_tv_media_type_hints(
+        cls,
+        parsed: dict[str, Any],
+        *,
+        binding: dict[str, Any] | None = None,
+        intent: dict[str, Any] | None = None,
+        relative_path: str = "",
+        folder_name: str = "",
+    ) -> dict[str, Any]:
+        """综合 binding / 转存意图 / 路径痕迹，纠正误判为 movie 的剧集。"""
+        result = dict(parsed or {})
+        binding = binding or {}
+        intent = intent or {}
+        path_hint = f"{relative_path}\n{folder_name}"
+
+        forced_tv = False
+        if str(binding.get("media_type") or "").strip().lower() == "tv":
+            forced_tv = True
+        elif str(intent.get("media_type") or "").strip().lower() == "tv":
+            forced_tv = True
+        elif _PATH_TV_HINT_RE.search(path_hint):
+            forced_tv = True
+
+        if forced_tv:
+            result["media_type"] = "tv"
+
+        if str(result.get("media_type") or "") != "tv":
+            return result
+
+        if binding.get("season") is not None and result.get("season") is None:
+            try:
+                result["season"] = int(binding["season"])
+            except Exception:
+                pass
+        if binding.get("episode") is not None and result.get("episode") is None:
+            try:
+                result["episode"] = int(binding["episode"])
+            except Exception:
+                pass
+
+        if result.get("season") is None:
+            season_match = _PATH_SEASON_RE.search(path_hint)
+            if season_match:
+                raw = season_match.group("season") or season_match.group("season_en")
+                if raw and str(raw).isdigit():
+                    result["season"] = int(raw)
+        if result.get("season") is None:
+            result["season"] = 1
         return result
 
     @staticmethod
