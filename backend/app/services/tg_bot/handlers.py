@@ -1249,7 +1249,7 @@ async def _delete_subscription(
     try:
         from app.core.database import async_session_maker
         from sqlalchemy import select, delete
-        from app.models.models import Subscription, DownloadRecord
+        from app.models.models import Subscription, DownloadRecord, SubscriptionTvMissingCache
 
         async with async_session_maker() as db:
             result = await db.execute(
@@ -1261,6 +1261,11 @@ async def _delete_subscription(
                 return
 
             title = sub.title
+            await db.execute(
+                delete(SubscriptionTvMissingCache).where(
+                    SubscriptionTvMissingCache.subscription_id == sub_id
+                )
+            )
             await db.execute(
                 delete(DownloadRecord).where(DownloadRecord.subscription_id == sub_id)
             )

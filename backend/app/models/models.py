@@ -90,7 +90,9 @@ class SubscriptionTvMissingCache(Base):
     __tablename__ = "subscription_tv_missing_cache"
 
     subscription_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("subscriptions.id"), primary_key=True
+        Integer,
+        ForeignKey("subscriptions.id", ondelete="CASCADE"),
+        primary_key=True,
     )
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="unknown")
     total_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

@@ -22,6 +22,7 @@ from app.models.models import (
     Subscription,
     SubscriptionExecutionLog,
     SubscriptionStepLog,
+    SubscriptionTvMissingCache,
 )
 from app.api.search import (
     _normalize_pansou_pan115_list,
@@ -1277,6 +1278,12 @@ class SubscriptionService:
     async def _delete_subscription_with_records(
         self, db: AsyncSession, subscription_id: int
     ) -> None:
+        # 先删子表：缺集缓存有 FK 指向 subscriptions，漏删会 IntegrityError
+        await db.execute(
+            delete(SubscriptionTvMissingCache).where(
+                SubscriptionTvMissingCache.subscription_id == subscription_id
+            )
+        )
         await db.execute(
             delete(DownloadRecord).where(
                 DownloadRecord.subscription_id == subscription_id

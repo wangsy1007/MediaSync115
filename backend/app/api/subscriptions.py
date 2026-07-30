@@ -16,6 +16,7 @@ from app.models.models import (
     Subscription,
     SubscriptionExecutionLog,
     SubscriptionStepLog,
+    SubscriptionTvMissingCache,
 )
 from app.services.operation_log_service import operation_log_service
 from app.services.subscription_service import subscription_service
@@ -846,6 +847,11 @@ async def delete_subscriptions_by_type(
         return {"deleted_count": 0}
 
     await db.execute(
+        sa_delete(SubscriptionTvMissingCache).where(
+            SubscriptionTvMissingCache.subscription_id.in_(sub_ids)
+        )
+    )
+    await db.execute(
         sa_delete(DownloadRecord).where(DownloadRecord.subscription_id.in_(sub_ids))
     )
     await db.execute(sa_delete(Subscription).where(Subscription.id.in_(sub_ids)))
@@ -985,14 +991,7 @@ async def delete_subscription(subscription_id: int, db: AsyncSession = Depends(g
     sub_title = subscription.title
     media_label = "电影" if subscription.media_type == MediaType.MOVIE else "电视剧"
 
-    # 先删除关联下载记录，避免外键约束导致 500。
-    downloads = await db.execute(
-        select(DownloadRecord).where(DownloadRecord.subscription_id == subscription_id)
-    )
-    for record in downloads.scalars().all():
-        await db.delete(record)
-
-    await db.delete(subscription)
+    await subscription_service._delete_subscription_with_records(db, subscription_id)
     await db.commit()
     await operation_log_service.log_background_event(
         source_type="api",
