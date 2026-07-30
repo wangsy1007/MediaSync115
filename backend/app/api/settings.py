@@ -27,6 +27,8 @@ from app.services.hdhive_checkin_scheduler_service import (
 )
 from app.services.emby_sync_index_service import emby_sync_index_service
 from app.services.emby_sync_scheduler_service import emby_sync_scheduler_service
+from app.services.library_cover_scheduler_service import library_cover_scheduler_service
+from app.services.library_cover_service import library_cover_service
 from app.services.feiniu_sync_index_service import feiniu_sync_index_service
 from app.services.feiniu_sync_scheduler_service import feiniu_sync_scheduler_service
 from app.services.strm_scheduler_service import strm_scheduler_service
@@ -104,6 +106,18 @@ class RuntimeSettingsRequest(BaseModel):
     emby_sync_enabled: Optional[bool] = None
     emby_sync_interval_hours: Optional[int] = None
     emby_sync_interval_minutes: Optional[int] = None
+    library_cover_enabled: Optional[bool] = None
+    library_cover_style: Optional[str] = None
+    library_cover_sort_by: Optional[str] = None
+    library_cover_poster_count: Optional[int] = None
+    library_cover_show_title: Optional[bool] = None
+    library_cover_upload: Optional[bool] = None
+    library_cover_exclude: Optional[list[str]] = None
+    library_cover_title_map: Optional[dict[str, str]] = None
+    library_cover_width: Optional[int] = None
+    library_cover_height: Optional[int] = None
+    library_cover_schedule_enabled: Optional[bool] = None
+    library_cover_schedule_cron: Optional[str] = None
     feiniu_url: Optional[str] = None
     feiniu_secret: Optional[str] = None
     feiniu_api_key: Optional[str] = None
@@ -215,6 +229,22 @@ _EMBY_SYNC_SETTING_KEYS = frozenset(
         "emby_sync_enabled",
         "emby_sync_interval_hours",
         "emby_sync_interval_minutes",
+    }
+)
+_LIBRARY_COVER_SETTING_KEYS = frozenset(
+    {
+        "library_cover_enabled",
+        "library_cover_style",
+        "library_cover_sort_by",
+        "library_cover_poster_count",
+        "library_cover_show_title",
+        "library_cover_upload",
+        "library_cover_exclude",
+        "library_cover_title_map",
+        "library_cover_width",
+        "library_cover_height",
+        "library_cover_schedule_enabled",
+        "library_cover_schedule_cron",
     }
 )
 _FEINIU_SYNC_SETTING_KEYS = frozenset(
@@ -478,6 +508,40 @@ def _validate_emby_sync_settings(merged_settings: dict) -> None:
         interval_minutes = interval_minutes * 60
     if interval_minutes < 1:
         raise HTTPException(status_code=400, detail="Emby 同步间隔必须大于等于 1 分钟")
+
+
+def _validate_library_cover_settings(merged_settings: dict) -> None:
+    enabled = bool(merged_settings.get("library_cover_enabled", False))
+    schedule_enabled = bool(merged_settings.get("library_cover_schedule_enabled", False))
+    if enabled or schedule_enabled:
+        emby_url = str(merged_settings.get("emby_url") or "").strip()
+        emby_api_key = str(merged_settings.get("emby_api_key") or "").strip()
+        if not emby_url or not emby_api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="启用媒体库封面生成前必须先配置 Emby URL 和 API Key",
+            )
+    style = str(merged_settings.get("library_cover_style") or "blur").strip().lower()
+    if style not in {"grid", "blur", "single"}:
+        raise HTTPException(
+            status_code=400,
+            detail="封面风格仅支持 grid / blur / single",
+        )
+    sort_by = str(merged_settings.get("library_cover_sort_by") or "DateCreated").strip()
+    if sort_by not in {
+        "DateCreated",
+        "DateLastContentAdded",
+        "PremiereDate",
+        "Random",
+        "SortName",
+    }:
+        raise HTTPException(status_code=400, detail="海报排序方式无效")
+    cron = str(merged_settings.get("library_cover_schedule_cron") or "0 3 * * *").strip()
+    if len(cron.split()) != 5:
+        raise HTTPException(
+            status_code=400,
+            detail="定时 Cron 需为 5 段表达式，例如 0 3 * * *",
+        )
 
 
 def _validate_feiniu_sync_settings(merged_settings: dict) -> None:
@@ -943,6 +1007,8 @@ async def update_runtime_settings(
         }
     ):
         _validate_emby_sync_settings(merged_settings)
+    if any(key in payload for key in _LIBRARY_COVER_SETTING_KEYS):
+        _validate_library_cover_settings(merged_settings)
     if any(
         key in payload
         for key in {
@@ -981,6 +1047,8 @@ async def update_runtime_settings(
             await hdhive_checkin_scheduler_service.ensure_checkin_task()
         if payload_keys & _EMBY_SYNC_SETTING_KEYS:
             await emby_sync_scheduler_service.ensure_sync_task()
+        if payload_keys & _LIBRARY_COVER_SETTING_KEYS:
+            await library_cover_scheduler_service.ensure_task()
         if payload_keys & _FEINIU_SYNC_SETTING_KEYS:
             await feiniu_sync_scheduler_service.ensure_sync_task()
         if payload_keys & _STRM_SCHEDULER_SETTING_KEYS:
@@ -1292,6 +1360,38 @@ async def run_emby_sync():
     if not result.get("success"):
         raise HTTPException(
             status_code=400, detail=result.get("message") or "Emby 同步启动失败"
+        )
+    return result
+
+
+@router.get("/library-cover/status")
+async def get_library_cover_status():
+    return {
+        **library_cover_service.get_runtime_status(),
+        "configured": bool(
+            runtime_settings_service.get_emby_url()
+            and runtime_settings_service.get_emby_api_key()
+        ),
+        "enabled": runtime_settings_service.get_library_cover_enabled(),
+    }
+
+
+@router.get("/library-cover/libraries")
+async def list_library_cover_libraries():
+    if not runtime_settings_service.get_emby_url() or not runtime_settings_service.get_emby_api_key():
+        raise HTTPException(status_code=400, detail="请先配置 Emby")
+    libraries = await emby_service.list_media_libraries()
+    return {"items": libraries, "total": len(libraries)}
+
+
+@router.post("/library-cover/run")
+async def run_library_cover_generate():
+    if not runtime_settings_service.get_library_cover_enabled():
+        raise HTTPException(status_code=400, detail="请先启用媒体库封面生成")
+    result = await library_cover_service.start_generate(trigger="manual")
+    if not result.get("started"):
+        raise HTTPException(
+            status_code=400, detail=result.get("message") or "启动封面生成失败"
         )
     return result
 

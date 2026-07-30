@@ -57,7 +57,7 @@ RUN set -eux; \
     done; \
     for attempt in 1 2 3; do \
       apt-get update \
-      && apt-get install -y --no-install-recommends bash ca-certificates curl nginx tzdata \
+      && apt-get install -y --no-install-recommends bash ca-certificates curl nginx tzdata fonts-wqy-zenhei \
       && break; \
       if [ "$attempt" -eq 3 ]; then exit 1; fi; \
       sleep $((attempt * 5)); \

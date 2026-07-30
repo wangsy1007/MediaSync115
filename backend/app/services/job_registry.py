@@ -24,6 +24,7 @@ class JobRegistry:
             "system.refresh_emby": self._refresh_emby,
             "system.sync_emby_index": self._sync_emby_index,
             "system.sync_feiniu_index": self._sync_feiniu_index,
+            "system.generate_library_covers": self._generate_library_covers,
             "system.cleanup_runtime_cache": self._cleanup_runtime_cache,
             "system.noop": self._noop,
             "system.archive_scan": self._archive_scan,
@@ -86,6 +87,15 @@ class JobRegistry:
                 "message": "转存队列执行中，飞牛媒体库同步已延迟至队列空闲",
             }
         return result
+
+    async def _generate_library_covers(self, **kwargs) -> dict[str, Any]:
+        from app.services.library_cover_service import library_cover_service
+        from app.services.runtime_settings_service import runtime_settings_service
+
+        if not runtime_settings_service.get_library_cover_enabled():
+            return {"success": True, "skipped": True, "message": "媒体库封面生成未启用"}
+        summary = await library_cover_service.generate_all(trigger="scheduler")
+        return {"success": True, "summary": summary}
 
     async def _cleanup_runtime_cache(self, **kwargs) -> dict[str, Any]:
         from app.api import search as search_api

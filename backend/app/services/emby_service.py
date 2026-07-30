@@ -625,6 +625,154 @@ class EmbyService:
         result = await self.get_downloaded_episodes_with_status(tmdb_id)
         return set(result.get("episodes") or set())
     
+    async def list_media_libraries(self) -> list[dict[str, str]]:
+        """列出 Emby 媒体库（CollectionFolder），返回 [{id, name}]。"""
+        if not self.base_url or not self.api_key:
+            return []
+        client = self._get_client()
+        for endpoint in ("/emby/Library/MediaFolders", "/Library/MediaFolders"):
+            try:
+                response = await client.get(
+                    f"{self.base_url}{endpoint}",
+                    params={"api_key": self.api_key},
+                    timeout=20.0,
+                )
+                response.raise_for_status()
+                payload = response.json() if response.content else {}
+                rows = payload.get("Items") if isinstance(payload, dict) else None
+                if not isinstance(rows, list):
+                    continue
+                libraries: list[dict[str, str]] = []
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    item_id = str(row.get("Id") or "").strip()
+                    name = str(row.get("Name") or "").strip()
+                    if item_id and name:
+                        libraries.append({"id": item_id, "name": name})
+                return libraries
+            except Exception:
+                continue
+        return []
+
+    async def list_library_poster_items(
+        self,
+        library_id: str,
+        *,
+        sort_by: str = "DateCreated",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """获取媒体库内可用于拼封面的条目（带 Primary 图）。"""
+        parent_id = str(library_id or "").strip()
+        if not parent_id or not self.base_url or not self.api_key:
+            return []
+
+        sort_value = str(sort_by or "DateCreated").strip() or "DateCreated"
+        params: dict[str, Any] = {
+            "ParentId": parent_id,
+            "Recursive": "true",
+            "IncludeItemTypes": "Movie,Series,BoxSet",
+            "Fields": "ImageTags,PrimaryImageTag",
+            "ImageTypeLimit": 1,
+            "EnableImageTypes": "Primary",
+            "Limit": max(1, min(int(limit or 50), 200)),
+        }
+        if sort_value.lower() == "random":
+            import random
+
+            params["SortBy"] = "Random"
+            params["RandomSeed"] = random.randint(1_000_000, 9_999_999)
+        else:
+            params["SortBy"] = f"{sort_value},SortName"
+            params["SortOrder"] = "Descending"
+
+        client = self._get_client()
+        try:
+            items = await self._fetch_items(client, params)
+        except Exception:
+            return []
+
+        result: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("Id") or "").strip()
+            if not item_id:
+                continue
+            tags = item.get("ImageTags")
+            has_primary = isinstance(tags, dict) and bool(tags.get("Primary"))
+            if not has_primary and not item.get("PrimaryImageTag"):
+                continue
+            result.append(item)
+        return result
+
+    async def download_item_primary_image(
+        self,
+        item_id: str,
+        *,
+        max_height: int = 600,
+    ) -> bytes | None:
+        """下载条目 Primary 海报原图字节。"""
+        normalized_id = str(item_id or "").strip()
+        if not normalized_id or not self.base_url or not self.api_key:
+            return None
+        client = self._get_client()
+        params: dict[str, Any] = {"api_key": self.api_key}
+        if max_height > 0:
+            params["maxHeight"] = int(max_height)
+        for endpoint in (
+            f"/emby/Items/{normalized_id}/Images/Primary",
+            f"/Items/{normalized_id}/Images/Primary",
+        ):
+            try:
+                response = await client.get(
+                    f"{self.base_url}{endpoint}",
+                    params=params,
+                    timeout=30.0,
+                )
+                if response.status_code == 200 and response.content:
+                    return bytes(response.content)
+            except Exception:
+                continue
+        return None
+
+    async def upload_item_primary_image(
+        self,
+        item_id: str,
+        image_bytes: bytes,
+        *,
+        content_type: str = "image/jpeg",
+    ) -> bool:
+        """上传 Primary 图片到 Emby 条目（媒体库封面即 CollectionFolder）。"""
+        normalized_id = str(item_id or "").strip()
+        if (
+            not normalized_id
+            or not image_bytes
+            or not self.base_url
+            or not self.api_key
+        ):
+            return False
+        client = self._get_client()
+        headers = {"Content-Type": content_type or "image/jpeg"}
+        params = {"api_key": self.api_key}
+        for endpoint in (
+            f"/emby/Items/{normalized_id}/Images/Primary",
+            f"/Items/{normalized_id}/Images/Primary",
+        ):
+            try:
+                response = await client.post(
+                    f"{self.base_url}{endpoint}",
+                    params=params,
+                    headers=headers,
+                    content=image_bytes,
+                    timeout=60.0,
+                )
+                if response.status_code in (200, 204):
+                    return True
+            except Exception:
+                continue
+        return False
+
     async def refresh_library(self):
         """触发 Emby 扫描库更新"""
         if not self.base_url or not self.api_key:

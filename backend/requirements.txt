@@ -21,5 +21,6 @@ playwright>=1.40.0
 websockets>=12.0
 pycryptodome>=3.19.0
 qrcode[pil]>=7.4
+Pillow>=10.0.0
 watchdog>=4.0.0
 kafka-python>=2.0.2

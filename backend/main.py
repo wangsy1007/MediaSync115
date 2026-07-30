@@ -40,6 +40,7 @@ from app.services.pansou_service import pansou_service
 from app.services.juying_web_service import juying_web_service
 from app.services.runtime_settings_service import runtime_settings_service
 from app.services.emby_sync_scheduler_service import emby_sync_scheduler_service
+from app.services.library_cover_scheduler_service import library_cover_scheduler_service
 from app.services.feiniu_sync_scheduler_service import feiniu_sync_scheduler_service
 from app.services.hdhive_checkin_scheduler_service import (
     hdhive_checkin_scheduler_service,
@@ -244,6 +245,7 @@ async def lifespan(app: FastAPI):
     await subscription_scheduler_service.ensure_tg_index_incremental_task()
     await hdhive_checkin_scheduler_service.ensure_checkin_task()
     await emby_sync_scheduler_service.ensure_sync_task()
+    await library_cover_scheduler_service.ensure_task()
     await feiniu_sync_scheduler_service.ensure_sync_task()
     await archive_scheduler_service.ensure_scan_task()
     await strm_scheduler_service.ensure_tasks()

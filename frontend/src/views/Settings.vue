@@ -589,6 +589,123 @@
         <el-card class="settings-card" style="margin-top: 16px">
           <template #header>
             <div class="card-header">
+              <span>媒体库封面生成</span>
+              <el-tag v-if="libraryCoverStatus.running" type="warning" size="small">生成中</el-tag>
+              <el-tag v-else-if="libraryCoverStatus.enabled" type="success" size="small">已启用</el-tag>
+              <el-tag v-else type="info" size="small">未启用</el-tag>
+            </div>
+          </template>
+
+          <el-form :model="libraryCoverForm" label-width="140px">
+            <el-form-item label="启用封面生成">
+              <el-switch v-model="libraryCoverForm.enabled" />
+            </el-form-item>
+            <el-form-item label="封面风格">
+              <el-select v-model="libraryCoverForm.style" style="width: 280px">
+                <el-option label="模糊背景拼贴（推荐）" value="blur" />
+                <el-option label="九宫格" value="grid" />
+                <el-option label="单图大封面" value="single" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="海报选取排序">
+              <el-select v-model="libraryCoverForm.sortBy" style="width: 280px">
+                <el-option label="按入库时间" value="DateCreated" />
+                <el-option label="按最近添加内容" value="DateLastContentAdded" />
+                <el-option label="按首映日期" value="PremiereDate" />
+                <el-option label="按名称" value="SortName" />
+                <el-option label="随机" value="Random" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="海报数量">
+              <el-input-number v-model="libraryCoverForm.posterCount" :min="1" :max="18" />
+            </el-form-item>
+            <el-form-item label="显示库名标题">
+              <el-switch v-model="libraryCoverForm.showTitle" />
+            </el-form-item>
+            <el-form-item label="上传到 Emby">
+              <div>
+                <el-switch v-model="libraryCoverForm.upload" />
+                <p class="form-hint">关闭时只生成到 data/library_covers，不覆盖 Emby 封面</p>
+              </div>
+            </el-form-item>
+            <el-form-item label="排除媒体库">
+              <el-select
+                v-model="libraryCoverForm.exclude"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                placeholder="输入媒体库名称后回车"
+                style="width: 100%"
+              />
+            </el-form-item>
+            <el-form-item label="封面尺寸">
+              <el-input-number v-model="libraryCoverForm.width" :min="640" :max="3840" :step="10" />
+              <span style="margin: 0 8px">×</span>
+              <el-input-number v-model="libraryCoverForm.height" :min="360" :max="2160" :step="10" />
+            </el-form-item>
+            <el-form-item label="定时更新">
+              <el-switch v-model="libraryCoverForm.scheduleEnabled" :disabled="!libraryCoverForm.enabled" />
+            </el-form-item>
+            <el-form-item label="Cron 表达式">
+              <el-input
+                v-model="libraryCoverForm.scheduleCron"
+                placeholder="0 3 * * *"
+                :disabled="!libraryCoverForm.scheduleEnabled"
+                style="max-width: 280px"
+              />
+              <p class="form-hint">默认每天凌晨 3 点（分 时 日 月 周）</p>
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" :loading="savingLibraryCover" @click="handleSaveLibraryCover">保存</el-button>
+              <el-button type="warning" :loading="runningLibraryCover" :disabled="!libraryCoverForm.enabled" @click="handleRunLibraryCover">
+                立即生成
+              </el-button>
+              <el-button :loading="refreshingLibraryCoverStatus" @click="fetchLibraryCoverStatus">刷新状态</el-button>
+            </el-form-item>
+          </el-form>
+
+          <div class="user-info">
+            <el-divider />
+            <h4>生成状态</h4>
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item label="当前状态">
+                <el-tag :type="libraryCoverStatus.running ? 'warning' : 'info'" size="small">
+                  {{ libraryCoverStatus.running ? '生成中' : '空闲' }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="最近触发">
+                {{ libraryCoverStatus.lastTrigger || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="最近开始">
+                {{ formatBeijingTableCell(null, null, libraryCoverStatus.lastStartedAt) || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="最近完成">
+                {{ formatBeijingTableCell(null, null, libraryCoverStatus.lastFinishedAt) || '-' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="最近结果" :span="2">
+                <span v-if="libraryCoverStatus.lastSummary">
+                  成功 {{ libraryCoverStatus.lastSummary.success || 0 }} /
+                  跳过 {{ libraryCoverStatus.lastSummary.skipped || 0 }} /
+                  失败 {{ libraryCoverStatus.lastSummary.failed || 0 }}
+                </span>
+                <span v-else>-</span>
+              </el-descriptions-item>
+            </el-descriptions>
+            <el-alert
+              v-if="libraryCoverStatus.lastError"
+              :closable="false"
+              type="error"
+              show-icon
+              style="margin-top: 12px"
+              :title="libraryCoverStatus.lastError"
+            />
+          </div>
+        </el-card>
+
+        <el-card class="settings-card" style="margin-top: 16px">
+          <template #header>
+            <div class="card-header">
               <span>飞牛影视配置</span>
               <el-tag v-if="feiniuStatus.checked" :type="feiniuStatus.valid ? 'success' : 'danger'" size="small">
                 {{ feiniuStatus.valid ? '已连接' : '未连接' }}
@@ -2097,6 +2214,19 @@ const embyForm = ref({
   syncEnabled: false,
   syncIntervalMinutes: 1440
 })
+const libraryCoverForm = ref({
+  enabled: false,
+  style: 'blur',
+  sortBy: 'DateCreated',
+  posterCount: 9,
+  showTitle: true,
+  upload: true,
+  exclude: ['Playlists', '合集'],
+  width: 1920,
+  height: 1080,
+  scheduleEnabled: false,
+  scheduleCron: '0 3 * * *'
+})
 const feiniuForm = ref({
   url: '',
   syncEnabled: false,
@@ -2376,6 +2506,9 @@ const savingHdhive = ref(false)
 const testingHdhive = ref(false)
 const runningHdhiveCheckin = ref(false)
 const savingEmby = ref(false)
+const savingLibraryCover = ref(false)
+const runningLibraryCover = ref(false)
+const refreshingLibraryCoverStatus = ref(false)
 const testingEmby = ref(false)
 const savingFeiniu = ref(false)
 const testingFeiniu = ref(false)
@@ -2813,7 +2946,17 @@ const embySyncStatus = reactive({
   tvCount: 0,
   episodeCount: 0
 })
+const libraryCoverStatus = reactive({
+  enabled: false,
+  running: false,
+  lastTrigger: '',
+  lastStartedAt: '',
+  lastFinishedAt: '',
+  lastError: '',
+  lastSummary: null
+})
 let embySyncPollTimer = null
+let libraryCoverPollTimer = null
 let feiniuSyncPollTimer = null
 const sourceConnectionStatus = reactive({
   hdhive: { checked: false, ok: false, text: '未检测' },
@@ -3930,6 +4073,88 @@ const handleSaveEmby = async () => {
   }
 }
 
+const stopLibraryCoverPolling = () => {
+  if (libraryCoverPollTimer) {
+    clearInterval(libraryCoverPollTimer)
+    libraryCoverPollTimer = null
+  }
+}
+
+const startLibraryCoverPolling = () => {
+  stopLibraryCoverPolling()
+  libraryCoverPollTimer = setInterval(() => {
+    fetchLibraryCoverStatus(false)
+  }, 3000)
+}
+
+const fetchLibraryCoverStatus = async (notifyOnError = false) => {
+  refreshingLibraryCoverStatus.value = true
+  try {
+    const { data } = await settingsApi.getLibraryCoverStatus()
+    libraryCoverStatus.enabled = !!data.enabled
+    libraryCoverStatus.running = !!data.running
+    libraryCoverStatus.lastTrigger = data.last_trigger || ''
+    libraryCoverStatus.lastStartedAt = data.last_started_at || ''
+    libraryCoverStatus.lastFinishedAt = data.last_finished_at || ''
+    libraryCoverStatus.lastError = data.last_error || ''
+    libraryCoverStatus.lastSummary = data.last_summary || null
+    runningLibraryCover.value = !!data.running
+    if (data.running) startLibraryCoverPolling()
+    else stopLibraryCoverPolling()
+  } catch (error) {
+    if (notifyOnError) {
+      ElMessage.error(error.response?.data?.detail || error.message || '获取封面生成状态失败')
+    }
+  } finally {
+    refreshingLibraryCoverStatus.value = false
+  }
+}
+
+const handleSaveLibraryCover = async () => {
+  if (libraryCoverForm.value.enabled && !String(embyForm.value.url || '').trim()) {
+    ElMessage.warning('请先配置 Emby URL')
+    return
+  }
+  savingLibraryCover.value = true
+  try {
+    await settingsApi.updateRuntime({
+      library_cover_enabled: !!libraryCoverForm.value.enabled,
+      library_cover_style: libraryCoverForm.value.style,
+      library_cover_sort_by: libraryCoverForm.value.sortBy,
+      library_cover_poster_count: Number(libraryCoverForm.value.posterCount || 9),
+      library_cover_show_title: !!libraryCoverForm.value.showTitle,
+      library_cover_upload: !!libraryCoverForm.value.upload,
+      library_cover_exclude: Array.isArray(libraryCoverForm.value.exclude)
+        ? libraryCoverForm.value.exclude
+        : [],
+      library_cover_width: Number(libraryCoverForm.value.width || 1920),
+      library_cover_height: Number(libraryCoverForm.value.height || 1080),
+      library_cover_schedule_enabled: !!libraryCoverForm.value.scheduleEnabled,
+      library_cover_schedule_cron: libraryCoverForm.value.scheduleCron || '0 3 * * *'
+    })
+    await fetchRuntimeSettings()
+    await fetchLibraryCoverStatus(false)
+    ElMessage.success('媒体库封面配置已保存')
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '媒体库封面配置保存失败')
+  } finally {
+    savingLibraryCover.value = false
+  }
+}
+
+const handleRunLibraryCover = async () => {
+  runningLibraryCover.value = true
+  try {
+    const { data } = await settingsApi.runLibraryCover()
+    ElMessage.success(data.message || '已开始生成媒体库封面')
+    startLibraryCoverPolling()
+    await fetchLibraryCoverStatus(false)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '启动封面生成失败')
+    runningLibraryCover.value = false
+  }
+}
+
 const handleTestEmby = async () => {
   if (!String(embyForm.value.url || '').trim()) {
     ElMessage.warning('请输入 Emby URL')
@@ -4859,6 +5084,21 @@ const fetchRuntimeSettings = async () => {
     embyForm.value.apiKey = data.emby_api_key || ''
     embyForm.value.syncEnabled = !!data.emby_sync_enabled
     embyForm.value.syncIntervalMinutes = Number(data.emby_sync_interval_minutes || data.emby_sync_interval_hours * 60 || 1440)
+    libraryCoverForm.value.enabled = !!data.library_cover_enabled
+    libraryCoverForm.value.style = ['grid', 'blur', 'single'].includes(data.library_cover_style)
+      ? data.library_cover_style
+      : 'blur'
+    libraryCoverForm.value.sortBy = data.library_cover_sort_by || 'DateCreated'
+    libraryCoverForm.value.posterCount = Number(data.library_cover_poster_count || 9)
+    libraryCoverForm.value.showTitle = data.library_cover_show_title !== false
+    libraryCoverForm.value.upload = data.library_cover_upload !== false
+    libraryCoverForm.value.exclude = Array.isArray(data.library_cover_exclude)
+      ? data.library_cover_exclude
+      : ['Playlists', '合集']
+    libraryCoverForm.value.width = Number(data.library_cover_width || 1920)
+    libraryCoverForm.value.height = Number(data.library_cover_height || 1080)
+    libraryCoverForm.value.scheduleEnabled = !!data.library_cover_schedule_enabled
+    libraryCoverForm.value.scheduleCron = data.library_cover_schedule_cron || '0 3 * * *'
     feiniuForm.value.url = data.feiniu_url || ''
     feiniuForm.value.syncEnabled = !!data.feiniu_sync_enabled
     feiniuForm.value.syncIntervalMinutes = Number(data.feiniu_sync_interval_minutes || data.feiniu_sync_interval_hours * 60 || 1440)
@@ -5430,6 +5670,7 @@ const ensureSettingsTabLoaded = (tab) => {
         checkEmby(false)
       }
       fetchEmbySyncStatus(false)
+      fetchLibraryCoverStatus(false)
       break
     case 'feiniu':
       if (String(feiniuForm.value.url || '').trim()) {
@@ -5491,6 +5732,7 @@ onBeforeUnmount(() => {
   stopTgQrPolling()
   stopTgIndexStatusPolling()
   stopEmbySyncPolling()
+  stopLibraryCoverPolling()
   stopFeiniuSyncPolling()
 })
 </script>

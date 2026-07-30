@@ -122,6 +122,18 @@ class RuntimeSettingsService:
             "emby_sync_enabled": False,
             "emby_sync_interval_hours": 24,
             "emby_sync_interval_minutes": 1440,
+            "library_cover_enabled": False,
+            "library_cover_style": "blur",
+            "library_cover_sort_by": "DateCreated",
+            "library_cover_poster_count": 9,
+            "library_cover_show_title": True,
+            "library_cover_upload": True,
+            "library_cover_exclude": ["Playlists", "合集"],
+            "library_cover_title_map": {},
+            "library_cover_width": 1920,
+            "library_cover_height": 1080,
+            "library_cover_schedule_enabled": False,
+            "library_cover_schedule_cron": "0 3 * * *",
             "feiniu_url": settings.FEINIU_URL or "",
             "feiniu_secret": settings.FEINIU_SECRET or "",
             "feiniu_api_key": settings.FEINIU_API_KEY or "",
@@ -750,6 +762,82 @@ class RuntimeSettingsService:
 
     def get_emby_sync_interval_hours(self) -> int:
         return max(1, self.get_emby_sync_interval_minutes() // 60)
+
+    def get_library_cover_enabled(self) -> bool:
+        return bool(self._data.get("library_cover_enabled", False))
+
+    def get_library_cover_style(self) -> str:
+        value = str(self._data.get("library_cover_style") or "blur").strip().lower()
+        if value in {"grid", "blur", "single"}:
+            return value
+        return "blur"
+
+    def get_library_cover_sort_by(self) -> str:
+        value = str(self._data.get("library_cover_sort_by") or "DateCreated").strip()
+        allowed = {
+            "DateCreated",
+            "DateLastContentAdded",
+            "PremiereDate",
+            "Random",
+            "SortName",
+        }
+        return value if value in allowed else "DateCreated"
+
+    def get_library_cover_poster_count(self) -> int:
+        try:
+            return max(1, min(18, int(self._data.get("library_cover_poster_count", 9))))
+        except (TypeError, ValueError):
+            return 9
+
+    def get_library_cover_show_title(self) -> bool:
+        if "library_cover_show_title" not in self._data:
+            return True
+        return bool(self._data.get("library_cover_show_title"))
+
+    def get_library_cover_upload(self) -> bool:
+        if "library_cover_upload" not in self._data:
+            return True
+        return bool(self._data.get("library_cover_upload"))
+
+    def get_library_cover_exclude(self) -> list[str]:
+        raw = self._data.get("library_cover_exclude")
+        if not isinstance(raw, list):
+            return ["Playlists", "合集"]
+        return [str(item).strip() for item in raw if str(item).strip()]
+
+    def get_library_cover_title_map(self) -> dict[str, str]:
+        raw = self._data.get("library_cover_title_map")
+        if not isinstance(raw, dict):
+            return {}
+        result: dict[str, str] = {}
+        for key, value in raw.items():
+            name = str(key or "").strip()
+            title = str(value or "").strip()
+            if name and title:
+                result[name] = title
+        return result
+
+    def get_library_cover_width(self) -> int:
+        try:
+            return max(640, min(3840, int(self._data.get("library_cover_width", 1920))))
+        except (TypeError, ValueError):
+            return 1920
+
+    def get_library_cover_height(self) -> int:
+        try:
+            return max(360, min(2160, int(self._data.get("library_cover_height", 1080))))
+        except (TypeError, ValueError):
+            return 1080
+
+    def get_library_cover_schedule_enabled(self) -> bool:
+        return bool(self._data.get("library_cover_schedule_enabled", False))
+
+    def get_library_cover_schedule_cron(self) -> str:
+        value = str(self._data.get("library_cover_schedule_cron") or "0 3 * * *").strip()
+        parts = value.split()
+        if len(parts) != 5:
+            return "0 3 * * *"
+        return value
 
     def get_feiniu_url(self) -> str:
         return str(self._data.get("feiniu_url") or "")
@@ -1413,6 +1501,7 @@ class RuntimeSettingsService:
                     "resource_preferred_audio",
                     "resource_preferred_subtitles",
                     "resource_exclude_tags",
+                    "library_cover_exclude",
                 ):
                     if isinstance(value, list):
                         normalized[key] = [
@@ -1475,7 +1564,15 @@ class RuntimeSettingsService:
                 if deduped:
                     normalized[key] = deduped
             else:
-                normalized[key] = value
+                if key == "library_cover_title_map":
+                    if isinstance(value, dict):
+                        normalized[key] = {
+                            str(k).strip(): str(v).strip()
+                            for k, v in value.items()
+                            if str(k).strip() and str(v).strip()
+                        }
+                else:
+                    normalized[key] = value
 
         self._data = normalized
         # 每周全量定时已下线，禁止通过批量配置重新开启
@@ -1628,6 +1725,18 @@ class RuntimeSettingsService:
             "emby_sync_enabled": self.get_emby_sync_enabled(),
             "emby_sync_interval_hours": self.get_emby_sync_interval_hours(),
             "emby_sync_interval_minutes": self.get_emby_sync_interval_minutes(),
+            "library_cover_enabled": self.get_library_cover_enabled(),
+            "library_cover_style": self.get_library_cover_style(),
+            "library_cover_sort_by": self.get_library_cover_sort_by(),
+            "library_cover_poster_count": self.get_library_cover_poster_count(),
+            "library_cover_show_title": self.get_library_cover_show_title(),
+            "library_cover_upload": self.get_library_cover_upload(),
+            "library_cover_exclude": self.get_library_cover_exclude(),
+            "library_cover_title_map": self.get_library_cover_title_map(),
+            "library_cover_width": self.get_library_cover_width(),
+            "library_cover_height": self.get_library_cover_height(),
+            "library_cover_schedule_enabled": self.get_library_cover_schedule_enabled(),
+            "library_cover_schedule_cron": self.get_library_cover_schedule_cron(),
             "feiniu_url": self.get_feiniu_url(),
             "feiniu_secret": self.get_feiniu_secret(),
             "feiniu_api_key": self.get_feiniu_api_key(),
