@@ -61,6 +61,28 @@ async def test_start_kills_hung_job_on_timeout():
         scheduler_manager._jobs.pop(job_id, None)
 
 
+async def test_timeout_backoff_skips_immediate_repeat():
+    job_id = "test:hung:backoff"
+    call_count = 0
+
+    async def _hung(**_kwargs):
+        nonlocal call_count
+        call_count += 1
+        await asyncio.Event().wait()
+
+    _register_job(job_id, _hung, timeout=0.05)
+    try:
+        first = await scheduler_manager.start(job_id)
+        second = await scheduler_manager.start(job_id)
+
+        assert first["success"] is False
+        assert second["success"] is False
+        assert second["backing_off"] is True
+        assert call_count == 1
+    finally:
+        scheduler_manager._jobs.pop(job_id, None)
+
+
 async def test_start_returns_success_on_fast_job():
     job_id = "test:fast:success"
 

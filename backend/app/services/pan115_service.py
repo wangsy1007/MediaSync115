@@ -8,7 +8,7 @@ import logging
 import random
 import re
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Set
+from typing import Optional, List, Dict, Any, Set, Callable
 from uuid import uuid4
 
 from app.constants.pan115_qr_login import normalize_pan115_qr_login_app
@@ -78,6 +78,24 @@ from dataclasses import dataclass
 import time
 
 
+_BULK_PROBE_UA_MARKERS = (
+    "curl/",
+    "wget/",
+    "python-requests",
+    "httpx/",
+    "go-http-client",
+    "libcurl",
+)
+
+
+def _is_bulk_probe_user_agent(user_agent: str | None) -> bool:
+    """识别批量探测/脚本 UA，避免挤占真实播放取链通道。"""
+    text = str(user_agent or "").strip().lower()
+    if not text:
+        return False
+    return any(marker in text for marker in _BULK_PROBE_UA_MARKERS)
+
+
 @dataclass
 class _QueueRequest:
     """队列请求包装器"""
@@ -105,9 +123,13 @@ class _Pan115ThrottleManager:
                 self._throttled_until = new_until
             return max(self._throttled_until - now, 0.0)
 
-    async def wait_if_throttled(self) -> float:
+    async def wait_if_throttled(
+        self, cancelled: Callable[[], bool] | None = None
+    ) -> float:
         started_at = time.monotonic()
         while True:
+            if cancelled and cancelled():
+                break
             now = time.monotonic()
             async with self._lock:
                 remaining = self._throttled_until - now
@@ -132,9 +154,11 @@ class _Pan115RateLimiter:
         self._hour_window: deque[float] = deque()
         self._lock = asyncio.Lock()
 
-    async def acquire(self) -> float:
+    async def acquire(self, cancelled: Callable[[], bool] | None = None) -> float:
         started_at = time.monotonic()
         while True:
+            if cancelled and cancelled():
+                return max(time.monotonic() - started_at, 0.0)
             now = time.monotonic()
             async with self._lock:
                 cutoff_sec = now - 1.0
@@ -167,7 +191,7 @@ class _Pan115RateLimiter:
                     sleep_sec = max(sleep_sec, self._hour_window[0] + 3600.01 - now)
 
             if sleep_sec > 0:
-                await asyncio.sleep(sleep_sec)
+                await asyncio.sleep(min(sleep_sec, 1.0))
 
 
 class _Pan115QueueExecutor:
@@ -177,22 +201,67 @@ class _Pan115QueueExecutor:
         self, qps: int = 3, qpm: int = 200, qph: int = 12000, worker_count: int = 3
     ):
         self._queue: asyncio.Queue[_QueueRequest] = asyncio.Queue(maxsize=500)
+        self._playback_queue: asyncio.Queue[_QueueRequest] = asyncio.Queue(maxsize=100)
         self._limiter = _Pan115RateLimiter(qps, qpm, qph)
         self._throttle = _Pan115ThrottleManager()
+        # Playback URL resolution must not sit behind long-running directory scans.
+        self._playback_limiter = _Pan115RateLimiter(qps=2, qpm=120, qph=3000)
+        self._playback_throttle = _Pan115ThrottleManager(cooldown_seconds=3.0)
         self._worker_count = max(worker_count, 2)
         self._started = False
+        self._worker_tasks: list[asyncio.Task[Any]] = []
 
     def start(self) -> None:
         if self._started:
             return
         self._started = True
         for i in range(self._worker_count):
-            asyncio.create_task(self._worker_loop(), name=f"pan115-queue-worker-{i}")
+            self._worker_tasks.append(
+                asyncio.create_task(
+                    self._worker_loop(self._queue, playback_lane=False),
+                    name=f"pan115-queue-worker-{i}",
+                )
+            )
+        self._worker_tasks.append(
+            asyncio.create_task(
+                self._worker_loop(self._playback_queue, playback_lane=True),
+                name="pan115-playback-worker",
+            )
+        )
 
-    async def _worker_loop(self) -> None:
+    async def stop(self) -> None:
+        tasks = list(self._worker_tasks)
+        self._worker_tasks.clear()
+        self._started = False
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    @staticmethod
+    async def _run_request(req: _QueueRequest) -> Any:
+        operation_task = asyncio.create_task(req.coro_factory())
+        done, _ = await asyncio.wait(
+            {operation_task, req.future},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if req.future in done:
+            operation_task.cancel()
+            await asyncio.gather(operation_task, return_exceptions=True)
+            raise asyncio.CancelledError
+        return await operation_task
+
+    async def _worker_loop(
+        self,
+        queue: asyncio.Queue[_QueueRequest],
+        *,
+        playback_lane: bool,
+    ) -> None:
         while True:
-            req = await self._queue.get()
+            req = await queue.get()
             try:
+                if req.future.cancelled():
+                    continue
                 queue_wait_seconds = max(
                     time.monotonic() - float(req.queued_at or time.monotonic()),
                     0.0,
@@ -202,17 +271,30 @@ class _Pan115QueueExecutor:
                         "115 API 请求排队 %.1f 秒：operation=%s, queue_size=%s",
                         queue_wait_seconds,
                         req.operation or "unknown",
-                        self._queue.qsize(),
+                        queue.qsize(),
                     )
-                if not req.bypass_rate_limit:
-                    rate_wait_seconds = await self._limiter.acquire()
+                if playback_lane:
+                    limiter = self._playback_limiter
+                    throttle = self._playback_throttle
+                else:
+                    limiter = self._limiter
+                    throttle = self._throttle
+
+                if not req.bypass_rate_limit or playback_lane:
+                    rate_wait_seconds = await limiter.acquire(req.future.cancelled)
+                    if req.future.cancelled():
+                        continue
                     if rate_wait_seconds >= 5.0:
                         logger.warning(
                             "115 API 请求受频率上限影响，等待 %.1f 秒：operation=%s",
                             rate_wait_seconds,
                             req.operation or "unknown",
                         )
-                    throttle_wait_seconds = await self._throttle.wait_if_throttled()
+                    throttle_wait_seconds = await throttle.wait_if_throttled(
+                        req.future.cancelled
+                    )
+                    if req.future.cancelled():
+                        continue
                     if throttle_wait_seconds >= 1.0:
                         logger.warning(
                             "115 API 请求等待限流冷却 %.1f 秒：operation=%s",
@@ -220,9 +302,14 @@ class _Pan115QueueExecutor:
                             req.operation or "unknown",
                         )
 
-                result = await req.coro_factory()
+                result = await self._run_request(req)
                 if not req.future.done():
                     req.future.set_result(result)
+            except asyncio.CancelledError:
+                if not req.future.done():
+                    req.future.cancel()
+                if not self._started:
+                    raise
             except Exception as exc:
                 error_text = str(exc).lower()
                 if (
@@ -232,7 +319,10 @@ class _Pan115QueueExecutor:
                     or "too many" in error_text
                     or "rate limit" in error_text
                 ):
-                    cooldown_seconds = await self._throttle.mark_throttled()
+                    throttle = (
+                        self._playback_throttle if playback_lane else self._throttle
+                    )
+                    cooldown_seconds = await throttle.mark_throttled()
                     logger.warning(
                         "115 API 触发限流，进入 %.0f 秒冷却：operation=%s",
                         cooldown_seconds,
@@ -241,13 +331,14 @@ class _Pan115QueueExecutor:
                 if not req.future.done():
                     req.future.set_exception(exc)
             finally:
-                self._queue.task_done()
+                queue.task_done()
 
     def enqueue(self, req: _QueueRequest) -> None:
         if not self._started:
             self.start()
+        queue = self._playback_queue if req.bypass_rate_limit else self._queue
         try:
-            self._queue.put_nowait(req)
+            queue.put_nowait(req)
         except asyncio.QueueFull:
             if not req.future.done():
                 req.future.set_exception(RuntimeError("115 请求队列已满，请稍后重试"))
@@ -319,6 +410,12 @@ class Pan115Service:
         async def coro_factory():
             return await method(*args, async_=True, **kwargs)
 
+        # 仅真实播放取链走 playback 快车道；curl/wget 等批量探测走普通队列，
+        # 避免像 nas-diag 全量扫 STRM 时把 HosPlayer 播放堵死。
+        use_playback_lane = method_name == "download_url_app" and not (
+            _is_bulk_probe_user_agent(kwargs.get("user_agent"))
+        )
+
         executor = await _get_global_pan115_executor()
         executor.enqueue(
             _QueueRequest(
@@ -326,9 +423,15 @@ class Pan115Service:
                 future=future,
                 operation=method_name,
                 queued_at=time.monotonic(),
+                bypass_rate_limit=use_playback_lane,
             )
         )
-        return await future
+        try:
+            return await future
+        except asyncio.CancelledError:
+            if not future.done():
+                future.cancel()
+            raise
 
     # ==================== 用户信息 ====================
 

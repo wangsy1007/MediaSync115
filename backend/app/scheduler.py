@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from threading import Lock
 from typing import Any, Callable
@@ -28,6 +29,10 @@ logger = logging.getLogger(__name__)
 # 配合 max_instances=1 导致整个 job 停摆。此处给所有调度任务加看门狗。
 DEFAULT_JOB_TIMEOUT_SECONDS = 7200  # 2 小时硬上限
 MIN_JOB_TIMEOUT_SECONDS = 300  # 5 分钟下限
+
+
+MIN_TIMEOUT_BACKOFF_SECONDS = 300
+MAX_TIMEOUT_BACKOFF_SECONDS = 1800
 
 
 class SchedulerManager:
@@ -94,6 +99,30 @@ class SchedulerManager:
             )
             return {"success": False, "message": f"job not found: {job_id}"}
 
+        backoff_until = float(meta.get("timeout_backoff_until") or 0.0)
+        backoff_remaining = backoff_until - time.monotonic()
+        if backoff_remaining > 0 and not force:
+            await operation_log_service.log_background_event(
+                source_type="scheduler",
+                module="scheduler",
+                action="scheduler.job.backoff",
+                status="warning",
+                message=f"定时任务处于超时退避期: {job_label}",
+                trace_id=job_id,
+                extra={
+                    **job_extra,
+                    "backoff_remaining_seconds": round(backoff_remaining, 1),
+                },
+            )
+            return {
+                "success": False,
+                "message": (
+                    f"job is backing off after timeout: {job_id} "
+                    f"({backoff_remaining:.1f}s remaining)"
+                ),
+                "backing_off": True,
+            }
+
         with self._run_lock:
             if meta.get("running"):
                 if force:
@@ -130,6 +159,7 @@ class SchedulerManager:
             )
             run_ok = True
             run_error = ""
+            meta["timeout_backoff_until"] = 0.0
         except asyncio.TimeoutError:
             logger.error(
                 "Scheduled job timed out after %ss: %s", job_timeout, job_id
@@ -137,6 +167,12 @@ class SchedulerManager:
             result = None
             run_ok = False
             run_error = f"job timed out after {job_timeout}s"
+            timeout_backoff = max(
+                MIN_TIMEOUT_BACKOFF_SECONDS,
+                min(job_timeout, MAX_TIMEOUT_BACKOFF_SECONDS),
+            )
+            meta["timeout_backoff_until"] = time.monotonic() + timeout_backoff
+            meta["timeout_backoff_seconds"] = timeout_backoff
         except Exception as exc:
             logger.exception("Scheduled job failed: %s", job_id)
             result = None
