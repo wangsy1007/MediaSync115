@@ -370,6 +370,33 @@ class StrmService:
 
         mode = self._validate_mode(mode)
         normalized_scopes = self._normalize_scopes(scopes)
+
+        # 归档扫描会先移动再重命名；期间扫正式库会写出未重命名的 STRM
+        try:
+            from app.services.archive_service import archive_service
+
+            if archive_service.is_scan_running():
+                if mode == "full":
+                    self._pending_mode = "full"
+                    self._pending_scopes = []
+                    self._pending_unscoped = True
+                elif self._pending_mode != "full":
+                    self._merge_pending_scopes(
+                        normalized_scopes, unscoped=scopes is None
+                    )
+                return {
+                    "success": True,
+                    "started": False,
+                    "queued": True,
+                    "deferred_for_archive": True,
+                    "mode": self._pending_mode or mode,
+                    "queued_scope_count": len(self._pending_scopes),
+                    "trigger": str(trigger or "manual"),
+                    "message": "归档扫描进行中，STRM 已排队，待归档重命名完成后再生成",
+                }
+        except Exception:
+            logger.exception("检查归档运行状态失败，继续尝试生成 STRM")
+
         if self._is_generate_running():
             if mode == "full":
                 self._pending_mode = "full"
@@ -413,13 +440,24 @@ class StrmService:
             "output_dir": str(output_dir),
         }
 
-    async def cancel_generate(self) -> dict[str, Any]:
-        """停止正在进行的 STRM 生成（增量/全量），并清空排队补跑。"""
+    async def cancel_generate(
+        self, *, clear_pending: bool = True, reason: str = "manual"
+    ) -> dict[str, Any]:
+        """停止正在进行的 STRM 生成（增量/全量）。
+
+        clear_pending=False 用于归档打断：只停当前扫描，保留排队，待归档后再跑。
+        """
         self._cancel_requested = True
-        self._clear_pending_generate()
+        if clear_pending:
+            self._clear_pending_generate()
         task = self._generate_task
         had_active_task = bool(task and not task.done())
         mode = self._current_mode or "incremental"
+        stop_message = (
+            "STRM 生成已因归档开始而中断"
+            if reason == "archive"
+            else "STRM 生成已手动停止"
+        )
 
         if had_active_task and task is not None:
             task.cancel()
@@ -440,7 +478,7 @@ class StrmService:
         # 若任务未走到 CancelledError 收尾，这里兜底修正状态
         if had_active_task or self._lock.locked():
             self._last_generate_finished_at = self._now_iso()
-            self._last_generate_error = "STRM 生成已手动停止"
+            self._last_generate_error = stop_message
             self._clear_generate_progress()
             try:
                 output_cid = runtime_settings_service.get_archive_output_cid()
@@ -452,15 +490,15 @@ class StrmService:
                         output_cid=output_cid,
                         output_dir=output_dir,
                         mode=mode or "incremental",
-                        error=RuntimeError("STRM 生成已手动停止"),
+                        error=RuntimeError(stop_message),
                     )
             except Exception:
                 logger.warning("取消 STRM 生成时更新状态失败", exc_info=True)
             await self._log_strm_step(
                 "strm.generate.cancelled",
-                f"STRM {self._strm_mode_label(mode)}生成已手动停止",
+                f"STRM {self._strm_mode_label(mode)}{stop_message.removeprefix('STRM 生成')}",
                 status="failed",
-                extra={"mode": mode, "manual": True},
+                extra={"mode": mode, "manual": reason == "manual", "reason": reason},
             )
 
         await self.reconcile_stale_running_state()
@@ -473,7 +511,7 @@ class StrmService:
             "running": running,
             "mode": mode,
             "message": (
-                "STRM 生成已停止"
+                stop_message
                 if had_active_task
                 else "当前没有正在运行的 STRM 生成任务"
             ),
@@ -512,6 +550,32 @@ class StrmService:
                 }
 
         mode = self._validate_mode(mode)
+        normalized_scopes = self._normalize_scopes(scopes)
+
+        # 与 start_generate_library 一致：归档移动+重命名完成前不扫正式库
+        try:
+            from app.services.archive_service import archive_service
+
+            if archive_service.is_scan_running():
+                if mode == "full":
+                    self._pending_mode = "full"
+                    self._pending_scopes = []
+                    self._pending_unscoped = True
+                elif self._pending_mode != "full":
+                    self._merge_pending_scopes(
+                        normalized_scopes, unscoped=scopes is None
+                    )
+                return {
+                    "success": True,
+                    "deferred": True,
+                    "deferred_for_archive": True,
+                    "mode": self._pending_mode or mode,
+                    "trigger": str(trigger or "manual"),
+                    "message": "归档扫描进行中，STRM 已排队，待归档重命名完成后再生成",
+                }
+        except Exception:
+            logger.exception("检查归档运行状态失败，继续尝试生成 STRM")
+
         running_task = self._generate_task
         if (
             running_task
@@ -527,7 +591,7 @@ class StrmService:
             output_cid=output_cid,
             output_dir=output_dir,
             mode=mode,
-            scopes=self._normalize_scopes(scopes),
+            scopes=normalized_scopes,
         )
 
     async def _run_generate_task(
@@ -868,7 +932,7 @@ class StrmService:
     def _normalize_scopes(
         cls, scopes: list[dict[str, Any]] | None
     ) -> list[dict[str, str]]:
-        normalized: dict[tuple[str, str, str], dict[str, str]] = {}
+        normalized: dict[tuple[str, str], dict[str, str]] = {}
         for raw in scopes or []:
             if not isinstance(raw, dict):
                 continue
@@ -878,11 +942,25 @@ class StrmService:
                 "relative_prefix": cls._normalize_prefix(
                     str(raw.get("relative_prefix") or "")
                 ),
+                "expected_name": str(
+                    raw.get("expected_name") or raw.get("new_filename") or ""
+                ).strip(),
             }
             if not scope["fid"] and not scope["target_cid"]:
                 continue
-            key = (scope["fid"], scope["target_cid"], scope["relative_prefix"])
-            normalized[key] = scope
+            # 同目标目录合并为一份范围（季目录整扫即可）
+            key = (
+                scope["target_cid"] or scope["fid"],
+                scope["relative_prefix"],
+            )
+            existing = normalized.get(key)
+            if existing is None:
+                normalized[key] = scope
+            else:
+                # 多集同目录时清空 expected_name，避免只保留单文件
+                existing["expected_name"] = ""
+                if not existing.get("fid") and scope["fid"]:
+                    existing["fid"] = scope["fid"]
         return list(normalized.values())
 
     @staticmethod
@@ -900,7 +978,10 @@ class StrmService:
         self._pending_mode = "incremental"
         self._pending_unscoped = self._pending_unscoped or unscoped
         merged = {
-            (item["fid"], item["target_cid"], item["relative_prefix"]): item
+            (
+                item.get("target_cid") or item.get("fid") or "",
+                item.get("relative_prefix") or "",
+            ): item
             for item in (*self._pending_scopes, *scopes)
         }
         self._pending_scopes = list(merged.values())
@@ -926,8 +1007,16 @@ class StrmService:
         except Exception:
             logger.exception("STRM 后台生成任务执行失败")
         if self._cancel_requested:
-            self._clear_pending_generate()
+            # 排队是否清空由 cancel_generate(clear_pending=...) 决定，这里不二次清空
             return
+        try:
+            from app.services.archive_service import archive_service
+
+            if archive_service.is_scan_running():
+                # 归档仍在进行：保留排队，等归档结束后再 kick
+                return
+        except Exception:
+            pass
         if self._pending_mode and self._generate_task is None:
             try:
                 mode, scopes = self._take_pending()
@@ -945,6 +1034,23 @@ class StrmService:
                 next_task.add_done_callback(self._clear_generate_task)
             except Exception:
                 logger.exception("启动排队的 STRM 生成任务失败")
+
+    async def kick_pending_after_archive(self) -> dict[str, Any] | None:
+        """归档结束后拉起排队中的 STRM（若当前空闲）。"""
+        if self._cancel_requested:
+            self._clear_pending_generate()
+            return None
+        if self._is_generate_running() or self._lock.locked():
+            return None
+        if not self._pending_mode and not self._pending_scopes and not self._pending_unscoped:
+            return None
+        mode, scopes = self._take_pending()
+        return await self.start_generate_library(
+            trigger="after_archive_pending",
+            mode=mode,
+            scopes=scopes or None,
+            respect_save_queue=False,
+        )
 
     async def diagnose_sample(
         self, request_headers: dict[str, str] | None = None
@@ -1486,7 +1592,31 @@ class StrmService:
             fid = scope["fid"]
             target_cid = scope["target_cid"]
             prefix = scope["relative_prefix"]
+            expected_name = str(scope.get("expected_name") or "").strip()
             handled = False
+
+            # 优先扫目标目录：归档后这里已是重命名结果，避免移动后旧文件名污染 STRM
+            if target_cid:
+                try:
+                    tree_files, tree_folders = await self._scan_tree(
+                        pan115, target_cid, prefix, ""
+                    )
+                    files.extend(tree_files)
+                    folders.extend(tree_folders)
+                    complete_prefixes.add(prefix)
+                    if fid:
+                        exact_fids.add(fid)
+                    handled = True
+                except Exception:
+                    logger.warning(
+                        "按目标目录 cid=%s 扫描 STRM 范围失败，回退 fid",
+                        target_cid,
+                        exc_info=True,
+                    )
+
+            if handled:
+                continue
+
             if fid:
                 try:
                     payload = await pan115.get_file_info(fid)
@@ -1502,7 +1632,7 @@ class StrmService:
                             folders.extend(tree_folders)
                             complete_prefixes.add(prefix)
                         else:
-                            name = self._extract_file_name(item)
+                            name = expected_name or self._extract_file_name(item)
                             relative_path = (
                                 PurePosixPath(prefix, name).as_posix()
                                 if prefix and name
@@ -1512,25 +1642,15 @@ class StrmService:
                                 item, relative_path, target_cid
                             )
                             if record:
+                                if expected_name:
+                                    record["name"] = expected_name
+                                    record["relative_path"] = relative_path
                                 files.append(record)
                 except Exception:
                     logger.warning(
-                        "无法按 fid=%s 获取 STRM 增量范围，尝试目标目录", fid,
-                        exc_info=True,
-                    )
-            if not handled and target_cid:
-                tree_files, tree_folders = await self._scan_tree(
-                    pan115, target_cid, prefix, ""
-                )
-                files.extend(tree_files)
-                folders.extend(tree_folders)
-                visible_fids = {item["fid"] for item in tree_files}
-                if not fid or fid in visible_fids:
-                    complete_prefixes.add(prefix)
-                else:
-                    logger.info(
-                        "115 归档文件 fid=%s 尚未在目标目录可见，本轮仅增补、不执行范围删除",
+                        "无法按 fid=%s 获取 STRM 增量范围",
                         fid,
+                        exc_info=True,
                     )
 
         return {

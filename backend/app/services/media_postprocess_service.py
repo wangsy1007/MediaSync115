@@ -18,7 +18,7 @@ class MediaPostprocessService:
             return None
 
         scopes: list[dict[str, str]] = []
-        seen: set[tuple[str, str, str]] = set()
+        seen: set[tuple[str, str]] = set()
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -28,10 +28,16 @@ class MediaPostprocessService:
             source_fid = str(item.get("source_fid") or "").strip()
             target_cid = str(item.get("target_cid") or "").strip()
             relative_prefix = str(item.get("target_desc") or "").strip()
-            if not source_fid or not target_cid or not relative_prefix:
+            expected_name = str(
+                item.get("new_filename") or item.get("expected_name") or ""
+            ).strip()
+            if not target_cid and not source_fid:
+                continue
+            if not relative_prefix:
                 continue
 
-            scope_key = (source_fid, target_cid, relative_prefix)
+            # 同季目录只保留一条 scope，整目录扫描拿到重命名后的文件名
+            scope_key = (target_cid or source_fid, relative_prefix)
             if scope_key in seen:
                 continue
             seen.add(scope_key)
@@ -40,6 +46,7 @@ class MediaPostprocessService:
                     "fid": source_fid,
                     "target_cid": target_cid,
                     "relative_prefix": relative_prefix,
+                    "expected_name": expected_name,
                 }
             )
         return scopes or None

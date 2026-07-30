@@ -155,8 +155,16 @@ class JobRegistry:
         return result
 
     async def _generate_strm_incremental(self, **kwargs) -> dict[str, Any]:
+        from app.services.archive_service import archive_service
         from app.services.strm_service import strm_service
         from app.services.transfer_queue_guard import defer_if_save_queue_busy
+
+        if archive_service.is_scan_running():
+            return {
+                "success": True,
+                "deferred": True,
+                "message": "归档扫描进行中，定时 STRM 已跳过（归档完成后会自动补跑）",
+            }
 
         deferred, result = await defer_if_save_queue_busy(
             "scheduler:strm_incremental",
@@ -175,8 +183,16 @@ class JobRegistry:
         return result
 
     async def _generate_strm_full(self, **kwargs) -> dict[str, Any]:
+        from app.services.archive_service import archive_service
         from app.services.strm_service import strm_service
         from app.services.transfer_queue_guard import defer_if_save_queue_busy
+
+        if archive_service.is_scan_running():
+            return {
+                "success": True,
+                "deferred": True,
+                "message": "归档扫描进行中，定时全量 STRM 已跳过",
+            }
 
         deferred, result = await defer_if_save_queue_busy(
             "scheduler:strm_full",

@@ -547,6 +547,17 @@ class ArchiveService:
                     "output_cid": output_cid,
                 },
             )
+            # 归档会先移动后重命名；若 STRM 同步扫正式库会写出旧文件名
+            try:
+                from app.services.strm_service import strm_service
+
+                if strm_service._is_generate_running():
+                    await strm_service.cancel_generate(
+                        clear_pending=False, reason="archive"
+                    )
+                    logger.info("归档开始前已中断进行中的 STRM 生成，避免未重命名文件名入库")
+            except Exception:
+                logger.exception("归档开始前取消 STRM 失败，继续归档")
             try:
                 # 阶段一：扫描监听目录下的所有视频+字幕文件
                 source_items = await self._scan_source_files(pan115, watch_cid)
@@ -853,6 +864,12 @@ class ArchiveService:
             summary,
             trigger=f"archive_{str(trigger or 'manual')}",
         )
+        try:
+            from app.services.strm_service import strm_service
+
+            await strm_service.kick_pending_after_archive()
+        except Exception:
+            logger.exception("归档后拉起排队 STRM 失败")
 
     # ================================================================
     #  阶段一：扫描源目录文件（参考 QMediaSync 两阶段扫描）
