@@ -155,7 +155,7 @@
               <div class="control-line">
                 <el-switch v-model="config.strm_early_redirect" />
               </div>
-              <p class="form-hint">SmartStrm 风格：PlaybackInfo 阶段提前返回 115 CDN 直链，缩短 ISO/原盘起播等待（实验性，部分客户端可能不兼容）。</p>
+              <p class="form-hint">PlaybackInfo 阶段提前返回 115 CDN 直链以缩短起播等待。115 CDN 会绑定申请时的 UA；HosPlayer 等客户端 API/拉流 UA 不一致时会 403，默认关闭。对这些客户端即使开启也会自动跳过，改走 stream-redirect。</p>
             </div>
           </el-form-item>
         </div>
@@ -281,7 +281,7 @@ const config = reactive({
   strm_refresh_feiniu_after_generate: false,
   strm_proxy_enabled: false,
   strm_proxy_port: 8099,
-  strm_early_redirect: true,
+  strm_early_redirect: false,
   strm_schedule_enabled: false,
   strm_incremental_interval_minutes: 360,
   archive_output_cid: '',
@@ -417,7 +417,7 @@ const applyConfig = (data) => {
   config.strm_refresh_feiniu_after_generate = !!data.strm_refresh_feiniu_after_generate
   config.strm_proxy_enabled = !!data.strm_proxy_enabled
   config.strm_proxy_port = Number(data.strm_proxy_port) || 8099
-  config.strm_early_redirect = data.strm_early_redirect !== false
+  config.strm_early_redirect = data.strm_early_redirect === true
   config.strm_schedule_enabled = !!data.strm_schedule_enabled
   config.strm_incremental_interval_minutes = Number(data.strm_incremental_interval_minutes) || 360
   config.archive_output_cid = data.archive_output_cid || ''

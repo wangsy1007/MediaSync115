@@ -758,8 +758,18 @@ async def _try_early_cdn_direct_url(
     *,
     user_agent: str,
 ) -> str:
-    """SmartStrm 首播优化：PlaybackInfo 阶段预解析 CDN 直链。"""
+    """SmartStrm 首播优化：PlaybackInfo 阶段预解析 CDN 直链。
+
+    注意：115 CDN（f=1）会绑定申请时的 User-Agent。HosPlayer 等客户端
+    API 请求 UA 与真正拉流的播放器内核 UA 经常不一致，提前注入 CDN
+    会导致起播 403。因此对已知敏感客户端直接跳过，走 stream-redirect。
+    """
     if not runtime_settings_service.get_strm_early_redirect():
+        return ""
+    ua = str(user_agent or "")
+    # HosPlayer / Infuse / VidHub 等常见“双 UA”客户端，禁止提前直链
+    if re.search(r"(?i)hosplayer|infuse|vidhub|senplayer|nplayer|filebox", ua):
+        logger.info("Skip early CDN for dual-UA client: %s", ua[:80])
         return ""
     mode = await _resolve_effective_redirect_mode(play_url, user_agent)
     if mode != "redirect":

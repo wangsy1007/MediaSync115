@@ -695,9 +695,31 @@ class TestIsoSmartStrmRedirect:
         changed = await rewrite_playback_info_for_strm_async(
             payload,
             item_id="11",
-            user_agent="VidHub/1.0",
+            user_agent="Emby/4.8.0",
         )
         assert changed is True
         assert payload["MediaSources"][0]["DirectStreamUrl"] == (
             "https://cdn.115.com/early.iso?f=1"
         )
+
+    @pytest.mark.asyncio
+    async def test_early_cdn_skipped_for_hosplayer(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            emby_proxy_module.runtime_settings_service,
+            "get_strm_early_redirect",
+            lambda: True,
+        )
+
+        called = {"n": 0}
+
+        async def fake_final(*args, **kwargs):
+            called["n"] += 1
+            return "https://cdn.115.com/bound.mp4?f=1"
+
+        monkeypatch.setattr(emby_proxy_module, "get_final_redirect_link", fake_final)
+        url = await emby_proxy_module._try_early_cdn_direct_url(
+            "http://example/api/115/url/video.mp4?pickcode=abc",
+            user_agent="HosPlayer/0.11.8",
+        )
+        assert url == ""
+        assert called["n"] == 0

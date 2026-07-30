@@ -210,7 +210,7 @@ class RuntimeSettingsService:
             "strm_token_secret": "",
             "strm_proxy_enabled": False,
             "strm_proxy_port": 8099,
-            "strm_early_redirect": True,
+            "strm_early_redirect": False,
             "strm_schedule_enabled": False,
             "strm_incremental_interval_minutes": 360,
             "strm_full_schedule_enabled": False,
@@ -1140,9 +1140,9 @@ class RuntimeSettingsService:
         return int(self._data.get("strm_proxy_port") or 8099)
 
     def get_strm_early_redirect(self) -> bool:
-        """SmartStrm 风格：PlaybackInfo 阶段提前返回 CDN 直链，缩短首播等待。"""
+        """PlaybackInfo 提前 CDN 直链（默认关：115 CDN 绑 UA，双 UA 客户端易 403）。"""
         if "strm_early_redirect" not in self._data:
-            return True
+            return False
         return bool(self._data.get("strm_early_redirect"))
 
     def get_strm_schedule_enabled(self) -> bool:
