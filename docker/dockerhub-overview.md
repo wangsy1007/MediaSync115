@@ -31,7 +31,7 @@
 | Tag | 说明 |
 |-----|------|
 | `latest` | 最新稳定版，推荐 NAS 及日常部署使用（NAS 更容易识别到「可更新」） |
-| `1.3.4` | 锁定版本，避免自动漂移 |
+| `1.3.5` | 锁定版本，避免自动漂移 |
 
 多架构镜像，`docker pull` 会按宿主机平台自动选择 `amd64` / `arm64`。
 
@@ -132,11 +132,11 @@ docker compose pull && docker compose up -d
 
 ---
 
-## 📝 更新记录（1.3.4）
+## 📝 更新记录（1.3.5）
 
-- HDHive ed2k 离线转存；115 离线任务已存在按成功处理
-- 归档标题清洗与发行年份解析优化；STRM 状态精简并移除每周全量定时
-- 日志分类筛选；设置页 Tab 可拖动；移动端标题统一为 MediaSync115
-- TG 索引任务分页；下载/归档/STRM 表单排版优化
+- Emby 媒体库封面生成；归档覆盖模式对齐 MoviePilot；全库去重
+- 修复 STRM 在归档重命名前抢扫、无缺集订阅清理外键失败
+- 修复剧集重复入库/误归档电影库；HosPlayer 播放取链与 UA 403
+- 修复季号拆分、缺集检查失败整包重复转存；TMDB 健康检测假失败
 
 完整更新日志见 GitHub 仓库 [`CHANGELOG.md`](https://github.com/wangsy1007/MediaSync115/blob/master/CHANGELOG.md)。

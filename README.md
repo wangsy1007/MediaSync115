@@ -106,11 +106,11 @@ Docker Hub 页面：
 https://hub.docker.com/r/wangsy1007/mediasync115
 ```
 
-当前提供 `latest` 和明确版本号 tag，例如 `1.3.4`；多架构镜像支持 linux/amd64 和 linux/arm64，Docker 客户端会按宿主机平台自动选择对应版本。
+当前提供 `latest` 和明确版本号 tag，例如 `1.3.5`；多架构镜像支持 linux/amd64 和 linux/arm64，Docker 客户端会按宿主机平台自动选择对应版本。
 
 推荐策略：
 - 日常部署和 NAS 手动更新用户：使用 `latest`
-- 想锁定版本不自动漂移：使用 `1.3.4`
+- 想锁定版本不自动漂移：使用 `1.3.5`
 
 ### 1. 准备数据目录
 
@@ -314,7 +314,7 @@ docker compose up -d
 ### 3. 版本选择建议
 
 - 使用 `latest`：适合绝大多数 NAS 用户，能更容易被平台识别到有更新
-- 使用固定版本 tag，例如 `1.3.4`：适合想锁版本的用户，但通常不会收到“新版本可更新”提示
+- 使用固定版本 tag，例如 `1.3.5`：适合想锁版本的用户，但通常不会收到“新版本可更新”提示
 
 ## 上线前验证（Pre-release Check）
 
@@ -357,6 +357,12 @@ chmod +x scripts/prerelease_check.sh
 - 前端单独跑 UI：`cd frontend && npm run test:smoke`（健康检查默认走 `http://127.0.0.1:5173/healthz`）
 
 ## Changelog
+
+`1.3.5` 重点更新：
+- Emby 媒体库封面生成；归档覆盖模式对齐 MoviePilot；全库去重
+- 修复 STRM 在归档重命名前抢扫、无缺集订阅清理外键失败
+- 修复剧集重复入库/误归档电影库；HosPlayer 播放取链与 UA 403
+- 修复季号拆分、缺集检查失败整包重复转存；TMDB 健康检测假失败
 
 `1.3.4` 重点更新：
 - HDHive ed2k 离线转存；115 离线任务已存在按成功处理
