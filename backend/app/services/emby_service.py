@@ -1,9 +1,13 @@
+import base64
+import logging
 import time
 from typing import Any, Set, Tuple
 
 import httpx
 from app.core.config import settings
 from app.utils.proxy import create_direct_httpx_client
+
+logger = logging.getLogger(__name__)
 
 _EMBY_HTTP_TIMEOUT = httpx.Timeout(15.0, connect=10.0)
 _EMBY_HTTP_LIMITS = httpx.Limits(max_connections=20, max_keepalive_connections=10)
@@ -743,7 +747,10 @@ class EmbyService:
         *,
         content_type: str = "image/jpeg",
     ) -> bool:
-        """上传 Primary 图片到 Emby 条目（媒体库封面即 CollectionFolder）。"""
+        """上传 Primary 图片到 Emby 条目（媒体库封面即 CollectionFolder）。
+
+        Emby API 要求 body 为 Base64 编码的图片数据（非原始二进制）。
+        """
         normalized_id = str(item_id or "").strip()
         if (
             not normalized_id
@@ -755,6 +762,9 @@ class EmbyService:
         client = self._get_client()
         headers = {"Content-Type": content_type or "image/jpeg"}
         params = {"api_key": self.api_key}
+        # Emby: "Uploads an image for an item, must be base64 encoded."
+        payload = base64.b64encode(image_bytes)
+        last_error = ""
         for endpoint in (
             f"/emby/Items/{normalized_id}/Images/Primary",
             f"/Items/{normalized_id}/Images/Primary",
@@ -764,13 +774,23 @@ class EmbyService:
                     f"{self.base_url}{endpoint}",
                     params=params,
                     headers=headers,
-                    content=image_bytes,
+                    content=payload,
                     timeout=60.0,
                 )
                 if response.status_code in (200, 204):
                     return True
-            except Exception:
+                last_error = (
+                    f"{response.status_code} {(response.text or '')[:200]}"
+                )
+            except Exception as exc:
+                last_error = str(exc)[:200]
                 continue
+        if last_error:
+            logger.warning(
+                "Emby 上传封面失败 item_id=%s: %s",
+                normalized_id,
+                last_error,
+            )
         return False
 
     async def refresh_library(self):
