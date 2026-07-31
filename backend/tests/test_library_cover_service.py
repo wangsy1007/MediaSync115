@@ -32,6 +32,7 @@ def test_compose_grid_cover():
         title="电影",
         width=960,
         height=540,
+        font_size=48,
     )
     assert cover.size == (960, 540)
     buf = BytesIO()
@@ -43,10 +44,29 @@ def test_compose_blur_and_single_cover():
     service = LibraryCoverService()
     posters = _sample_posters(5)
     blur = service._compose_cover(
-        posters, style="blur", title="剧集", width=1280, height=720
+        posters,
+        style="blur",
+        title="剧集",
+        width=1280,
+        height=720,
+        font_key="default",
+        font_size=64,
     )
     single = service._compose_cover(
-        posters, style="single", title="动漫", width=1280, height=720
+        posters,
+        style="single",
+        title="动漫",
+        width=1280,
+        height=720,
+        font_key="auto",
+        font_size=0,
     )
     assert blur.size == (1280, 720)
     assert single.size == (1280, 720)
+
+
+def test_list_available_fonts_includes_auto():
+    fonts = LibraryCoverService().list_available_fonts()
+    keys = {item["key"] for item in fonts}
+    assert "auto" in keys
+    assert "default" in keys

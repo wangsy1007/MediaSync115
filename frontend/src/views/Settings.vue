@@ -622,10 +622,37 @@
             <el-form-item label="显示库名标题">
               <el-switch v-model="libraryCoverForm.showTitle" />
             </el-form-item>
-            <el-form-item label="上传到 Emby">
+            <el-form-item label="标题字体">
+              <el-select
+                v-model="libraryCoverForm.font"
+                style="width: 280px"
+                :disabled="!libraryCoverForm.showTitle"
+              >
+                <el-option
+                  v-for="font in libraryCoverFonts"
+                  :key="font.key"
+                  :label="font.available ? font.label : `${font.label}（不可用）`"
+                  :value="font.key"
+                  :disabled="!font.available && font.key !== 'auto' && font.key !== 'default'"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="标题字号">
+              <div>
+                <el-input-number
+                  v-model="libraryCoverForm.fontSize"
+                  :min="0"
+                  :max="240"
+                  :step="2"
+                  :disabled="!libraryCoverForm.showTitle"
+                />
+                <p class="form-hint">0 表示按封面尺寸自动计算；建议 48–120</p>
+              </div>
+            </el-form-item>
+            <el-form-item label="定时自动上传">
               <div>
                 <el-switch v-model="libraryCoverForm.upload" />
-                <p class="form-hint">关闭时只生成到 data/library_covers，不覆盖 Emby 封面</p>
+                <p class="form-hint">仅影响定时任务；手动请先预览，确认后再上传</p>
               </div>
             </el-form-item>
             <el-form-item label="排除媒体库">
@@ -658,12 +685,58 @@
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingLibraryCover" @click="handleSaveLibraryCover">保存</el-button>
-              <el-button type="warning" :loading="runningLibraryCover" :disabled="!libraryCoverForm.enabled" @click="handleRunLibraryCover">
-                立即生成
+              <el-button type="warning" :loading="runningLibraryCover" :disabled="!libraryCoverForm.enabled" @click="handlePreviewLibraryCover">
+                生成预览
+              </el-button>
+              <el-button
+                type="success"
+                :loading="confirmingLibraryCoverUpload"
+                :disabled="!libraryCoverForm.enabled || !libraryCoverPreviewItems.length"
+                @click="handleConfirmLibraryCoverUpload"
+              >
+                确认上传
               </el-button>
               <el-button :loading="refreshingLibraryCoverStatus" @click="fetchLibraryCoverStatus">刷新状态</el-button>
             </el-form-item>
           </el-form>
+
+          <el-dialog
+            v-model="libraryCoverPreviewVisible"
+            title="媒体库封面预览"
+            width="860px"
+            destroy-on-close
+          >
+            <p class="form-hint" style="margin-top: 0">确认效果后点击「上传到 Emby」；也可仅保留本地预览文件。</p>
+            <div class="library-cover-preview-grid">
+              <div
+                v-for="item in libraryCoverPreviewItems"
+                :key="item.library_id || item.name"
+                class="library-cover-preview-card"
+              >
+                <div class="library-cover-preview-title">{{ item.name }}</div>
+                <el-image
+                  v-if="item.preview_url || item.filename"
+                  :src="item.preview_url || settingsApi.libraryCoverImageUrl(item.filename)"
+                  fit="cover"
+                  style="width: 100%; height: 160px; border-radius: 8px"
+                  :preview-src-list="[item.preview_url || settingsApi.libraryCoverImageUrl(item.filename)]"
+                />
+                <el-empty v-else description="无预览图" :image-size="56" />
+                <div class="library-cover-preview-meta">{{ item.message || item.status }}</div>
+              </div>
+            </div>
+            <template #footer>
+              <el-button @click="libraryCoverPreviewVisible = false">关闭</el-button>
+              <el-button
+                type="primary"
+                :loading="confirmingLibraryCoverUpload"
+                :disabled="!libraryCoverPreviewItems.length"
+                @click="handleConfirmLibraryCoverUpload"
+              >
+                上传到 Emby
+              </el-button>
+            </template>
+          </el-dialog>
 
           <div class="user-info">
             <el-divider />
@@ -2224,9 +2297,19 @@ const libraryCoverForm = ref({
   exclude: ['Playlists', '合集'],
   width: 1920,
   height: 1080,
+  font: 'auto',
+  fontSize: 0,
   scheduleEnabled: false,
   scheduleCron: '0 3 * * *'
 })
+const libraryCoverFonts = ref([
+  { key: 'auto', label: '自动（优先文泉驿正黑）', available: true },
+  { key: 'default', label: 'Pillow 默认字体', available: true }
+])
+const libraryCoverPreviewVisible = ref(false)
+const libraryCoverPreviewItems = ref([])
+const confirmingLibraryCoverUpload = ref(false)
+const libraryCoverAwaitingPreview = ref(false)
 const feiniuForm = ref({
   url: '',
   syncEnabled: false,
@@ -4087,6 +4170,29 @@ const startLibraryCoverPolling = () => {
   }, 3000)
 }
 
+const fetchLibraryCoverFonts = async () => {
+  try {
+    const { data } = await settingsApi.listLibraryCoverFonts()
+    const items = Array.isArray(data?.items) ? data.items : []
+    if (items.length) libraryCoverFonts.value = items
+  } catch {
+    // 字体列表失败时保留默认选项
+  }
+}
+
+const syncLibraryCoverPreviewFromSummary = (summary) => {
+  const items = Array.isArray(summary?.items) ? summary.items : []
+  libraryCoverPreviewItems.value = items
+    .filter((item) => ['success', 'preview'].includes(String(item?.status || '')))
+    .filter((item) => item?.filename || item?.preview_url || item?.path)
+    .map((item) => ({
+      ...item,
+      preview_url:
+        item.preview_url
+        || (item.filename ? settingsApi.libraryCoverImageUrl(item.filename) : '')
+    }))
+}
+
 const fetchLibraryCoverStatus = async (notifyOnError = false) => {
   refreshingLibraryCoverStatus.value = true
   try {
@@ -4099,8 +4205,22 @@ const fetchLibraryCoverStatus = async (notifyOnError = false) => {
     libraryCoverStatus.lastError = data.last_error || ''
     libraryCoverStatus.lastSummary = data.last_summary || null
     runningLibraryCover.value = !!data.running
-    if (data.running) startLibraryCoverPolling()
-    else stopLibraryCoverPolling()
+    if (data.running) {
+      startLibraryCoverPolling()
+    } else {
+      stopLibraryCoverPolling()
+      if (libraryCoverAwaitingPreview.value) {
+        libraryCoverAwaitingPreview.value = false
+        syncLibraryCoverPreviewFromSummary(data.last_summary)
+        if (libraryCoverPreviewItems.value.length) {
+          libraryCoverPreviewVisible.value = true
+        } else if (data.last_error) {
+          ElMessage.error(data.last_error)
+        } else {
+          ElMessage.warning('预览完成，但没有可展示的封面')
+        }
+      }
+    }
   } catch (error) {
     if (notifyOnError) {
       ElMessage.error(error.response?.data?.detail || error.message || '获取封面生成状态失败')
@@ -4110,10 +4230,10 @@ const fetchLibraryCoverStatus = async (notifyOnError = false) => {
   }
 }
 
-const handleSaveLibraryCover = async () => {
+const handleSaveLibraryCover = async ({ silent = false } = {}) => {
   if (libraryCoverForm.value.enabled && !String(embyForm.value.url || '').trim()) {
     ElMessage.warning('请先配置 Emby URL')
-    return
+    throw new Error('请先配置 Emby URL')
   }
   savingLibraryCover.value = true
   try {
@@ -4129,29 +4249,56 @@ const handleSaveLibraryCover = async () => {
         : [],
       library_cover_width: Number(libraryCoverForm.value.width || 1920),
       library_cover_height: Number(libraryCoverForm.value.height || 1080),
+      library_cover_font: libraryCoverForm.value.font || 'auto',
+      library_cover_font_size: Number(libraryCoverForm.value.fontSize || 0),
       library_cover_schedule_enabled: !!libraryCoverForm.value.scheduleEnabled,
       library_cover_schedule_cron: libraryCoverForm.value.scheduleCron || '0 3 * * *'
     })
     await fetchRuntimeSettings()
     await fetchLibraryCoverStatus(false)
-    ElMessage.success('媒体库封面配置已保存')
+    if (!silent) {
+      ElMessage.success('媒体库封面配置已保存')
+    }
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '媒体库封面配置保存失败')
+    if (error?.message !== '请先配置 Emby URL') {
+      ElMessage.error(error.response?.data?.detail || '媒体库封面配置保存失败')
+    }
+    throw error
   } finally {
     savingLibraryCover.value = false
   }
 }
 
-const handleRunLibraryCover = async () => {
+const handlePreviewLibraryCover = async () => {
   runningLibraryCover.value = true
+  libraryCoverPreviewVisible.value = false
+  libraryCoverAwaitingPreview.value = true
   try {
-    const { data } = await settingsApi.runLibraryCover()
-    ElMessage.success(data.message || '已开始生成媒体库封面')
+    await handleSaveLibraryCover({ silent: true })
+    const { data } = await settingsApi.previewLibraryCover()
+    ElMessage.success(data.message || '已开始生成预览')
     startLibraryCoverPolling()
     await fetchLibraryCoverStatus(false)
   } catch (error) {
-    ElMessage.error(error.response?.data?.detail || '启动封面生成失败')
+    libraryCoverAwaitingPreview.value = false
+    if (error?.message !== '请先配置 Emby URL') {
+      ElMessage.error(error.response?.data?.detail || error.message || '启动封面预览失败')
+    }
     runningLibraryCover.value = false
+  }
+}
+
+const handleConfirmLibraryCoverUpload = async () => {
+  confirmingLibraryCoverUpload.value = true
+  try {
+    const { data } = await settingsApi.confirmLibraryCoverUpload()
+    ElMessage.success(data.message || '封面已上传到 Emby')
+    libraryCoverPreviewVisible.value = false
+    await fetchLibraryCoverStatus(false)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.detail || '上传封面失败')
+  } finally {
+    confirmingLibraryCoverUpload.value = false
   }
 }
 
@@ -5097,6 +5244,8 @@ const fetchRuntimeSettings = async () => {
       : ['Playlists', '合集']
     libraryCoverForm.value.width = Number(data.library_cover_width || 1920)
     libraryCoverForm.value.height = Number(data.library_cover_height || 1080)
+    libraryCoverForm.value.font = data.library_cover_font || 'auto'
+    libraryCoverForm.value.fontSize = Number(data.library_cover_font_size || 0)
     libraryCoverForm.value.scheduleEnabled = !!data.library_cover_schedule_enabled
     libraryCoverForm.value.scheduleCron = data.library_cover_schedule_cron || '0 3 * * *'
     feiniuForm.value.url = data.feiniu_url || ''
@@ -5671,6 +5820,7 @@ const ensureSettingsTabLoaded = (tab) => {
       }
       fetchEmbySyncStatus(false)
       fetchLibraryCoverStatus(false)
+      fetchLibraryCoverFonts()
       break
     case 'feiniu':
       if (String(feiniuForm.value.url || '').trim()) {
@@ -6359,5 +6509,32 @@ onBeforeUnmount(() => {
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+.library-cover-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.library-cover-preview-card {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--el-fill-color-blank);
+}
+
+.library-cover-preview-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-cover-preview-meta {
+  margin-top: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 </style>

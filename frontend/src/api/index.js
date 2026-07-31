@@ -337,7 +337,14 @@ export const settingsApi = {
   runEmbySync: () => api.post('/settings/emby/sync/run'),
   getLibraryCoverStatus: () => api.get('/settings/library-cover/status'),
   listLibraryCoverLibraries: () => api.get('/settings/library-cover/libraries'),
+  listLibraryCoverFonts: () => api.get('/settings/library-cover/fonts'),
   runLibraryCover: () => api.post('/settings/library-cover/run', null, { timeout: 120000 }),
+  previewLibraryCover: () => api.post('/settings/library-cover/preview', null, { timeout: 120000 }),
+  confirmLibraryCoverUpload: () => api.post('/settings/library-cover/confirm-upload', null, { timeout: 120000 }),
+  libraryCoverImageUrl: (filename) => {
+    const name = encodeURIComponent(String(filename || '').trim())
+    return `/api/settings/library-cover/image/${name}`
+  },
   getFeiniuSyncStatus: () => api.get('/settings/feiniu/sync/status'),
   runFeiniuSync: () => api.post('/settings/feiniu/sync/run'),
   checkAllHealth: () => api.get('/settings/health/all'),

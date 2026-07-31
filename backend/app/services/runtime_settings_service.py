@@ -132,6 +132,8 @@ class RuntimeSettingsService:
             "library_cover_title_map": {},
             "library_cover_width": 1920,
             "library_cover_height": 1080,
+            "library_cover_font": "auto",
+            "library_cover_font_size": 0,
             "library_cover_schedule_enabled": False,
             "library_cover_schedule_cron": "0 3 * * *",
             "feiniu_url": settings.FEINIU_URL or "",
@@ -828,6 +830,30 @@ class RuntimeSettingsService:
             return max(360, min(2160, int(self._data.get("library_cover_height", 1080))))
         except (TypeError, ValueError):
             return 1080
+
+    def get_library_cover_font(self) -> str:
+        value = str(self._data.get("library_cover_font") or "auto").strip().lower()
+        allowed = {
+            "auto",
+            "wqy-zenhei",
+            "wqy-zenhei-alt",
+            "noto-cjk",
+            "noto-cjk-otf",
+            "msyh",
+            "simhei",
+            "default",
+        }
+        return value if value in allowed else "auto"
+
+    def get_library_cover_font_size(self) -> int:
+        """0 表示按封面尺寸自动计算。"""
+        try:
+            value = int(self._data.get("library_cover_font_size", 0))
+        except (TypeError, ValueError):
+            return 0
+        if value <= 0:
+            return 0
+        return max(24, min(240, value))
 
     def get_library_cover_schedule_enabled(self) -> bool:
         return bool(self._data.get("library_cover_schedule_enabled", False))
@@ -1735,6 +1761,8 @@ class RuntimeSettingsService:
             "library_cover_title_map": self.get_library_cover_title_map(),
             "library_cover_width": self.get_library_cover_width(),
             "library_cover_height": self.get_library_cover_height(),
+            "library_cover_font": self.get_library_cover_font(),
+            "library_cover_font_size": self.get_library_cover_font_size(),
             "library_cover_schedule_enabled": self.get_library_cover_schedule_enabled(),
             "library_cover_schedule_cron": self.get_library_cover_schedule_cron(),
             "feiniu_url": self.get_feiniu_url(),

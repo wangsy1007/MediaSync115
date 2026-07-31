@@ -1,7 +1,7 @@
 """Emby 媒体库封面生成。
 
 参考 jellyfin-library-poster / MoviePilot MediaCoverGenerator：
-从媒体库取最新海报拼图，生成封面并可选上传到 Emby。
+从媒体库取最新海报拼图，生成封面；支持预览确认后再上传 Emby。
 """
 
 from __future__ import annotations
@@ -11,9 +11,11 @@ import colorsys
 import io
 import logging
 import random
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
@@ -33,14 +35,18 @@ LIBRARY_COVER_SORTS = (
     "SortName",
 )
 
-_FONT_CANDIDATES = (
-    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-    "/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc",
-    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "C:/Windows/Fonts/msyh.ttc",
-    "C:/Windows/Fonts/simhei.ttf",
+_FONT_CATALOG: tuple[tuple[str, str, str], ...] = (
+    ("auto", "自动（优先文泉驿正黑）", ""),
+    ("wqy-zenhei", "文泉驿正黑", "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
+    ("wqy-zenhei-alt", "文泉驿正黑（备用路径）", "/usr/share/fonts/wqy-zenhei/wqy-zenhei.ttc"),
+    ("noto-cjk", "Noto Sans CJK", "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+    ("noto-cjk-otf", "Noto Sans CJK OpenType", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+    ("msyh", "微软雅黑", "C:/Windows/Fonts/msyh.ttc"),
+    ("simhei", "黑体", "C:/Windows/Fonts/simhei.ttf"),
+    ("default", "Pillow 默认字体", ""),
 )
+
+_SAFE_FILENAME_RE = re.compile(r"^[\w\u4e00-\u9fff .\-()]+$", re.UNICODE)
 
 
 class LibraryCoverService:
@@ -52,6 +58,7 @@ class LibraryCoverService:
         self._last_trigger: str = ""
         self._last_error: str = ""
         self._last_summary: dict[str, Any] | None = None
+        self._pending_upload_items: list[dict[str, Any]] = []
 
     def get_runtime_status(self) -> dict[str, Any]:
         return {
@@ -65,6 +72,7 @@ class LibraryCoverService:
             "last_trigger": self._last_trigger,
             "last_error": self._last_error,
             "last_summary": self._last_summary,
+            "pending_upload_count": len(self._pending_upload_items),
         }
 
     def get_output_dir(self) -> Path:
@@ -72,16 +80,149 @@ class LibraryCoverService:
         root.mkdir(parents=True, exist_ok=True)
         return root
 
-    async def start_generate(self, *, trigger: str = "manual") -> dict[str, Any]:
+    def list_available_fonts(self) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for key, label, path in _FONT_CATALOG:
+            available = key in {"auto", "default"} or (bool(path) and Path(path).exists())
+            items.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "path": path,
+                    "available": available,
+                }
+            )
+        return items
+
+    def resolve_cover_path(self, filename: str) -> Path | None:
+        name = str(filename or "").strip()
+        if not name or "/" in name or "\\" in name or ".." in name:
+            return None
+        if not _SAFE_FILENAME_RE.match(name):
+            return None
+        path = (self.get_output_dir() / name).resolve()
+        root = self.get_output_dir().resolve()
+        if not str(path).startswith(str(root)):
+            return None
+        if not path.is_file():
+            return None
+        return path
+
+    async def start_generate(
+        self,
+        *,
+        trigger: str = "manual",
+        upload_override: bool | None = None,
+    ) -> dict[str, Any]:
         if self._running:
             return {"started": False, "message": "媒体库封面生成正在进行中"}
         if not runtime_settings_service.get_emby_url() or not runtime_settings_service.get_emby_api_key():
             return {"started": False, "message": "请先配置 Emby URL 与 API Key"}
 
-        asyncio.create_task(self._run_safe(trigger=trigger))
-        return {"started": True, "message": "已开始生成媒体库封面"}
+        asyncio.create_task(
+            self._run_safe(trigger=trigger, upload_override=upload_override)
+        )
+        return {
+            "started": True,
+            "message": (
+                "已开始生成预览"
+                if upload_override is False
+                else "已开始生成媒体库封面"
+            ),
+            "preview": upload_override is False,
+        }
 
-    async def _run_safe(self, *, trigger: str) -> None:
+    async def start_preview(self, *, trigger: str = "manual_preview") -> dict[str, Any]:
+        return await self.start_generate(trigger=trigger, upload_override=False)
+
+    async def confirm_upload_pending(self) -> dict[str, Any]:
+        """将最近一次预览生成的封面上传到 Emby。"""
+        if self._running:
+            return {"success": False, "message": "封面生成进行中，请稍后再上传"}
+        items = list(self._pending_upload_items)
+        if not items:
+            # 兼容：从最近 summary 恢复可上传项
+            summary = self._last_summary if isinstance(self._last_summary, dict) else {}
+            for item in summary.get("items") or []:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("status") not in {"success", "preview"}:
+                    continue
+                library_id = str(item.get("library_id") or "").strip()
+                path = str(item.get("path") or "").strip()
+                if library_id and path:
+                    items.append(
+                        {
+                            "library_id": library_id,
+                            "name": str(item.get("name") or ""),
+                            "path": path,
+                        }
+                    )
+        if not items:
+            return {"success": False, "message": "没有可上传的预览封面，请先生成预览"}
+
+        result: dict[str, Any] = {
+            "success": True,
+            "total": len(items),
+            "uploaded": 0,
+            "failed": 0,
+            "items": [],
+        }
+        for item in items:
+            library_id = str(item.get("library_id") or "").strip()
+            name = str(item.get("name") or "").strip() or library_id
+            path = Path(str(item.get("path") or ""))
+            if not library_id or not path.is_file():
+                result["failed"] += 1
+                result["items"].append(
+                    {
+                        "name": name,
+                        "status": "failed",
+                        "message": "预览文件不存在",
+                    }
+                )
+                continue
+            image_bytes = await asyncio.to_thread(path.read_bytes)
+            uploaded = await emby_service.upload_item_primary_image(
+                library_id, image_bytes, content_type="image/jpeg"
+            )
+            if uploaded:
+                result["uploaded"] += 1
+                result["items"].append(
+                    {"name": name, "status": "success", "message": "已上传"}
+                )
+            else:
+                result["failed"] += 1
+                result["items"].append(
+                    {
+                        "name": name,
+                        "status": "failed",
+                        "message": "上传 Emby 失败",
+                    }
+                )
+
+        if result["failed"] == 0:
+            self._pending_upload_items = []
+        result["success"] = result["failed"] == 0
+        result["message"] = (
+            f"上传完成：成功 {result['uploaded']}，失败 {result['failed']}"
+        )
+        await operation_log_service.log_background_event(
+            source_type="api",
+            module="library_cover",
+            action="library_cover.confirm_upload",
+            status="success" if result["success"] else "warning",
+            message=result["message"],
+            extra=result,
+        )
+        return result
+
+    async def _run_safe(
+        self,
+        *,
+        trigger: str,
+        upload_override: bool | None = None,
+    ) -> None:
         async with self._lock:
             if self._running:
                 return
@@ -90,7 +231,9 @@ class LibraryCoverService:
             self._last_trigger = trigger
             self._last_error = ""
             try:
-                summary = await self.generate_all(trigger=trigger)
+                summary = await self.generate_all(
+                    trigger=trigger, upload_override=upload_override
+                )
                 self._last_summary = summary
             except Exception as exc:
                 self._last_error = str(exc) or "未知错误"
@@ -107,12 +250,21 @@ class LibraryCoverService:
                 self._running = False
                 self._last_finished_at = beijing_now()
 
-    async def generate_all(self, *, trigger: str = "manual") -> dict[str, Any]:
+    async def generate_all(
+        self,
+        *,
+        trigger: str = "manual",
+        upload_override: bool | None = None,
+    ) -> dict[str, Any]:
         style = runtime_settings_service.get_library_cover_style()
         sort_by = runtime_settings_service.get_library_cover_sort_by()
         poster_count = runtime_settings_service.get_library_cover_poster_count()
         show_title = runtime_settings_service.get_library_cover_show_title()
-        upload = runtime_settings_service.get_library_cover_upload()
+        upload = (
+            bool(upload_override)
+            if upload_override is not None
+            else runtime_settings_service.get_library_cover_upload()
+        )
         exclude = {
             name.casefold()
             for name in runtime_settings_service.get_library_cover_exclude()
@@ -120,6 +272,9 @@ class LibraryCoverService:
         title_map = runtime_settings_service.get_library_cover_title_map()
         width = runtime_settings_service.get_library_cover_width()
         height = runtime_settings_service.get_library_cover_height()
+        font_key = runtime_settings_service.get_library_cover_font()
+        font_size = runtime_settings_service.get_library_cover_font_size()
+        is_preview = upload_override is False
 
         libraries = await emby_service.list_media_libraries()
         summary: dict[str, Any] = {
@@ -127,20 +282,27 @@ class LibraryCoverService:
             "style": style,
             "sort_by": sort_by,
             "upload": upload,
+            "preview": is_preview,
+            "font": font_key,
+            "font_size": font_size,
             "total": 0,
             "success": 0,
             "skipped": 0,
             "failed": 0,
             "items": [],
         }
+        pending: list[dict[str, Any]] = []
 
         await operation_log_service.log_background_event(
             source_type="background_task",
             module="library_cover",
             action="library_cover.start",
             status="info",
-            message=f"开始生成媒体库封面（风格={style}，排序={sort_by}）",
-            extra={"trigger": trigger, "libraries": len(libraries)},
+            message=(
+                f"开始{'预览' if is_preview else '生成'}媒体库封面"
+                f"（风格={style}，排序={sort_by}）"
+            ),
+            extra={"trigger": trigger, "libraries": len(libraries), "preview": is_preview},
         )
 
         for library in libraries:
@@ -169,10 +331,21 @@ class LibraryCoverService:
                     upload=upload,
                     width=width,
                     height=height,
+                    font_key=font_key,
+                    font_size=font_size,
+                    preview_mode=is_preview,
                 )
                 summary["items"].append(result)
-                if result.get("status") == "success":
+                if result.get("status") in {"success", "preview"}:
                     summary["success"] += 1
+                    if result.get("path") and result.get("library_id"):
+                        pending.append(
+                            {
+                                "library_id": result["library_id"],
+                                "name": result.get("name") or name,
+                                "path": result["path"],
+                            }
+                        )
                 elif result.get("status") == "skipped":
                     summary["skipped"] += 1
                 else:
@@ -188,13 +361,18 @@ class LibraryCoverService:
                 )
                 logger.warning("媒体库封面生成失败 name=%s: %s", name, exc)
 
+        if is_preview:
+            self._pending_upload_items = pending
+        elif upload:
+            self._pending_upload_items = []
+
         await operation_log_service.log_background_event(
             source_type="background_task",
             module="library_cover",
             action="library_cover.finish",
             status="success" if summary["failed"] == 0 else "warning",
             message=(
-                f"媒体库封面生成完成：成功 {summary['success']}，"
+                f"媒体库封面{'预览' if is_preview else '生成'}完成：成功 {summary['success']}，"
                 f"跳过 {summary['skipped']}，失败 {summary['failed']}"
             ),
             extra=summary,
@@ -214,6 +392,9 @@ class LibraryCoverService:
         upload: bool,
         width: int,
         height: int,
+        font_key: str,
+        font_size: int,
+        preview_mode: bool,
     ) -> dict[str, Any]:
         items = await emby_service.list_library_poster_items(
             library_id,
@@ -223,6 +404,7 @@ class LibraryCoverService:
         if not items:
             return {
                 "name": library_name,
+                "library_id": library_id,
                 "status": "skipped",
                 "message": "媒体库无可用海报",
             }
@@ -243,11 +425,11 @@ class LibraryCoverService:
         if not images:
             return {
                 "name": library_name,
+                "library_id": library_id,
                 "status": "skipped",
                 "message": "海报下载失败",
             }
 
-        # 不足数量时循环补齐（与 jellyfin-library-poster 一致）
         while len(images) < poster_count:
             images.append(images[len(images) % len(images)].copy())
 
@@ -258,6 +440,8 @@ class LibraryCoverService:
             title=display_title if show_title else "",
             width=width,
             height=height,
+            font_key=font_key,
+            font_size=font_size,
         )
 
         output_dir = self.get_output_dir()
@@ -267,28 +451,45 @@ class LibraryCoverService:
         ).strip() or library_id
         output_path = output_dir / f"{safe_name}.jpg"
         await asyncio.to_thread(cover.save, output_path, "JPEG", quality=92, optimize=True)
+        preview_url = f"/api/settings/library-cover/image/{quote(output_path.name)}"
 
-        uploaded = False
-        if upload:
-            buf = io.BytesIO()
-            cover.save(buf, format="JPEG", quality=92, optimize=True)
-            uploaded = await emby_service.upload_item_primary_image(
-                library_id, buf.getvalue(), content_type="image/jpeg"
-            )
-            if not uploaded:
-                return {
-                    "name": library_name,
-                    "status": "failed",
-                    "message": "封面已生成但上传 Emby 失败",
-                    "path": str(output_path),
-                }
+        if preview_mode or not upload:
+            return {
+                "name": library_name,
+                "library_id": library_id,
+                "status": "preview" if preview_mode else "success",
+                "message": "预览已生成" if preview_mode else "已生成本地预览",
+                "path": str(output_path),
+                "filename": output_path.name,
+                "preview_url": preview_url,
+                "uploaded": False,
+            }
+
+        buf = io.BytesIO()
+        cover.save(buf, format="JPEG", quality=92, optimize=True)
+        uploaded = await emby_service.upload_item_primary_image(
+            library_id, buf.getvalue(), content_type="image/jpeg"
+        )
+        if not uploaded:
+            return {
+                "name": library_name,
+                "library_id": library_id,
+                "status": "failed",
+                "message": "封面已生成但上传 Emby 失败",
+                "path": str(output_path),
+                "filename": output_path.name,
+                "preview_url": preview_url,
+            }
 
         return {
             "name": library_name,
+            "library_id": library_id,
             "status": "success",
-            "message": "已上传" if uploaded else "已生成本地预览",
+            "message": "已上传",
             "path": str(output_path),
-            "uploaded": uploaded,
+            "filename": output_path.name,
+            "preview_url": preview_url,
+            "uploaded": True,
         }
 
     def _compose_cover(
@@ -299,13 +500,36 @@ class LibraryCoverService:
         title: str,
         width: int,
         height: int,
+        font_key: str = "auto",
+        font_size: int = 0,
     ) -> Image.Image:
         style_key = (style or "grid").strip().lower()
         if style_key == "blur":
-            return self._style_blur(posters, title=title, width=width, height=height)
+            return self._style_blur(
+                posters,
+                title=title,
+                width=width,
+                height=height,
+                font_key=font_key,
+                font_size=font_size,
+            )
         if style_key == "single":
-            return self._style_single(posters, title=title, width=width, height=height)
-        return self._style_grid(posters, title=title, width=width, height=height)
+            return self._style_single(
+                posters,
+                title=title,
+                width=width,
+                height=height,
+                font_key=font_key,
+                font_size=font_size,
+            )
+        return self._style_grid(
+            posters,
+            title=title,
+            width=width,
+            height=height,
+            font_key=font_key,
+            font_size=font_size,
+        )
 
     def _style_grid(
         self,
@@ -314,6 +538,8 @@ class LibraryCoverService:
         title: str,
         width: int,
         height: int,
+        font_key: str,
+        font_size: int,
     ) -> Image.Image:
         canvas = Image.new("RGB", (width, height), (18, 18, 22))
         cols = 3
@@ -328,7 +554,9 @@ class LibraryCoverService:
             y = gap + (idx // cols) * (cell_h + gap)
             canvas.paste(tile, (x, y))
         if title:
-            self._draw_title_banner(canvas, title)
+            self._draw_title_banner(
+                canvas, title, font_key=font_key, font_size=font_size
+            )
         return canvas
 
     def _style_blur(
@@ -338,13 +566,14 @@ class LibraryCoverService:
         title: str,
         width: int,
         height: int,
+        font_key: str,
+        font_size: int,
     ) -> Image.Image:
         base = self._cover_fit(posters[0], width, height)
         blurred = base.filter(ImageFilter.GaussianBlur(radius=28))
         blurred = ImageEnhance.Brightness(blurred).enhance(0.55)
         canvas = blurred.convert("RGBA")
 
-        # 左侧主题色渐变遮罩
         theme = self._pick_theme_color(posters[0])
         overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
@@ -354,7 +583,6 @@ class LibraryCoverService:
             draw.line([(x, 0), (x, height)], fill=color)
         canvas = Image.alpha_composite(canvas, overlay)
 
-        # 右侧倾斜海报堆叠
         stack_count = min(5, len(posters))
         poster_h = int(height * 0.72)
         poster_w = int(poster_h * 2 / 3)
@@ -371,7 +599,13 @@ class LibraryCoverService:
 
         result = canvas.convert("RGB")
         if title:
-            self._draw_title_text(result, title, position="left")
+            self._draw_title_text(
+                result,
+                title,
+                position="left",
+                font_key=font_key,
+                font_size=font_size,
+            )
         return result
 
     def _style_single(
@@ -381,9 +615,10 @@ class LibraryCoverService:
         title: str,
         width: int,
         height: int,
+        font_key: str,
+        font_size: int,
     ) -> Image.Image:
         canvas = self._cover_fit(posters[0], width, height)
-        # 底部渐变
         overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(overlay)
         for y in range(height):
@@ -392,7 +627,13 @@ class LibraryCoverService:
             draw.line([(0, y), (width, y)], fill=(0, 0, 0, alpha))
         canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay).convert("RGB")
         if title:
-            self._draw_title_text(canvas, title, position="bottom")
+            self._draw_title_text(
+                canvas,
+                title,
+                position="bottom",
+                font_key=font_key,
+                font_size=font_size,
+            )
         return canvas
 
     @staticmethod
@@ -444,23 +685,66 @@ class LibraryCoverService:
         r, g, b = colorsys.hls_to_rgb(h, 0.35, 0.55)
         return (int(r * 255), int(g * 255), int(b * 255))
 
-    def _load_font(self, size: int) -> ImageFont.ImageFont:
-        for path in _FONT_CANDIDATES:
+    def _resolve_font_path(self, font_key: str) -> str | None:
+        key = str(font_key or "auto").strip().lower() or "auto"
+        if key == "default":
+            return None
+        if key == "auto":
+            for candidate_key, _label, path in _FONT_CATALOG:
+                if candidate_key in {"auto", "default"}:
+                    continue
+                if path and Path(path).exists():
+                    return path
+            return None
+        for candidate_key, _label, path in _FONT_CATALOG:
+            if candidate_key == key and path and Path(path).exists():
+                return path
+        return None
+
+    def _load_font(self, size: int, font_key: str = "auto") -> ImageFont.ImageFont:
+        path = self._resolve_font_path(font_key)
+        if path:
             try:
-                if Path(path).exists():
-                    return ImageFont.truetype(path, size=size)
+                return ImageFont.truetype(path, size=size)
             except Exception:
-                continue
+                logger.warning("加载字体失败 path=%s，回退默认", path, exc_info=True)
+        if font_key != "auto":
+            # 指定字体不可用时仍尽量走自动候选
+            auto_path = self._resolve_font_path("auto")
+            if auto_path:
+                try:
+                    return ImageFont.truetype(auto_path, size=size)
+                except Exception:
+                    pass
         return ImageFont.load_default()
 
-    def _draw_title_banner(self, canvas: Image.Image, title: str) -> None:
+    def _resolve_font_size(self, canvas: Image.Image, font_size: int) -> int:
+        width, height = canvas.size
+        if int(font_size or 0) > 0:
+            return max(24, min(240, int(font_size)))
+        return max(36, min(width, height) // 12)
+
+    def _draw_title_banner(
+        self,
+        canvas: Image.Image,
+        title: str,
+        *,
+        font_key: str = "auto",
+        font_size: int = 0,
+    ) -> None:
         width, height = canvas.size
         banner_h = max(72, height // 8)
         overlay = Image.new("RGBA", (width, banner_h), (0, 0, 0, 150))
         base = canvas.convert("RGBA")
         base.paste(overlay, (0, height - banner_h), overlay)
         canvas.paste(base.convert("RGB"))
-        self._draw_title_text(canvas, title, position="bottom")
+        self._draw_title_text(
+            canvas,
+            title,
+            position="bottom",
+            font_key=font_key,
+            font_size=font_size,
+        )
 
     def _draw_title_text(
         self,
@@ -468,13 +752,15 @@ class LibraryCoverService:
         title: str,
         *,
         position: str = "bottom",
+        font_key: str = "auto",
+        font_size: int = 0,
     ) -> None:
         text = str(title or "").strip()
         if not text:
             return
         width, height = canvas.size
-        font_size = max(36, min(width, height) // 12)
-        font = self._load_font(font_size)
+        resolved_size = self._resolve_font_size(canvas, font_size)
+        font = self._load_font(resolved_size, font_key=font_key)
         draw = ImageDraw.Draw(canvas)
         bbox = draw.textbbox((0, 0), text, font=font)
         text_w = bbox[2] - bbox[0]
@@ -485,7 +771,6 @@ class LibraryCoverService:
         else:
             x = (width - text_w) // 2
             y = height - text_h - max(28, height // 18)
-        # 阴影
         draw.text((x + 3, y + 3), text, font=font, fill=(0, 0, 0))
         draw.text((x, y), text, font=font, fill=(255, 255, 255))
 

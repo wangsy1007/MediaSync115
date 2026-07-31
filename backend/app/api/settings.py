@@ -11,6 +11,7 @@ import httpx
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,8 @@ class RuntimeSettingsRequest(BaseModel):
     library_cover_title_map: Optional[dict[str, str]] = None
     library_cover_width: Optional[int] = None
     library_cover_height: Optional[int] = None
+    library_cover_font: Optional[str] = None
+    library_cover_font_size: Optional[int] = None
     library_cover_schedule_enabled: Optional[bool] = None
     library_cover_schedule_cron: Optional[str] = None
     feiniu_url: Optional[str] = None
@@ -243,6 +246,8 @@ _LIBRARY_COVER_SETTING_KEYS = frozenset(
         "library_cover_title_map",
         "library_cover_width",
         "library_cover_height",
+        "library_cover_font",
+        "library_cover_font_size",
         "library_cover_schedule_enabled",
         "library_cover_schedule_cron",
     }
@@ -542,6 +547,24 @@ def _validate_library_cover_settings(merged_settings: dict) -> None:
             status_code=400,
             detail="定时 Cron 需为 5 段表达式，例如 0 3 * * *",
         )
+    font = str(merged_settings.get("library_cover_font") or "auto").strip().lower()
+    if font not in {
+        "auto",
+        "wqy-zenhei",
+        "wqy-zenhei-alt",
+        "noto-cjk",
+        "noto-cjk-otf",
+        "msyh",
+        "simhei",
+        "default",
+    }:
+        raise HTTPException(status_code=400, detail="封面字体选项无效")
+    try:
+        font_size = int(merged_settings.get("library_cover_font_size", 0) or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="字号必须是数字，0 表示自动")
+    if font_size < 0 or font_size > 240:
+        raise HTTPException(status_code=400, detail="字号范围应为 0–240（0=自动）")
 
 
 def _validate_feiniu_sync_settings(merged_settings: dict) -> None:
@@ -1394,6 +1417,50 @@ async def run_library_cover_generate():
             status_code=400, detail=result.get("message") or "启动封面生成失败"
         )
     return result
+
+
+@router.post("/library-cover/preview")
+async def run_library_cover_preview():
+    """仅生成本地预览，不上传 Emby；确认后再调用 confirm-upload。"""
+    if not runtime_settings_service.get_library_cover_enabled():
+        raise HTTPException(status_code=400, detail="请先启用媒体库封面生成")
+    result = await library_cover_service.start_preview(trigger="manual_preview")
+    if not result.get("started"):
+        raise HTTPException(
+            status_code=400, detail=result.get("message") or "启动封面预览失败"
+        )
+    return result
+
+
+@router.post("/library-cover/confirm-upload")
+async def confirm_library_cover_upload():
+    """将最近一次预览生成的封面上传到 Emby。"""
+    if not runtime_settings_service.get_library_cover_enabled():
+        raise HTTPException(status_code=400, detail="请先启用媒体库封面生成")
+    result = await library_cover_service.confirm_upload_pending()
+    if not result.get("success") and result.get("uploaded", 0) == 0:
+        raise HTTPException(
+            status_code=400, detail=result.get("message") or "上传失败"
+        )
+    return result
+
+
+@router.get("/library-cover/fonts")
+async def list_library_cover_fonts():
+    return {"items": library_cover_service.list_available_fonts()}
+
+
+@router.get("/library-cover/image/{filename}")
+async def get_library_cover_image(filename: str):
+    path = library_cover_service.resolve_cover_path(filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="封面预览不存在")
+    return FileResponse(
+        path,
+        media_type="image/jpeg",
+        filename=path.name,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/feiniu/sync/status")
