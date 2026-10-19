@@ -1,0 +1,43 @@
+# MediaSync115 Docker Hub 部署（推荐 NAS / 生产）
+# 镜像：https://hub.docker.com/r/wangsy1007/mediasync115
+# 与仓库根目录 compose.yaml（文档仓库）内容一致
+services:
+  mediasync115:
+    image: wangsy1007/mediasync115:latest
+    container_name: mediasync115
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+      - "9008:9008"
+      - "8099:8099"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TZ: Asia/Shanghai
+      STRM_HOST_IP: ${STRM_HOST_IP:-}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-}
+      CONTAINER_NAME: mediasync115
+      DOCKER_IMAGE_NAME: wangsy1007/mediasync115:latest
+    volumes:
+      - ./data:/app/data
+      - ${STRM_HOST_DIR:-./strm}:/app/strm
+      # WebUI 一键升级（设置 → 关于）；挂载 docker.sock 等同宿主机 Docker 管理权限
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5173/healthz', timeout=10)"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+# 使用说明:
+# 1. 将本文件放到部署目录，可重命名为 compose.yaml / docker-compose.yml
+# 2. mkdir -p data strm && docker compose up -d
+# 3. 访问 http://你的IP:5173 （默认账号 admin / password）
+# 4. 若需一并部署盘搜，请使用 compose.nas.pansou.yaml

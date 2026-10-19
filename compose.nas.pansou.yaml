@@ -1,0 +1,64 @@
+# MediaSync115 + Pansou 盘搜（Docker Hub 部署）
+# 盘搜对外端口 38080；MediaSync115 容器内通过 http://pansou:8888/ 连接
+services:
+  pansou:
+    image: ghcr.io/fish2018/pansou:latest
+    container_name: pansou
+    restart: unless-stopped
+    ports:
+      - "38080:8888"
+    env_file:
+      - ./docker/pansou.env
+    volumes:
+      - pansou-cache:/app/cache
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8888/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  mediasync115:
+    image: wangsy1007/mediasync115:latest
+    container_name: mediasync115
+    restart: unless-stopped
+    depends_on:
+      pansou:
+        condition: service_healthy
+    ports:
+      - "5173:5173"
+      - "9008:9008"
+      - "8099:8099"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      TZ: Asia/Shanghai
+      PANSOU_BASE_URL: http://pansou:8888/
+      STRM_HOST_IP: ${STRM_HOST_IP:-}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-}
+      CONTAINER_NAME: mediasync115
+      DOCKER_IMAGE_NAME: wangsy1007/mediasync115:latest
+    volumes:
+      - ./data:/app/data
+      - ${STRM_HOST_DIR:-./strm}:/app/strm
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5173/healthz', timeout=10)"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  pansou-cache:
+
+# 使用说明:
+# 1. 将本文件与 docker/pansou.env 一并放到部署目录
+# 2. mkdir -p data strm && docker compose -f compose.nas.pansou.yaml up -d
+# 3. 盘搜健康检查：http://你的IP:38080/api/health
